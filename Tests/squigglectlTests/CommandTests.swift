@@ -208,6 +208,36 @@ import TickerCore
     #expect(throws: ParseError.self) { try Command.parse(["probe", "AAPL", "--record", ""]) }
 }
 
+/// F-B (fix round 2): `takeValue("--record")` strips `--record` and the
+/// token right after it from `rest` before the unknown-flag sweep below ever
+/// runs, so a stray flag given as that token was consumed as the fixture
+/// name instead of being reported. Measured on the built binary:
+/// `probe --record --raw` reports a missing symbol (proving `--raw` was
+/// eaten as the name), where `probe --raw` alone correctly reports
+/// `unknown flag: --raw`. A value beginning with `-` is now rejected by the
+/// name validation itself, which is the only place left that can catch it —
+/// moving the sweep earlier would misreport `--record` itself as unknown.
+@Test func probeRejectsARecordNameThatBeginsWithAHyphen() throws {
+    do {
+        _ = try Command.parse(["probe", "--record", "--raw", "AAPL"])
+        Issue.record("expected a ParseError for --record --raw AAPL")
+    } catch let error as ParseError {
+        #expect(error.message.contains("--raw"))
+    }
+
+    #expect(throws: ParseError.self) { try Command.parse(["probe", "--record", "-x", "AAPL"]) }
+    #expect(throws: ParseError.self) { try Command.parse(["probe", "--record", "--record", "AAPL"]) }
+}
+
+/// The fix above must not regress a legitimate hyphenated scenario name — a
+/// hyphen stays legal everywhere but the first character. `regular-session`,
+/// `crypto-while-equities-closed` and `pre-market` are real scenario names in
+/// this project's fixture corpus (see `docs/fixture-capture-log.md`).
+@Test func probeStillAcceptsARecordNameThatContainsAHyphen() throws {
+    let parsed = try Command.parse(["probe", "--record", "regular-session", "AAPL"])
+    #expect(parsed == .probe(symbol: "AAPL", record: "regular-session"))
+}
+
 /// Same rule as `quote`, `search` and `doctor`: an unrecognised `--flag`
 /// must be reported, not silently treated as (or joined into) the symbol.
 @Test func probeRejectsAnUnknownFlag() {

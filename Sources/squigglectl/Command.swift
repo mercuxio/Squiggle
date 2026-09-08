@@ -169,15 +169,31 @@ public enum Command: Equatable {
                 // digits and hyphens. Rejected outright rather than
                 // sanitised: a rejected name is a typo the operator should
                 // see, not one silently rewritten into something else.
+                //
+                // A leading `-` is rejected separately from the character
+                // set below: a hyphen is legal elsewhere in the name
+                // (`regular-session`, `crypto-while-equities-closed`), so
+                // the character set alone would wave a value like `--raw`
+                // straight through. `takeValue` has already stripped
+                // `--record` and the token after it from `rest` by the time
+                // this check runs, so that token never reaches the
+                // unknown-flag sweep below to be caught there instead — this
+                // is the only place a stray flag consumed as `--record`'s
+                // value gets rejected.
                 let allowed = Set("abcdefghijklmnopqrstuvwxyz0123456789-")
-                guard !name.isEmpty, name.allSatisfy(allowed.contains) else {
+                guard !name.isEmpty, !name.hasPrefix("-"), name.allSatisfy(allowed.contains) else {
                     throw ParseError(
-                        "--record needs a name of lowercase letters, digits and hyphens only, got \(name)")
+                        "--record needs a name of lowercase letters, digits and hyphens only, " +
+                        "and must not begin with -, got \(name)")
                 }
             }
             // Same rule as `quote`, `search` and `doctor`: a stray `--flag`
             // this verb doesn't know must not be silently swallowed or
-            // mistaken for the symbol.
+            // mistaken for the symbol — for whatever `--flag` reaches this
+            // sweep. `takeValue("--record")` above already removed
+            // `--record` and the single token after it, so a stray flag
+            // given as that token never gets here; the guard above is what
+            // catches it.
             if let unknownFlag = rest.first(where: { $0.hasPrefix("--") }) {
                 throw ParseError("unknown flag: \(unknownFlag)")
             }
