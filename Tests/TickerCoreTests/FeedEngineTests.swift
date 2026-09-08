@@ -421,12 +421,28 @@ struct FeedEngineTests {
     /// could quietly drift from it. On `.sleep`, the clock jumps straight to
     /// the reported wake time (what a real caller does: sleep, then ask
     /// again) rather than ticking one second at a time for a whole day.
-    private func driveFeedEngine(userInterval: Double, watchlistCount: Int) throws -> Int {
+    /// What one simulated day cost, and what the engine concluded about the
+    /// watchlist while paying for it. `dead` is the part F2 turns on: a fault
+    /// that implicates one symbol must leave exactly one symbol dead.
+    private struct Drive {
+        let fetches: Int
+        let dead: Set<Symbol>
+        /// Fetches that were not the misbehaving symbol — what the other
+        /// nineteen actually got, which is the number the user sees.
+        let healthyFetches: Int
+    }
+
+    /// `failing` names one symbol whose every fetch returns `error` instead of
+    /// a quote; the rest succeed. `nil` is the control.
+    private func driveFeedEngine(userInterval: Double, watchlistCount: Int,
+                                 failing: Symbol? = nil,
+                                 with error: TickerError = .noResult) throws -> Drive {
         let clock = FakeClock()
         let symbols = try (1...watchlistCount).map { try sym("SYM\($0)") }
         var e = engine(clock, symbols, interval: userInterval)
 
         var fetches = 0
+        var healthy = 0
         var t: Double = 0
         while t < Day.length {
             let market = Day.state(atSecondOfDay: t)
@@ -437,14 +453,19 @@ struct FeedEngineTests {
             switch e.next(context) {
             case .fetch(let s):
                 fetches += 1
-                e.recordSuccess(stubQuote(s), for: s)
+                if s == failing {
+                    e.record(error, for: s)
+                } else {
+                    healthy += 1
+                    e.recordSuccess(stubQuote(s), for: s)
+                }
             case .sleep(let seconds):
                 let step = max(1, seconds)
                 t += step
                 clock.advance(step)
             }
         }
-        return fetches
+        return Drive(fetches: fetches, dead: e.deadSymbols, healthyFetches: healthy)
     }
 
     /// Finding 1 (fix round 1): `FeedEngine.next(_:)` shipped with no
@@ -485,7 +506,7 @@ struct FeedEngineTests {
 
         for interval in RateConstants.refreshIntervalChoices {
             for count in [1, 2, 4, 10, 20] {
-                let actual = try driveFeedEngine(userInterval: interval, watchlistCount: count)
+                let actual = try driveFeedEngine(userInterval: interval, watchlistCount: count).fetches
                 let predicted = DaySimulation.run(userInterval: interval,
                                                    watchlistCount: count).requests
 
@@ -503,6 +524,71 @@ struct FeedEngineTests {
                 #expect(drift <= tolerance, "\(message)")
             }
         }
+    }
+
+    // MARK: - F2: a null result implicates one symbol, not the endpoint
+
+    /// One symbol in twenty returns HTTP 200 with `chart.result: null` all day.
+    ///
+    /// That body used to classify as `.contractFault`, whose circuit has a
+    /// threshold of **1** and a one-hour cooldown, so the first bad payload
+    /// stopped every symbol for an hour, every hour, forever — and marked
+    /// nothing dead, so nothing ever recovered. Measured across this exact
+    /// day, twenty symbols at 180s:
+    ///
+    ///                       total   healthy   dead
+    ///     control (all ok)    720       720      0
+    ///     before              283       268      0
+    ///     after               722       721      1
+    ///
+    /// The nineteen innocent symbols lost 63% of their refreshes to one
+    /// stranger's payload. The same symbol returning 404 cost only itself,
+    /// which is the asymmetry F2 removes: a 404 and a 200-with-null are one
+    /// fact — *this symbol has no data* — reported two ways.
+    ///
+    /// The "after" total sits slightly *above* the control because the dead
+    /// symbol leaves the live watchlist, and a nineteen-symbol cycle is
+    /// shorter than a twenty-symbol one under both of `cycleInterval`'s
+    /// floors. Nineteen symbols refreshing at a nineteen-symbol cadence is
+    /// the correct outcome, not an overshoot.
+    @Test func oneSymbolReturningANullResultDoesNotSilenceTheOtherNineteen() throws {
+        let bad = try sym("SYM3")
+        let count = 20
+
+        for interval in RateConstants.refreshIntervalChoices {
+            let control = try driveFeedEngine(userInterval: interval, watchlistCount: count)
+            let hurt = try driveFeedEngine(userInterval: interval, watchlistCount: count,
+                                           failing: bad, with: .noResult)
+
+            // Only that symbol, and it by name. `dead.count == 1` alone would
+            // pass if the engine killed the wrong one.
+            #expect(hurt.dead == [bad],
+                    "interval \(interval): dead set was \(hurt.dead.map(\.raw).sorted())")
+
+            // The nineteen keep refreshing. The bound is the control less one
+            // symbol's worth of a cycle, which is what losing the twentieth
+            // symbol legitimately costs; a threshold-1 circuit lands hundreds
+            // of requests below it.
+            let floor = control.fetches - count
+            let message = "interval \(interval): the healthy nineteen got "
+                + "\(hurt.healthyFetches) fetches against a \(control.fetches) control"
+            #expect(hurt.healthyFetches >= floor, "\(message)")
+        }
+    }
+
+    /// The contrast that makes the case above mean something: a genuinely
+    /// malformed *shape* must still stop everything. `.missingField` says the
+    /// endpoint changed, every symbol will fail identically, and one is enough.
+    /// Without this, moving `noResult` out of the contract group would be
+    /// indistinguishable from disabling the contract circuit.
+    @Test func aMalformedShapeStillStopsEverythingAfterOneResponse() throws {
+        let bad = try sym("SYM3")
+        let hurt = try driveFeedEngine(userInterval: 180, watchlistCount: 20, failing: bad,
+                                       with: .missingField(path: "chart.result[0].meta"))
+        #expect(hurt.dead.isEmpty, "a shape fault must not be blamed on one symbol")
+        let control = try driveFeedEngine(userInterval: 180, watchlistCount: 20)
+        #expect(hurt.fetches < control.fetches / 2,
+                "the contract circuit did not stop the day: \(hurt.fetches) of \(control.fetches)")
     }
 
     // MARK: - R57: the half-open probe belongs to the fetch, not the query

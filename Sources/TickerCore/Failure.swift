@@ -11,9 +11,11 @@ public enum FailureKind: Equatable, Sendable {
     case server
     /// 401/403. The authentication assumption is broken; backoff cannot fix it.
     case unauthorized
-    /// A 200 whose body is not what we agreed on. Its own circuit.
+    /// A 200 whose *shape* is not what we agreed on. Its own circuit, whose
+    /// threshold is 1, because a shape change fails every symbol identically.
     case contractFault
-    /// 404. This symbol is gone; the rest of the watchlist is fine.
+    /// This symbol has no data: a 404, or a 200 whose `result` is null or
+    /// empty. The rest of the watchlist is fine.
     case deadSymbol
 
     public init(_ error: TickerError) {
@@ -30,14 +32,30 @@ public enum FailureKind: Equatable, Sendable {
         case .unauthorized:
             self = .unauthorized
 
-        case .symbolNotFound:
+        // A 404 and a 200 with `result: null` are the same fact reported two
+        // ways — *this symbol has no data* — and they must cost the same.
+        //
+        // `noResult` used to sit in the contract group below, and the
+        // asymmetry was not survivable: the contract circuit's threshold is 1
+        // with a one-hour cooldown, so one delisted ticker in a watchlist of
+        // twenty stopped every symbol for an hour, while the same ticker
+        // returning 404 cost only itself. `YahooQuoteDecoding` throws
+        // `noResult` from exactly one place — a chart request for one symbol
+        // whose `chart.result` came back null or empty — so it is never a
+        // statement about the endpoint, only about the symbol in the URL.
+        case .symbolNotFound, .noResult:
             self = .deadSymbol
 
-        // These four are the contract-fault group exactly as
-        // `TickerError.isContractFault` defines it: a 200 whose body is not
-        // what we agreed on. Its own one-hour circuit, separate from network
-        // faults, because retrying a parse failure faster buys nothing.
-        case .emptyBody, .notJSON, .noResult, .missingField,
+        // The contract-fault group, and it is now deliberately *narrower* than
+        // `TickerError.isContractFault`, which still counts `noResult`. That
+        // divergence is the point rather than an oversight: `isContractFault`
+        // answers "is this a disagreement about a 200's body", which `noResult`
+        // still is, while this enum answers "who does this implicate" — and a
+        // null result implicates one symbol where a missing field or a wrong
+        // type implicates the endpoint. Only the second question may open a
+        // threshold-1 circuit. `ShapeDigest` and `probe` detect the first kind,
+        // which is what the threshold of 1 was chosen for.
+        case .emptyBody, .notJSON, .missingField,
              .wrongType, .nonFiniteNumber, .negativeValue:
             self = .contractFault
 

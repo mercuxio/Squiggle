@@ -22,13 +22,20 @@ private func ladder(_ clock: FakeClock, _ random: FakeRandom = FakeRandom()) -> 
     #expect(FailureKind(.serverError(status: 503)) == .server)
     #expect(FailureKind(.transport(.urlSession(code: -1001))) == .server)
     #expect(FailureKind(.unauthorized(status: 401)) == .unauthorized)
+    // Both ways of saying "this symbol has no data" cost the same. A 404 and
+    // a 200 whose `chart.result` is null are one fact reported twice, and
+    // `noResult` in the contract group meant the second one stopped the whole
+    // watchlist for an hour while the first cost only itself.
     #expect(FailureKind(.symbolNotFound(symbol)) == .deadSymbol)
-    // Every contract fault, one kind. Spec §4.3 gives them their own circuit.
+    #expect(FailureKind(.noResult) == .deadSymbol)
+    // The contract faults: a 200 whose *shape* is wrong, which implicates the
+    // endpoint and so every symbol. Spec §4.3 gives them their own circuit,
+    // and its threshold is 1. This group is deliberately narrower than
+    // `TickerError.isContractFault`, which still counts `noResult` — see
+    // `Failure.swift` for why the two questions differ.
     #expect(FailureKind(.notJSON) == .contractFault)
-    #expect(FailureKind(.noResult) == .contractFault)
     #expect(FailureKind(.missingField(path: "x")) == .contractFault)
     #expect(FailureKind(.nonFiniteNumber(path: "x")) == .contractFault)
-    // The remaining contract faults from `TickerError.isContractFault`.
     #expect(FailureKind(.emptyBody) == .contractFault)
     #expect(FailureKind(.wrongType(path: "x", expected: "number")) == .contractFault)
     #expect(FailureKind(.negativeValue(path: "x", value: -1)) == .contractFault)
