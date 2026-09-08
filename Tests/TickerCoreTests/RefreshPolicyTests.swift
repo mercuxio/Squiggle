@@ -90,8 +90,44 @@ private func input(
     #expect(wait != nil)
     if let wait {
         #expect(wait >= RateConstants.minimumWaitSeconds)
-        #expect(wait <= RateConstants.unknownOpenPollSeconds,
+        #expect(wait <= neverBlindLongerThan,
                 "a fallback poll of \(wait)s is a hang, not a poll")
+    }
+}
+
+/// The longest Squiggle may go without asking, when it does not even know
+/// when the market opens. A literal and not a constant: nothing in the
+/// policy *reads* an hourly ceiling — the interval menu already keeps every
+/// cycle well inside it — so a `RateConstants` entry would be a production
+/// value existing only to be compared against in a test.
+private let neverBlindLongerThan: Double = 3600
+
+@Test func theUnknownOpenFallbackNeverGoesBlindForAnHour() {
+    // The ceiling used to be a `min` in the policy that could not bind, which
+    // made it a promise nothing kept. It is a requirement, so it is asserted
+    // here instead — across every interval Settings offers, at the watchlist
+    // size that stretches the cycle furthest, with and without the Low Power
+    // stretch. Add a slower interval choice and this test, not a silent
+    // constant, is what tells you the fallback has gone blind.
+    //
+    // Only `.closed` is swept: this fallback is reached from that branch
+    // alone, and a `.pre`/`.post` row would return `.fetch` and quietly skip
+    // every assertion below.
+    for interval in RateConstants.refreshIntervalChoices {
+        for lowPower in [false, true] {
+            let d = RefreshPolicy.decide(input(market: .closed,
+                                               lowPower: lowPower,
+                                               interval: interval,
+                                               count: RateConstants.maxWatchlistCount,
+                                               nextOpen: nil))
+            let wait = d.waitSeconds
+            #expect(wait != nil, "interval \(interval) produced \(d)")
+            if let wait {
+                #expect(wait <= neverBlindLongerThan,
+                        "interval \(interval), lowPower \(lowPower) → \(wait)s")
+                #expect(wait >= RateConstants.minimumWaitSeconds)
+            }
+        }
     }
 }
 

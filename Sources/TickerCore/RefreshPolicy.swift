@@ -157,9 +157,17 @@ public enum RefreshPolicy {
                 // No payload has told us when the market opens — a cold launch
                 // into a weekend. Fall back to a slow poll rather than sleeping
                 // indefinitely; a nil must never become a hang.
+                //
+                // No hourly ceiling is written here. The slowest cycle the
+                // interval menu can produce is 45 minutes, so a `min` against
+                // an hour would be a bound that never binds — a guard taking
+                // credit for work the interval table already does. The ceiling
+                // is a requirement on this branch rather than an input to it,
+                // so it lives in `theUnknownOpenFallbackNeverGoesBlindForAnHour`,
+                // which sweeps the whole menu and fails the day a slower
+                // choice is added.
                 return .wait(seconds: sanitizedWait(
-                    min(RateConstants.unknownOpenPollSeconds,
-                        max(cycle, RateConstants.defaultRefreshInterval))))
+                    max(cycle, RateConstants.defaultRefreshInterval)))
             }
             let untilOpen = open - input.nowEpoch - RateConstants.preOpenWakeLead
             // A stale open time from a payload older than the session it
