@@ -52,6 +52,17 @@ public struct FeedEngine {
     /// it reaches the end — see `next()`. Pacing across a full pass is the
     /// token bucket's job (`pacer`), not this cursor's.
     private var cursor: Int = 0
+    /// The wall of the round-robin pass currently in progress, or the pass
+    /// about to start once `cursor` wraps: `0` until the first wrap, then
+    /// `now + RefreshPolicy.cycleInterval(...)` at every wrap after. This is
+    /// the throttle `userIntervalSeconds` actually rides on — the token
+    /// bucket alone floors at `RateConstants.spacingSeconds`, far faster than
+    /// any offered interval, so without this gate the engine polls at the
+    /// bucket's floor regardless of what the user chose (fix round 1,
+    /// Finding 1). `0` reads as "already due", which is exactly right: the
+    /// very first pass and a pass right after `replaceWatchlist` must not
+    /// wait for a deadline that was never set for them.
+    private var cycleDeadline: Double = 0
 
     private var userIntervalSeconds: Double
 
@@ -127,8 +138,22 @@ public struct FeedEngine {
         // Round-robin: once every live symbol has been asked for, start
         // again from the top. A dead symbol removed from `live` can leave
         // the cursor past the new end, which this also corrects.
+        //
+        // A cycle in progress finishes before a new one starts; otherwise a
+        // long watchlist would restart from the top forever and the symbols
+        // at the end would never update. `cycleDeadline` is what makes
+        // `userIntervalSeconds` mean anything once the market is open and
+        // visible: without it, nothing below this line gates on
+        // `RefreshPolicy.cycleInterval` at all, and the token bucket becomes
+        // the only throttle.
         if cursor >= live.count {
+            guard now >= cycleDeadline else {
+                return .sleep(seconds: max(RateConstants.minimumWaitSeconds, cycleDeadline - now))
+            }
             cursor = 0
+            cycleDeadline = now + RefreshPolicy.cycleInterval(
+                userIntervalSeconds: userIntervalSeconds, watchlistCount: live.count,
+                marketState: context.marketState, lowPowerMode: context.lowPowerMode)
         }
 
         // The bucket is the last word on *when*. Nothing below this line can
@@ -193,9 +218,27 @@ public struct FeedEngine {
         // resurrected by anything else, so this is its only way back.
         dead = []
         cursor = 0
+        // A watchlist edit invalidates whatever cycle was in progress: the
+        // deadline was computed from the old watchlist's count, and letting
+        // it stand would gate the new list's first pass on a number that no
+        // longer describes it.
+        cycleDeadline = 0
         // Deliberately untouched: `ladder` and the two circuits. A watchlist
         // edit is not a network event, and resetting a live cooldown here
         // would let a user dodge a 429 backoff by adding a symbol.
+    }
+
+    /// Invalidates the in-progress cycle's deadline so a new
+    /// `userIntervalSeconds` takes effect starting at the *next* cycle,
+    /// rather than either truncating one already underway or being ignored
+    /// until whatever deadline the old interval happened to compute. Not
+    /// currently called from `squigglectl watch`, which fixes its interval
+    /// for the process's lifetime (`WatchLoop.intervalSeconds` is a `let`);
+    /// it exists for plan 2's menu bar app, whose Settings refresh-interval
+    /// control changes this while the engine keeps running.
+    public mutating func setUserInterval(_ seconds: Double) {
+        userIntervalSeconds = seconds
+        cycleDeadline = 0
     }
 
     public var latest: [Symbol: Quote] { latestQuotes }

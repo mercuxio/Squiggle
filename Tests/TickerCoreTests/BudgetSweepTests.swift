@@ -3,7 +3,13 @@ import Testing
 
 /// Seconds since the start of an exchange-local day. The absolute date does
 /// not matter; only the durations of each session do.
-private enum Day {
+///
+/// Internal rather than file-private: `FeedEngineTests` reuses this same
+/// session schedule to drive the real `FeedEngine` across a simulated day, so
+/// its budget assertion checks the engine against the identical market
+/// calendar this file's own sweep uses — not a second, hand-rolled one that
+/// could quietly drift from it.
+enum Day {
     static let preOpen: Double = 4 * 3600            // 04:00
     static let regularOpen: Double = 9.5 * 3600      // 09:30
     static let regularClose: Double = 16 * 3600      // 16:00
@@ -43,7 +49,12 @@ private enum Day {
 /// bypasses the bucket so a measurement can isolate what the policy alone
 /// asks for. No production path has that switch. A simulation run that way is
 /// answering a question about the policy, not predicting what Squiggle does.
-private struct DaySimulation {
+///
+/// Internal rather than file-private: `FeedEngineTests` compares the real
+/// `FeedEngine`'s fetch count against this model's prediction for the same
+/// configuration, per this file's own doc comment above — "if this
+/// simulation and the runner ever disagree, the runner is the bug."
+struct DaySimulation {
     var requests = 0
     var cyclesStarted = 0
     /// Increments once per second of refusal, per symbol — not once per

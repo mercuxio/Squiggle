@@ -70,12 +70,32 @@ struct FeedEngineTests {
         #expect(slept, "ten symbols went out with no pause; the pacer was bypassed")
     }
 
+    /// Fix round 1, Finding 1: this used to drive a single-symbol watchlist
+    /// with the clock frozen, re-fetching the same symbol five times
+    /// back-to-back to drain the pacer's whole bucket. That is no longer a
+    /// reachable sequence: with `cycleDeadline` restored, a one-symbol
+    /// watchlist wraps its cursor after every fetch, and a wrap with the
+    /// clock still frozen is refused by the cycle gate before the pacer is
+    /// even asked a second time — see
+    /// `theCycleGateKeepsFeedEngineUnderBudgetAndInStepWithTheDaySimulation`
+    /// for that gate's own coverage.
+    ///
+    /// So this now uses one symbol per bucket token instead: the cursor
+    /// never wraps mid-loop (it reaches `live.count` only on the fetch that
+    /// empties the bucket), meaning the cycle gate is not yet in play and
+    /// the sleep this test pins is still the pacer's, not the cycle's.
     @Test func theSleepReportedIsTheTimeUntilTheNextTokenAndNotAGuess() throws {
         let clock = FakeClock()
-        var e = engine(clock, [try sym("AAPL")], interval: 60)
+        let symbols = try (1...Int(RateConstants.bucketCapacity)).map { try sym("SYM\($0)") }
+        var e = engine(clock, symbols, interval: 60)
 
-        // Drain the bucket.
-        while case .fetch(let s) = e.next(openMarket()) {
+        // Drain the bucket: one fetch per symbol, so the cursor reaches
+        // `live.count` only once, on the very fetch that empties it.
+        for _ in symbols {
+            guard case .fetch(let s) = e.next(openMarket()) else {
+                Issue.record("expected a fetch while the bucket still had tokens")
+                return
+            }
             e.recordSuccess(stubQuote(s), for: s)
         }
         guard case .sleep(let seconds) = e.next(openMarket()) else {
@@ -391,6 +411,75 @@ struct FeedEngineTests {
                 }
             }
         }
+    }
+
+    // MARK: - Budget: the cycle gate against the day simulation
+
+    /// Drives the real `FeedEngine` across one simulated market day, using
+    /// exactly the session schedule `BudgetSweepTests.Day` sweeps the whole
+    /// configuration space with — not a second, hand-rolled calendar that
+    /// could quietly drift from it. On `.sleep`, the clock jumps straight to
+    /// the reported wake time (what a real caller does: sleep, then ask
+    /// again) rather than ticking one second at a time for a whole day.
+    private func driveFeedEngine(userInterval: Double, watchlistCount: Int) throws -> Int {
+        let clock = FakeClock()
+        let symbols = try (1...watchlistCount).map { try sym("SYM\($0)") }
+        var e = engine(clock, symbols, interval: userInterval)
+
+        var fetches = 0
+        var t: Double = 0
+        while t < Day.length {
+            let market = Day.state(atSecondOfDay: t)
+            let context = EngineContext(
+                nowEpoch: t, marketState: market, visibility: .visible, lowPowerMode: false,
+                nextSessionOpenEpoch: Day.nextSessionOpen(afterSecondOfDay: t))
+
+            switch e.next(context) {
+            case .fetch(let s):
+                fetches += 1
+                e.recordSuccess(stubQuote(s), for: s)
+            case .sleep(let seconds):
+                let step = max(1, seconds)
+                t += step
+                clock.advance(step)
+            }
+        }
+        return fetches
+    }
+
+    /// Finding 1 (fix round 1): `FeedEngine.next(_:)` shipped with no
+    /// `cycleDeadline` of any kind, so nothing gated the fetch path on
+    /// `RefreshPolicy.cycleInterval` — the engine round-robined continuously
+    /// at the token bucket's floor rate (2,880/day) regardless of
+    /// `userIntervalSeconds`, against a 1,200/day budget.
+    ///
+    /// The anti-vacuity move per the fix brief: do not hand-roll an expected
+    /// request count. Compare the engine's actual count against
+    /// `DaySimulation`, the model that already exists and that this whole
+    /// suite's sibling file (`BudgetSweepTests`) trusts as authoritative —
+    /// its own doc comment: "if this simulation and the runner ever
+    /// disagree, the runner is the bug." Against the pre-fix engine this
+    /// fails on both counts: the request count blows through the budget, and
+    /// it is nowhere near what the `cycleDeadline`-gated model predicts.
+    @Test func theCycleGateKeepsFeedEngineUnderBudgetAndInStepWithTheDaySimulation() throws {
+        let interval: Double = 60
+        let count = 10
+
+        let actual = try driveFeedEngine(userInterval: interval, watchlistCount: count)
+        let predicted = DaySimulation.run(userInterval: interval, watchlistCount: count).requests
+
+        #expect(actual < 1_200, "\(actual) requests exceeds the 1,200/day budget")
+
+        // Not an exact match: `DaySimulation` paces individual within-cycle
+        // fetches by an explicit per-symbol `nextSymbolDue`, while
+        // `FeedEngine` paces them through the shared token bucket's burst
+        // allowance, so a handful of requests can land on either side of a
+        // session boundary. The tolerance is a small fraction of the
+        // prediction, not a number picked to make this pass.
+        let drift = abs(actual - predicted)
+        let tolerance = max(20, predicted / 10)
+        #expect(drift <= tolerance,
+                "engine fetched \(actual); the cycleDeadline model predicts \(predicted)")
     }
 
     // MARK: - R57: the half-open probe belongs to the fetch, not the query
