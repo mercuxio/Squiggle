@@ -69,6 +69,17 @@ public enum RateConstants {
     /// Wake this long before the open, while closed.
     public static let preOpenWakeLead: Double = 60
 
+    /// The longest a closed market is ever allowed to sleep, even with a
+    /// known open far in the future — a holiday close, or a payload whose
+    /// open time is simply wrong, must still resolve inside half a day.
+    public static let maxClosedMarketWait: Double = 12 * 3600
+
+    /// The poll interval while closed with no known open time at all (a cold
+    /// launch into a weekend, before any payload has said when trading
+    /// resumes). An hour is slow enough to cost nothing and short enough
+    /// that a wrong assumption does not stand for long.
+    public static let unknownOpenPollSeconds: Double = 3600
+
     /// Dim the strip once data is older than this multiple of the interval.
     public static let stalenessMultiplier: Double = 3
 
