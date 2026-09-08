@@ -4248,7 +4248,13 @@ Spec §5.3: the symbol picker is search-only. There is no browsable list of ever
 - Test: `Tests/squigglectlTests/CommandTests.swift` — extend with search parsing
 
 **Interfaces:**
-- Consumes: `Symbol`, `TickerError`, `YahooQuoteDecoding.translate(_:)`, `YahooClient.search(_:)`, `Command`, `Rendering`, and the `search-apple.json` fixture from Task 3.
+- Consumes: `Symbol`, `TickerError`, `YahooQuoteDecoding.translate(_:)`, `YahooClient.search(_:)`, `Command`, `Rendering`, and the `search-apple.json` fixture.
+- **Fixture note (controller ruling R7):** Task 3 captures quote bodies only; it never
+  produced `search-apple.json`, and no other task did either. The controller captures it
+  into `Tests/Fixtures/yahoo-2026-09-08/` and commits it **before dispatching this task**.
+  The implementer must therefore find the file already present. If it is absent, stop and
+  report `BLOCKED` rather than fabricating one by hand — the tests below assert on real
+  Yahoo relevance ordering, which a hand-written fixture cannot honestly supply.
 - Produces:
   - `TickerCore.SearchResult` — `struct`, `Equatable, Sendable`: `symbol: Symbol`, `name: String`, `exchange: String`, `kind: String`.
   - `TickerCore.YahooSearchDecoding` — `enum`; `public static func results(from data: Data, limit: Int) throws -> [SearchResult]`.
