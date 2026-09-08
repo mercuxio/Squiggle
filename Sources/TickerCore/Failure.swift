@@ -41,7 +41,7 @@ public enum FailureKind: Equatable, Sendable {
              .wrongType, .nonFiniteNumber, .negativeValue:
             self = .contractFault
 
-        // None of these three can arise from a fetch at all — `invalidSymbol`
+        // None of these can arise from a fetch at all — `invalidSymbol`
         // is rejected before a request is ever built, and the store errors
         // are persistence faults, not network ones. They are classified here
         // only so this switch is total (no `default`, so the compiler is the
@@ -51,7 +51,8 @@ public enum FailureKind: Equatable, Sendable {
         // circuit would turn a local bug into an hour of silence, which is
         // the worst outcome available for something that isn't even a live
         // failure mode.
-        case .invalidSymbol, .storeSchemaUnsupported, .storeCorrupt:
+        case .invalidSymbol, .storeSchemaUnsupported, .storeVersionUnreadable,
+             .storeCorrupt, .storeQuarantineFailed:
             self = .server
         }
     }

@@ -2,9 +2,12 @@ import Foundation
 
 /// Every way this package can fail, as data.
 ///
-/// No case carries a user-facing sentence. The `path` strings are JSON key
-/// paths for diagnostics — `squigglectl doctor` prints them, the app never
-/// does. Wording lives in the caller.
+/// No case carries a user-facing sentence. The payloads are diagnostics —
+/// `squigglectl doctor` prints them, the app never does. The `path` strings on
+/// the contract faults are JSON key paths; the persistence cases carry a
+/// filesystem `URL` instead, which is an absolute path under the user's home
+/// directory, so `doctor` must render it relative to the store's own directory
+/// rather than verbatim. Wording lives in the caller.
 public enum TickerError: Error, Equatable, Sendable {
     case invalidSymbol(String)
 
@@ -28,7 +31,21 @@ public enum TickerError: Error, Equatable, Sendable {
 
     // Persistence.
     case storeSchemaUnsupported(version: Int)
+    /// `schemaVersion` is present but cannot be read as an `Int` — a quoted
+    /// `"99"`, a `99.5`, an object. Distinct from `storeSchemaUnsupported`
+    /// because there is no version to report, and a sentinel like `-1` smuggled
+    /// through that case would be printed by `doctor` as a real version.
+    /// Refusing leaves the file untouched: an unreadable version might belong
+    /// to a newer Squiggle, and rewriting it would discard whatever that
+    /// version knew.
+    case storeVersionUnreadable
     case storeCorrupt(quarantinedAt: URL)
+    /// The file is unreadable *and* could not be moved out of the way — a
+    /// read-only or full disk, wrong ownership after a restore. The payload is
+    /// where the file still is, not where it went. The caller must be able to
+    /// tell this from `storeCorrupt`: there the user's next launch starts
+    /// clean, here the same file is waiting to fail again.
+    case storeQuarantineFailed(at: URL)
 
     /// Whether this is a fault in the agreement rather than in the network.
     /// Drives the separate one-hour contract circuit (spec §4.3).

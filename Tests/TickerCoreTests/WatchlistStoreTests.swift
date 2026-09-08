@@ -40,16 +40,48 @@ private func write(_ json: String, to url: URL) throws {
 @Test func theWrittenFileIsHumanReadableAndStablyOrdered() throws {
     // Spec §6: the support policy is "email me your squiggle.json", so it has
     // to be readable, and a stable key order keeps diffs meaningful.
+    //
+    // The old version checked only that `schemaVersion` preceded `symbols`,
+    // which is true with or without `.sortedKeys` — the synthesized
+    // `CodingKeys` happen to agree on that pair, so it pinned nothing. Without
+    // the flag the order is a dictionary's, which is arbitrary and reseeded
+    // every process, so nothing short of the *whole* sequence is safe to
+    // assert. Both levels are checked: ten keys in a specific order is not
+    // something an unsorted encoder produces twice.
+    //
+    // The cooldown has to be non-nil — `JSONEncoder` omits a nil optional
+    // entirely, and it is the key whose sorted position is most obviously not
+    // its declared one.
     let url = tempURL()
     try FileWatchlistStore(url: url).save(Store(
         schemaVersion: 1, symbols: [try #require(Symbol("MSFT"))],
-        settings: Settings(), cooldownUntilEpoch: nil))
+        settings: Settings(), cooldownUntilEpoch: 1_757_000_000))
 
     let text = try String(contentsOf: url, encoding: .utf8)
-    #expect(text.contains("\n"))
-    let schemaIndex = try #require(text.range(of: "schemaVersion"))
-    let symbolsIndex = try #require(text.range(of: "symbols"))
-    #expect(schemaIndex.lowerBound < symbolsIndex.lowerBound)
+    #expect(text.contains("\n"), "the file is not pretty-printed")
+
+    // `.prettyPrinted` writes `"key" : value`, two spaces per level, so a line
+    // holding `" : ` at indent 2 is a top-level key and at indent 4 a settings
+    // key. Array elements have no `" : ` and drop out.
+    var topLevel: [String] = []
+    var settingsKeys: [String] = []
+    for line in text.split(separator: "\n") {
+        let body = line.drop(while: { $0 == " " })
+        guard body.contains("\" : "), body.hasPrefix("\""),
+              let close = body.dropFirst().firstIndex(of: "\"") else { continue }
+        let key = String(body.dropFirst()[..<close])
+        switch line.count - body.count {
+        case 2: topLevel.append(key)
+        case 4: settingsKeys.append(key)
+        default: break
+        }
+    }
+
+    #expect(topLevel == ["cooldownUntilEpoch", "schemaVersion", "settings", "symbols"],
+            "top-level keys are not sorted: \(topLevel)")
+    #expect(settingsKeys.count == 6, "did not find the settings keys: \(settingsKeys)")
+    #expect(settingsKeys == settingsKeys.sorted(),
+            "settings keys are not sorted: \(settingsKeys)")
 }
 
 @Test func aMissingKeyTakesItsDefaultInsteadOfFailingTheWholeLoad() throws {
@@ -76,7 +108,88 @@ private func write(_ json: String, to url: URL) throws {
     let json = #"{"schemaVersion":99,"symbols":["AAPL"]}"#
     try write(json, to: url)
 
-    #expect(throws: TickerError.self) { try FileWatchlistStore(url: url).load() }
+    // do/catch rather than `#expect(throws: TickerError.self)`: that form does
+    // not pin *which* case, so a gate that threw `.storeCorrupt` — quarantining
+    // the newer file, the one outcome this rule exists to prevent — would still
+    // satisfy it.
+    var caught: TickerError?
+    do {
+        _ = try FileWatchlistStore(url: url).load()
+        Issue.record("a newer schema loaded successfully")
+    } catch let error as TickerError {
+        caught = error
+    }
+    let error = try #require(caught)
+    #expect(error == .storeSchemaUnsupported(version: 99))
+    #expect(try String(contentsOf: url, encoding: .utf8) == json)
+}
+
+@Test func anUnreadableSchemaVersionIsRefusedRatherThanQuarantined() throws {
+    // `{"schemaVersion":"99"}` — a future Squiggle that quotes the version, or
+    // any hand-edit that does. It used to miss the gate's `as? Int`, fail the
+    // decoder's strict `Int`, and get the *newer* file renamed away. There is
+    // no version to report, hence its own case rather than a `-1` sentinel
+    // smuggled through `storeSchemaUnsupported`.
+    let url = tempURL()
+    let json = #"{"schemaVersion":"99","symbols":["AAPL"]}"#
+    try write(json, to: url)
+
+    var caught: TickerError?
+    do {
+        _ = try FileWatchlistStore(url: url).load()
+        Issue.record("an unreadable schemaVersion loaded successfully")
+    } catch let error as TickerError {
+        caught = error
+    }
+    let error = try #require(caught)
+    #expect(error == .storeVersionUnreadable)
+    // The whole point: the file is still there, byte for byte.
+    #expect(try String(contentsOf: url, encoding: .utf8) == json)
+    #expect(FileManager.default.fileExists(atPath: url.path))
+}
+
+@Test func anOlderSchemaLoadsRatherThanBeingRefused() throws {
+    // The gate is one-directional. A file this version can already understand
+    // is read normally; only a version it cannot honour is refused.
+    let url = tempURL()
+    try write(#"{"schemaVersion":0,"symbols":["AAPL","MSFT"]}"#, to: url)
+    let store = try FileWatchlistStore(url: url).load()
+    #expect(store.symbols.map(\.raw) == ["AAPL", "MSFT"])
+}
+
+@Test func savingOverANewerFileIsRefusedTooNotJustReadingIt() throws {
+    // Load refusing is half a rule: nothing stopped the app from saving a
+    // moment later and destroying the v99 file anyway.
+    let url = tempURL()
+    let json = #"{"schemaVersion":99,"symbols":["AAPL"]}"#
+    try write(json, to: url)
+
+    var caught: TickerError?
+    do {
+        try FileWatchlistStore(url: url).save(Store())
+        Issue.record("saved over a newer file")
+    } catch let error as TickerError {
+        caught = error
+    }
+    let error = try #require(caught)
+    #expect(error == .storeSchemaUnsupported(version: 99))
+    #expect(try String(contentsOf: url, encoding: .utf8) == json)
+}
+
+@Test func savingOverAFileWithAnUnreadableVersionIsRefused() throws {
+    let url = tempURL()
+    let json = #"{"schemaVersion":"99","symbols":["AAPL"]}"#
+    try write(json, to: url)
+
+    var caught: TickerError?
+    do {
+        try FileWatchlistStore(url: url).save(Store())
+        Issue.record("saved over a file whose version could not be read")
+    } catch let error as TickerError {
+        caught = error
+    }
+    let error = try #require(caught)
+    #expect(error == .storeVersionUnreadable)
     #expect(try String(contentsOf: url, encoding: .utf8) == json)
 }
 
@@ -170,13 +283,21 @@ private func write(_ json: String, to url: URL) throws {
     #expect(s.maxVisibleWidth > 0)
 }
 
-@Test func aNonFiniteNumberInTheFileCannotReachTheApp() throws {
-    // JSON has no NaN literal, but a huge exponent decodes to infinity, and
-    // an infinite width becomes a status item that cannot lay out.
+@Test func aWidthTooLargeToRepresentDegradesToTheDefaultRatherThanQuarantining() throws {
+    // JSON has no NaN or Infinity literal, and `1e400` does not decode to
+    // `.infinity` either: `JSONDecoder` throws
+    // `numberIsNotRepresentableInSwift`. What this pins is therefore the
+    // *leniency*, not the `isFinite` guard — without the per-field catch the
+    // whole decode would throw and the file would be wrongly set aside.
+    // (The old name, `aNonFiniteNumberInTheFileCannotReachTheApp`, claimed a
+    // guard no JSON input can reach; the clamp would have satisfied it anyway.)
     let url = tempURL()
-    try write(#"{"schemaVersion":1,"settings":{"maxVisibleWidth":1e400}}"#, to: url)
-    let s = try FileWatchlistStore(url: url).load().settings
-    #expect(s.maxVisibleWidth.isFinite)
+    try write(#"{"schemaVersion":1,"symbols":["AAPL"],"settings":{"maxVisibleWidth":1e400}}"#,
+              to: url)
+    let store = try FileWatchlistStore(url: url).load()
+    #expect(store.settings.maxVisibleWidth == Settings().maxVisibleWidth)
+    #expect(store.symbols.map(\.raw) == ["AAPL"], "a bad number cost the watchlist")
+    #expect(FileManager.default.fileExists(atPath: url.path), "the file was set aside")
 }
 
 @Test func aPersistedCooldownIsReadBackUnchanged() throws {
@@ -191,10 +312,17 @@ private func write(_ json: String, to url: URL) throws {
     #expect(try #require(store.cooldownUntilEpoch) == deadline)
 }
 
-@Test func anInfiniteCooldownInTheFileIsDiscarded() throws {
+@Test func aCooldownTooLargeToRepresentIsDroppedRatherThanQuarantining() throws {
+    // Same correction as the width test above: `1e400` throws inside the
+    // decoder rather than arriving as `.infinity`, so what is verified here is
+    // that the per-field catch turns it into "no cooldown" instead of into a
+    // quarantine. The `isFinite` guard beside it is belt and braces.
     let url = tempURL()
-    try write(#"{"schemaVersion":1,"cooldownUntilEpoch":1e400}"#, to: url)
-    #expect(try FileWatchlistStore(url: url).load().cooldownUntilEpoch == nil)
+    try write(#"{"schemaVersion":1,"symbols":["AAPL"],"cooldownUntilEpoch":1e400}"#, to: url)
+    let store = try FileWatchlistStore(url: url).load()
+    #expect(store.cooldownUntilEpoch == nil)
+    #expect(store.symbols.map(\.raw) == ["AAPL"], "a bad number cost the watchlist")
+    #expect(FileManager.default.fileExists(atPath: url.path), "the file was set aside")
 }
 
 @Test func noQuoteDataIsEverWrittenToDisk() throws {
@@ -228,13 +356,28 @@ private func write(_ json: String, to url: URL) throws {
 @Test func anAtomicSaveLeavesNoDebrisBesideTheFile() throws {
     // `options: .atomic` writes to a sibling and renames. The rename is what
     // makes an interrupted write leave the *old* file rather than half of the
-    // new one, and a leftover sibling would mean it silently stopped doing
-    // that. This is the observable half of atomicity; the guarantee itself
-    // is the filesystem's.
+    // new one. The guarantee itself is the filesystem's; what is observable
+    // in-process is the *reference*: a rename installs a new inode, while a
+    // plain write truncates the existing file in place and keeps it. Comparing
+    // inodes across a save is what actually pins the flag — the sibling check
+    // below does not, because a non-atomic write also leaves exactly one file
+    // and no debris. (It is kept because a leftover sibling would still be a
+    // real regression, just not this one.)
     let url = tempURL()
     let store = FileWatchlistStore(url: url)
+    func inode() throws -> UInt64 {
+        let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+        return try #require((attributes[.systemFileNumber] as? NSNumber)?.uint64Value)
+    }
+
     try store.save(Store(schemaVersion: 1, symbols: [try #require(Symbol("AAPL"))],
                          settings: Settings(), cooldownUntilEpoch: nil))
+    let before = try inode()
+    try store.save(Store(schemaVersion: 1, symbols: [try #require(Symbol("MSFT"))],
+                         settings: Settings(), cooldownUntilEpoch: nil))
+    let after = try inode()
+    #expect(before != after, "the save wrote in place; it was not atomic")
+
     let siblings = try FileManager.default
         .contentsOfDirectory(atPath: url.deletingLastPathComponent().path)
     #expect(siblings == [url.lastPathComponent],
@@ -252,4 +395,235 @@ private func write(_ json: String, to url: URL) throws {
     let url = FileWatchlistStore.defaultURL(applicationName: "Squiggle")
     #expect(url.path.contains("Application Support/Squiggle"))
     #expect(url.lastPathComponent == "squiggle.json")
+}
+
+// MARK: - Set-aside, when it collides and when it cannot happen
+
+@Test func aQuarantineNameThatIsAlreadyTakenGetsTheNextSuffix() throws {
+    // `aSecondCorruptionDoesNotOverwriteTheFirstCasualty` passes on the
+    // timestamp alone whenever the two loads straddle a second boundary, so it
+    // does not pin the collision branch. Here the base name is claimed for
+    // every second the load could plausibly land in, which forces the branch
+    // whatever the clock says, and the `-2` suffix is asserted explicitly.
+    let url = tempURL()
+    try write("{ bad", to: url)
+    let directory = url.deletingLastPathComponent()
+
+    let formatter = ISO8601DateFormatter()
+    for offset in 0...3 {
+        let stamp = formatter.string(from: Date().addingTimeInterval(Double(offset)))
+            .replacingOccurrences(of: ":", with: "-")
+        try Data().write(to: directory.appendingPathComponent("squiggle.json.bad-\(stamp)"))
+    }
+
+    var caught: TickerError?
+    do {
+        _ = try FileWatchlistStore(url: url).load()
+        Issue.record("a corrupt file loaded successfully")
+    } catch let error as TickerError {
+        caught = error
+    }
+    let error = try #require(caught)
+    guard case .storeCorrupt(let quarantine) = error else {
+        Issue.record("wrong error for a corrupt file: \(error)")
+        return
+    }
+    #expect(quarantine.lastPathComponent.hasSuffix("-2"),
+            "the collision branch did not run: \(quarantine.lastPathComponent)")
+    #expect(FileManager.default.fileExists(atPath: quarantine.path))
+    #expect(!FileManager.default.fileExists(atPath: url.path))
+}
+
+@Test func theQuarantineNameSearchGivesUpRatherThanReportingSomeoneElsesFile() throws {
+    // The bounded search has to end somewhere. What it must not do is fall
+    // back to the *unsuffixed* name — that file belongs to an earlier
+    // casualty, and returning it would tell the caller "your file is safely at
+    // X" while X held somebody else's data and the current file had not moved.
+    // Driven through `quarantineTarget` directly so the stamp is fixed and the
+    // branch is reachable without racing a second boundary.
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent("squiggle-tests-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    let stamp = "2026-09-08T12-00-00Z"
+
+    try Data().write(to: directory.appendingPathComponent("squiggle.json.bad-\(stamp)"))
+    for suffix in 2...1_000 {
+        try Data().write(to: directory.appendingPathComponent("squiggle.json.bad-\(stamp)-\(suffix)"))
+    }
+
+    let exhausted = FileWatchlistStore.quarantineTarget(directory: directory,
+                                                       base: "squiggle.json",
+                                                       stamp: stamp)
+    #expect(exhausted == nil)
+
+    // And one collision short of exhaustion still resolves.
+    try FileManager.default.removeItem(
+        at: directory.appendingPathComponent("squiggle.json.bad-\(stamp)-1000"))
+    let resolved = FileWatchlistStore.quarantineTarget(directory: directory,
+                                                      base: "squiggle.json",
+                                                      stamp: stamp)
+    #expect(resolved?.lastPathComponent == "squiggle.json.bad-\(stamp)-1000")
+}
+
+@Test func aSetAsideThatCannotHappenIsReportedAsATickerErrorNotAsAnNSError() throws {
+    // The one path where "the user gets a working app back" used to be false.
+    // `throw .storeCorrupt(quarantinedAt: try setAside())` evaluated the rename
+    // first, so a failed rename escaped as a raw `NSError`: the decode error
+    // was lost, every `catch let e as TickerError` missed it, and the corrupt
+    // file stayed put to fail again on every relaunch. A read-only directory
+    // is not exotic — a full disk, a restored container with wrong ownership.
+    let url = tempURL()
+    try write("{ this is not json at all", to: url)
+    let directory = url.deletingLastPathComponent()
+    try FileManager.default.setAttributes([.posixPermissions: 0o500],
+                                          ofItemAtPath: directory.path)
+    defer {
+        try? FileManager.default.setAttributes([.posixPermissions: 0o700],
+                                               ofItemAtPath: directory.path)
+    }
+
+    var caught: TickerError?
+    do {
+        _ = try FileWatchlistStore(url: url).load()
+        Issue.record("a corrupt file loaded successfully")
+    } catch let error as TickerError {
+        caught = error
+    } catch {
+        Issue.record("load() threw a non-TickerError: \(error)")
+    }
+    let error = try #require(caught)
+    #expect(error == .storeQuarantineFailed(at: url))
+    // Still where it was: the caller has to be able to tell "safely aside"
+    // from "still in the way".
+    #expect(FileManager.default.fileExists(atPath: url.path))
+}
+
+// MARK: - Leniency: a typo in a cosmetic setting must not cost the watchlist
+
+@Test func aWrongTypeInAnySettingCostsThatSettingAndNothingElse() throws {
+    // The file is user-editable by design and the support policy is "email me
+    // your JSON", so a hand-edit is an expected input, not a corrupt file.
+    // `decodeIfPresent` returns nil only for an *absent* key; a present key of
+    // the wrong type throws, and that throw used to reach the quarantine.
+    // Each case carries a *good* setting alongside the bad one, and the whole
+    // `Settings` value is compared. Without that witness the test could not
+    // tell per-field leniency from the container-level leniency wrapping it:
+    // a strict field throws out of `Settings.init(from:)`, `settings` as a
+    // whole degrades to its default, and the watchlist survives anyway. The
+    // witness is what says only the one field was lost.
+    let witness = #""launchAtLogin":true"#
+    let cases: [(String, String, Settings)] = [
+        (#""refreshIntervalSeconds":"fast""#, witness, Settings(launchAtLogin: true)),
+        (#""rows":"one""#, witness, Settings(launchAtLogin: true)),
+        (#""scrollPointsPerSecond":"quick""#, witness, Settings(launchAtLogin: true)),
+        (#""colorScheme":7"#, witness, Settings(launchAtLogin: true)),
+        (#""maxVisibleWidth":"wide""#, witness, Settings(launchAtLogin: true)),
+        // `launchAtLogin` is the one under test here, so something else
+        // witnesses for it.
+        (#""launchAtLogin":"yes""#, #""colorScheme":"monochrome""#,
+         Settings(colorScheme: "monochrome")),
+    ]
+
+    for (bad, good, expected) in cases {
+        let url = tempURL()
+        try write("{\"schemaVersion\":1,\"symbols\":[\"AAPL\"],\"settings\":{\(bad),\(good)}}",
+                  to: url)
+        let store = try FileWatchlistStore(url: url).load()
+        #expect(store.symbols.map(\.raw) == ["AAPL"], "\(bad) cost the watchlist")
+        #expect(store.settings == expected, "\(bad) cost more than its own setting")
+        #expect(FileManager.default.fileExists(atPath: url.path),
+                "\(bad) got the file set aside")
+    }
+}
+
+@Test func aWrongTypeInSchemaVersionSettingsOrCooldownAlsoKeepsTheWatchlist() throws {
+    // The three container-level decodes. A scalar where `settings` should be
+    // an object used to cost the whole file.
+    let bodies = [
+        #"{"schemaVersion":true,"symbols":["AAPL"]}"#,
+        #"{"schemaVersion":1,"symbols":["AAPL"],"settings":5}"#,
+        #"{"schemaVersion":1,"symbols":["AAPL"],"cooldownUntilEpoch":"soon"}"#,
+    ]
+    for body in bodies {
+        let url = tempURL()
+        try write(body, to: url)
+        let store = try FileWatchlistStore(url: url).load()
+        #expect(store.symbols.map(\.raw) == ["AAPL"], "lost the watchlist to: \(body)")
+        #expect(store.settings == Settings())
+        #expect(FileManager.default.fileExists(atPath: url.path), "set aside: \(body)")
+    }
+}
+
+@Test func oneNonStringElementCostsOneEntryNotTheWholeWatchlist() throws {
+    // The comment two lines above the symbols decode said exactly this and the
+    // line under it did the opposite: `[String]` is all-or-nothing.
+    let url = tempURL()
+    try write(#"{"schemaVersion":1,"symbols":["AAPL",7,null,{"a":1},"MSFT"]}"#, to: url)
+    let store = try FileWatchlistStore(url: url).load()
+    #expect(store.symbols.map(\.raw) == ["AAPL", "MSFT"])
+}
+
+@Test func aScalarWhereTheSymbolsArrayShouldBeLosesOnlyTheSymbols() throws {
+    let url = tempURL()
+    try write(#"{"schemaVersion":1,"symbols":"AAPL","settings":{"rows":2}}"#, to: url)
+    let store = try FileWatchlistStore(url: url).load()
+    #expect(store.symbols.isEmpty)
+    #expect(store.settings.rows == 2, "a bad symbols array cost the settings too")
+}
+
+@Test func theCapStillHoldsWhenTheArrayIsDecodedElementWise() throws {
+    // The one thing leniency must not relax. Element-wise decoding rebuilds the
+    // array, so the cap has to survive that rewrite.
+    let url = tempURL()
+    let many = (1...50).map { $0 % 5 == 0 ? "\($0)" : "\"SYM\($0)\"" }.joined(separator: ",")
+    try write("{\"schemaVersion\":1,\"symbols\":[\(many)]}", to: url)
+    let store = try FileWatchlistStore(url: url).load()
+    #expect(store.symbols.count == RateConstants.maxWatchlistCount)
+    #expect(store.symbols.first?.raw == "SYM1")
+}
+
+// MARK: - Bounds
+
+@Test func theUpperClampsOnWidthAndSpeedAreRealNotDecorative() throws {
+    let url = tempURL()
+    try write("""
+    {"schemaVersion":1,"settings":{"maxVisibleWidth":99999,"scrollPointsPerSecond":99999}}
+    """, to: url)
+    let s = try FileWatchlistStore(url: url).load().settings
+    #expect(s.maxVisibleWidth == 1200)
+    #expect(s.scrollPointsPerSecond == 200)
+}
+
+@Test func theStoreAndTheRefreshPolicyAgreeOnAHandEditedInterval() throws {
+    // A file saying 7200 used to be clamped to 3600 by the store, silently
+    // replaced with the default by `RefreshPolicy.cycleInterval`, and re-saved
+    // as 3600 — three different numbers for one setting, and the persisted one
+    // a lie about what the app was actually running on. The store now admits
+    // exactly what the policy accepts: `RateConstants.offeredRefreshIntervals`,
+    // derived from the menu Settings offers rather than written down twice.
+    let url = tempURL()
+    try write(#"{"schemaVersion":1,"settings":{"refreshIntervalSeconds":7200}}"#, to: url)
+    let stored = try FileWatchlistStore(url: url).load().settings.refreshIntervalSeconds
+    #expect(stored == RateConstants.defaultRefreshInterval)
+
+    let fromStore = RefreshPolicy.cycleInterval(userIntervalSeconds: stored,
+                                                watchlistCount: 1,
+                                                marketState: .regular,
+                                                lowPowerMode: false)
+    let fromFile = RefreshPolicy.cycleInterval(userIntervalSeconds: 7200,
+                                               watchlistCount: 1,
+                                               marketState: .regular,
+                                               lowPowerMode: false)
+    #expect(fromStore == fromFile,
+            "the store persisted a cadence the policy does not run on")
+}
+
+@Test func anIntervalInsideTheOfferedMenuIsKeptExactly() throws {
+    for choice in RateConstants.refreshIntervalChoices {
+        let url = tempURL()
+        try write("{\"schemaVersion\":1,\"settings\":{\"refreshIntervalSeconds\":\(choice)}}",
+                  to: url)
+        let stored = try FileWatchlistStore(url: url).load().settings.refreshIntervalSeconds
+        #expect(stored == choice)
+    }
 }

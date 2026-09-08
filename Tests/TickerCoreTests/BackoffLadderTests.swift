@@ -32,15 +32,18 @@ private func ladder(_ clock: FakeClock, _ random: FakeRandom = FakeRandom()) -> 
     #expect(FailureKind(.emptyBody) == .contractFault)
     #expect(FailureKind(.wrongType(path: "x", expected: "number")) == .contractFault)
     #expect(FailureKind(.negativeValue(path: "x", value: -1)) == .contractFault)
-    // These three cannot arise from a fetch at all (a rejected symbol never
-    // reaches the network; the other two are storage faults). Mapped to the
+    // These five cannot arise from a fetch at all (a rejected symbol never
+    // reaches the network; the other four are storage faults). Mapped to the
     // mildest, shortest, self-correcting rung deliberately: routing an
     // unreachable case into the hour-long contract circuit would turn a
     // local bug into an hour of silence.
     #expect(FailureKind(.invalidSymbol("not a symbol")) == .server)
     #expect(FailureKind(.storeSchemaUnsupported(version: 99)) == .server)
+    #expect(FailureKind(.storeVersionUnreadable) == .server)
     let quarantined = URL(fileURLWithPath: "/tmp/squiggle.json.bad-2026-09-08")
     #expect(FailureKind(.storeCorrupt(quarantinedAt: quarantined)) == .server)
+    let stuck = URL(fileURLWithPath: "/tmp/squiggle.json")
+    #expect(FailureKind(.storeQuarantineFailed(at: stuck)) == .server)
 }
 
 @Test func beingOfflineDoesNotAdvanceTheLadder() {
