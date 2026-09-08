@@ -97,3 +97,19 @@ Still owed (clock-gated; collect during the Task 19 trading day):
 
 Tests must not skip on a missing owed fixture. They are written against the
 captured set; each owed fixture gets its test when it lands.
+
+## Search-endpoint retry #5 (controller, before Task 16)
+
+- 2026-09-08, taken under ruling R13 immediately before the next dispatch.
+  Same request the app builds: `query1.finance.yahoo.com`,
+  `/v1/finance/search`, the single `q` item, `YahooClient.defaultUserAgent`,
+  `Accept: application/json`. **HTTP 429.** `search-apple.json` remains
+  UNCAPTURED after five attempts.
+- The response body is byte-for-byte identical to `429-body-live.txt`
+  (`Too Many Requests` followed by CRLF, 19 bytes). That earlier capture came
+  from the `v8/finance/chart` endpoint; this one from `v1/finance/search`, on
+  a later request. Yahoo's 429 body is therefore uniform across both endpoints
+  Squiggle uses, not per-endpoint — which is what the rate-limit tests assume.
+- Ruling R54: Task 16 runs before Task 15 rather than the queue stalling.
+  Task 16 depends on nothing Task 15 produces. The next retry is taken
+  immediately before Task 15, buying one task's elapsed time.
