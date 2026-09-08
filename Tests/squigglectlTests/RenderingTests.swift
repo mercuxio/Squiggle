@@ -209,12 +209,27 @@ import TickerCore
 /// `fileWritten` here stands in for what could be an absolute path if a
 /// caller ever passed one by mistake; the rendering itself adds nothing that
 /// could turn a clean repository-relative path into an unsafe line, so this
-/// only needs to confirm no extra `?`/`=` machinery sneaks in.
+/// only needs to confirm no extra query-string machinery sneaks in.
+///
+/// A bare `=` is not itself that witness — `EURUSD=X` is a real symbol (see
+/// the ground rules' verbatim-symbols list) and `captureLogLine` embeds
+/// `symbol` in the command it renders, so a blanket `!text.contains("=")`
+/// would fail on a scenario this function must handle correctly. `?` is what
+/// a query string actually starts with, and nothing here ever embeds a URL
+/// for one to hide in, so it is the witness that can tell the two apart.
 @Test func captureLogLineAddsNoQueryStringOrExtraPunctuation() {
     let text = Rendering.captureLogLine(date: "2026-09-09", symbol: "AAPL", record: "regular-session",
                                         marketState: "closed",
                                         fileWritten: "Tests/Fixtures/yahoo-2026-09-09/regular-session.json")
-    #expect(!text.contains("?"))
-    #expect(!text.contains("="))
+    #expect(!text.contains("?"), "leaked a query string: \(text)")
+
+    // The witness above must still hold for a symbol that legitimately
+    // contains "=" — proving this isn't just a repeat of the AAPL case with
+    // a weaker check.
+    let withEqualsInSymbol = Rendering.captureLogLine(
+        date: "2026-09-09", symbol: "EURUSD=X", record: "regular-session",
+        marketState: "closed", fileWritten: "Tests/Fixtures/yahoo-2026-09-09/regular-session.json")
+    #expect(withEqualsInSymbol.contains("EURUSD=X"))
+    #expect(!withEqualsInSymbol.contains("?"), "leaked a query string: \(withEqualsInSymbol)")
 }
 

@@ -285,12 +285,10 @@ private let expectedDateFormatter: DateFormatter = {
 
 /// F-1, measurement 3, end to end: `Command.parse` rejects a record name
 /// carrying a path separator or `..` — `CommandTests.swift` covers the
-/// parse error itself — and because `Command.parse` never touches the
-/// filesystem (see its own doc comment), a temporary fixtures root that
-/// nothing has run against yet stays empty. This confirms that emptiness
-/// by measurement rather than trusting the doc comment's claim.
+/// parse error itself. `Command.parse` never touches the filesystem (see its
+/// own doc comment), so there is no write for this test to check against; the
+/// parse-error assertions below are the whole test.
 @Test func aRecordNameWithAPathSeparatorIsRejectedBeforeAnythingIsWritten() throws {
-    let root = tempDirectory()
     for badName in ["../escape", "a/b", ".."] {
         do {
             _ = try Command.parse(["probe", "AAPL", "--record", badName])
@@ -299,8 +297,6 @@ private let expectedDateFormatter: DateFormatter = {
             // Expected.
         }
     }
-    let contents = try FileManager.default.contentsOfDirectory(atPath: root.path)
-    #expect(contents.isEmpty)
 }
 
 /// F-1, measurement 4: `--record` given with nothing after it is a parse
