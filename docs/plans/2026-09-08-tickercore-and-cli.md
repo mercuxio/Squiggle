@@ -3935,6 +3935,57 @@ Everything so far answers "may I?". This task answers "should I, and when next?"
 > have, and unlike a dead local a dead *parameter* is a lie the compiler will
 > never catch, because every caller keeps dutifully supplying a value.
 
+> **Corrected after execution (rulings R25, R27-R34).** The shipped code and
+> tests below replace what this task originally specified. Six defects were
+> found in review and reproduced by hand before any fix was dispatched:
+>
+> - **R28.** `cycleInterval` was not total. `userIntervalSeconds: 1e308`
+>   survived a positivity check and then overflowed on `quietMultiplier`,
+>   returning `inf` — a timer that never fires. Fixed at the *input*: an
+>   interval outside the menu Settings offers is corrupt exactly as `0`, `-1`
+>   and NaN are, and gets the same answer. The bound is derived from
+>   `refreshIntervalChoices` rather than written down twice, following
+>   `maxCooldownSeconds`' precedent.
+> - **R29.** Every `.wait` exit now goes through `sanitizedWait`. The occluded
+>   branch bypassed it, which is how one branch drifts out of an invariant the
+>   other five keep.
+> - **R30.** The sanitiser enforces a floor of one second, not merely
+>   positivity. `decide` returned `wait(seconds: 0.000999…)` for a market
+>   opening a millisecond past the pre-open lead — a refusal the caller would
+>   spin on, which is the exact failure `CircuitBreaker`'s invariant exists to
+>   prevent.
+> - **R31.** A non-finite age in `isStale` is **stale**, not fresh:
+>   `isStale(lastSuccessEpoch: 0, nowEpoch: .infinity)` reported an infinitely
+>   old quote as current. The dimmed strip *is* the "I cannot vouch for this"
+>   signal. The `age > 0` companion guard was cut — a backwards clock is
+>   already answered `false` by the comparison, and a guard that changes no
+>   result while naming one takes credit for work it does not do.
+> - **R32.** `decide` reports the **maximum** of the live reasons, not the
+>   first tested. A 5-second cooldown alongside a 1800-second open circuit
+>   reported 5 — waking the caller early to be refused by the other reason,
+>   the precise behaviour the branch's own comment claimed to prevent.
+> - **R34.** `unknownOpenPollSeconds` capped the unknown-open fallback at an
+>   hour, but the slowest cycle the interval menu can produce is 45 minutes,
+>   so the `min` could not bind for any reachable input. The constant is
+>   deleted and the ceiling moved to `theUnknownOpenFallbackNeverGoesBlindForAnHour`,
+>   which sweeps the whole menu; a slower choice added later fails that test
+>   instead of silently going blind. Same species as Task 10's R23 and this
+>   task's own R24.
+>
+> Two deviations were argued by the implementer and accepted after
+> verification. **R25** specified `sanitizedWait` guard `>= 0`; `> 0` shipped,
+> because `BackoffLadder.isCoolingDown()` and `secondsRemaining()` read the
+> clock separately and can legitimately straddle a tick, yielding
+> `cooling == true, remaining == 0`. Restoring `>= 0` turns the suite red.
+> **R28** was read as span membership (`offeredRefreshIntervals`, a
+> `ClosedRange` over the menu) rather than literal membership, so an interval
+> between two offered choices is honoured rather than silently rewritten;
+> only values outside the menu's span are treated as corrupt.
+>
+> `RateConstants` gains `maxClosedMarketWait`, `offeredRefreshIntervals` and
+> `minimumWaitSeconds` in this task, and `unknownOpenPollSeconds` (added here
+> by R26, removed here by R34) never survived to a later task.
+
 **Files:**
 - Create: `Sources/TickerCore/RefreshPolicy.swift`
 - Test: `Tests/TickerCoreTests/RefreshPolicyTests.swift`
@@ -3993,46 +4044,142 @@ private func input(
     #expect(d == .wait(seconds: 900))
 }
 
-@Test func aCooldownIsPreferredOverAnOpenCircuitWhenBothApply() {
-    // Order matters only for the number reported; both mean "do not fetch".
-    // Pin it so the reported wait is never the shorter of the two, which
-    // would have the caller wake up early and be refused again.
-    let d = RefreshPolicy.decide(input(cooling: true, cooldownRemaining: 1800,
-                                       circuitAllows: false, circuitOpenRemaining: 60))
-    #expect(d.waitSeconds ?? 0 >= 1800)
+@Test func whenACooldownAndAnOpenCircuitBothApplyTheLongerIsReported() {
+    // Both mean "do not fetch", so the number reported must be the one that
+    // actually applies — the longer. Reporting the shorter wakes the caller
+    // early to be refused again by the other. Asserted in both directions:
+    // a fixed order gets one of these right by luck.
+    let cooldownIsLonger = RefreshPolicy.decide(input(cooling: true, cooldownRemaining: 1800,
+                                                      circuitAllows: false,
+                                                      circuitOpenRemaining: 60))
+    #expect(cooldownIsLonger == .wait(seconds: 1800))
+
+    let circuitIsLonger = RefreshPolicy.decide(input(cooling: true, cooldownRemaining: 5,
+                                                     circuitAllows: false,
+                                                     circuitOpenRemaining: 1800))
+    #expect(circuitIsLonger == .wait(seconds: 1800))
+
+    // A corrupted cooldown must not shorten a circuit that is genuinely open
+    // for half an hour: the sanitised stand-in is a default, not a licence.
+    let corruptCooldown = RefreshPolicy.decide(input(cooling: true, cooldownRemaining: .nan,
+                                                     circuitAllows: false,
+                                                     circuitOpenRemaining: 1800))
+    #expect(corruptCooldown == .wait(seconds: 1800))
 }
 
 @Test func aClosedMarketWaitsUntilShortlyBeforeTheNextOpen() {
     // Spec §4.1: while closed, one wake a minute before the open, not a
     // 15-minute poll that learns nothing 96 times a night.
     let now: Double = 1_757_000_000
-    let open = now + 8 * 3600
-    let d = RefreshPolicy.decide(input(market: .closed, nextOpen: open))
-    let wait = d.waitSeconds ?? 0
-    #expect(wait > 7 * 3600)
-    #expect(wait <= 8 * 3600 - RateConstants.preOpenWakeLead + 1)
+    let untilOpen: Double = 8 * 3600
+    let d = RefreshPolicy.decide(input(market: .closed, nextOpen: now + untilOpen))
+    #expect(d == .wait(seconds: untilOpen - RateConstants.preOpenWakeLead))
+}
+
+@Test func aClosedMarketNeverSleepsPastHalfADay() {
+    // A holiday close, or a payload whose open time is simply wrong, must
+    // still resolve inside `maxClosedMarketWait` rather than sleeping through
+    // a month of trading on one bad number.
+    let now: Double = 1_757_000_000
+    let d = RefreshPolicy.decide(input(market: .closed, nextOpen: now + 30 * 86_400))
+    #expect(d == .wait(seconds: RateConstants.maxClosedMarketWait))
 }
 
 @Test func aClosedMarketWithNoKnownOpenFallsBackToASlowPoll() {
     // The open time comes from the last payload. On a cold launch into a
     // weekend there may be none, and a nil must not become an infinite sleep.
     let d = RefreshPolicy.decide(input(market: .closed, nextOpen: nil))
-    let wait = d.waitSeconds ?? 0
-    #expect(wait > 0)
-    #expect(wait <= 3600, "a fallback poll of \(wait)s is a hang, not a poll")
+    let wait = d.waitSeconds
+    #expect(wait != nil)
+    if let wait {
+        #expect(wait >= RateConstants.minimumWaitSeconds)
+        #expect(wait <= neverBlindLongerThan,
+                "a fallback poll of \(wait)s is a hang, not a poll")
+    }
+}
+
+/// The longest Squiggle may go without asking, when it does not even know
+/// when the market opens. A literal and not a constant: nothing in the
+/// policy *reads* an hourly ceiling — the interval menu already keeps every
+/// cycle well inside it — so a `RateConstants` entry would be a production
+/// value existing only to be compared against in a test.
+private let neverBlindLongerThan: Double = 3600
+
+@Test func theUnknownOpenFallbackNeverGoesBlindForAnHour() {
+    // The ceiling used to be a `min` in the policy that could not bind, which
+    // made it a promise nothing kept. It is a requirement, so it is asserted
+    // here instead — across every interval Settings offers, at the watchlist
+    // size that stretches the cycle furthest, with and without the Low Power
+    // stretch. Add a slower interval choice and this test, not a silent
+    // constant, is what tells you the fallback has gone blind.
+    //
+    // Only `.closed` is swept: this fallback is reached from that branch
+    // alone, and a `.pre`/`.post` row would return `.fetch` and quietly skip
+    // every assertion below.
+    for interval in RateConstants.refreshIntervalChoices {
+        for lowPower in [false, true] {
+            let d = RefreshPolicy.decide(input(market: .closed,
+                                               lowPower: lowPower,
+                                               interval: interval,
+                                               count: RateConstants.maxWatchlistCount,
+                                               nextOpen: nil))
+            let wait = d.waitSeconds
+            #expect(wait != nil, "interval \(interval) produced \(d)")
+            if let wait {
+                #expect(wait <= neverBlindLongerThan,
+                        "interval \(interval), lowPower \(lowPower) → \(wait)s")
+                #expect(wait >= RateConstants.minimumWaitSeconds)
+            }
+        }
+    }
 }
 
 @Test func aStaleNextOpenInThePastDoesNotProduceANegativeWait() {
     let now: Double = 1_757_000_000
     let d = RefreshPolicy.decide(input(market: .closed, nextOpen: now - 5000))
-    #expect((d.waitSeconds ?? -1) >= 0)
+    let wait = d.waitSeconds ?? -1
+    #expect(wait >= 0)
+}
+
+@Test func aRefusalNeverReportsASubSecondWait() {
+    // A wait of a millisecond, returned by a branch that has just decided not
+    // to fetch, is a hot loop in slow motion. The window where the open sits
+    // barely past the wake lead lasts one second of wall time, and waking
+    // inside it buys nothing.
+    let now: Double = 1_757_000_000
+    let barelyPastTheLead = RefreshPolicy.decide(
+        input(market: .closed, nextOpen: now + RateConstants.preOpenWakeLead + 0.001))
+    #expect(barelyPastTheLead == .wait(seconds: RateConstants.minimumWaitSeconds))
+
+    let tinyCooldown = RefreshPolicy.decide(input(cooling: true, cooldownRemaining: 0.25))
+    #expect(tinyCooldown == .wait(seconds: RateConstants.minimumWaitSeconds))
+
+    // Too small and corrupt are different failures and keep different
+    // answers: a corrupt remaining is not evidence that one second is enough.
+    let corrupt = RefreshPolicy.decide(input(cooling: true, cooldownRemaining: .nan))
+    #expect(corrupt == .wait(seconds: RateConstants.defaultRefreshInterval))
 }
 
 @Test func occlusionStopsFetchingEntirely() {
     // Spec §4.1 and §5.4: hidden behind a notch or another app's menu items,
     // there is nothing to update. This is the single largest saving.
-    let d = RefreshPolicy.decide(input(visibility: .occluded))
-    #expect(d != .fetch)
+    //
+    // The value is pinned, not just the refusal: this branch is the only
+    // place `cycleInterval`'s result is observable through `decide`, so an
+    // unpinned wait here would let a 1 Hz wake — or a `decide` that ignored
+    // Low Power Mode and the market entirely — pass as correct. Task 12's
+    // day-long budget simulation is built on exactly this number.
+    let cycle = RefreshPolicy.cycleInterval(userIntervalSeconds: RateConstants.defaultRefreshInterval,
+                                            watchlistCount: 4,
+                                            marketState: .regular,
+                                            lowPowerMode: false)
+    #expect(RefreshPolicy.decide(input(visibility: .occluded)) == .wait(seconds: cycle))
+
+    let quiet = cycle * RateConstants.quietMultiplier
+    #expect(RefreshPolicy.decide(input(visibility: .occluded, lowPower: true))
+            == .wait(seconds: quiet))
+    #expect(RefreshPolicy.decide(input(market: .pre, visibility: .occluded))
+            == .wait(seconds: quiet))
 }
 
 @Test func extendedHoursAndLowPowerBothStretchTheCycle() {
@@ -4040,9 +4187,13 @@ private func input(
                                            marketState: .regular, lowPowerMode: false)
     let pre = RefreshPolicy.cycleInterval(userIntervalSeconds: 300, watchlistCount: 4,
                                           marketState: .pre, lowPowerMode: false)
+    let post = RefreshPolicy.cycleInterval(userIntervalSeconds: 300, watchlistCount: 4,
+                                           marketState: .post, lowPowerMode: false)
     let saving = RefreshPolicy.cycleInterval(userIntervalSeconds: 300, watchlistCount: 4,
                                              marketState: .regular, lowPowerMode: true)
     #expect(pre == base * RateConstants.quietMultiplier)
+    // Post-market is the other half of "extended hours" and stretches too.
+    #expect(post == base * RateConstants.quietMultiplier)
     #expect(saving == base * RateConstants.quietMultiplier)
 }
 
@@ -4061,6 +4212,20 @@ private func input(
     let interval = RefreshPolicy.cycleInterval(userIntervalSeconds: 60, watchlistCount: 20,
                                                marketState: .regular, lowPowerMode: false)
     #expect(interval == 20 * RateConstants.spacingSeconds)
+}
+
+@Test func aWatchlistLargerThanSquiggleSupportsIsCappedNotBelieved() {
+    // `maxWatchlistCount` is the largest list the app admits. Without the
+    // clamp the floor scales with the number given, and `Int.max` symbols
+    // become a cycle of nine trillion years — a hang wearing a cadence's name.
+    let capped = Double(RateConstants.maxWatchlistCount) * RateConstants.spacingSeconds
+    let oversized = RefreshPolicy.cycleInterval(userIntervalSeconds: 60, watchlistCount: 100_000,
+                                                marketState: .regular, lowPowerMode: false)
+    #expect(oversized == capped)
+
+    let extreme = RefreshPolicy.cycleInterval(userIntervalSeconds: 60, watchlistCount: .max,
+                                              marketState: .regular, lowPowerMode: false)
+    #expect(extreme == capped)
 }
 
 @Test func theSpacingFloorNeverShortensAUsersChosenInterval() {
@@ -4082,9 +4247,10 @@ private func input(
     // Spec §7: the strip dims past three cycles. Below that it must not,
     // because a ticker that dims during normal operation teaches the user to
     // ignore the one signal it has.
-    #expect(!RefreshPolicy.isStale(lastSuccessEpoch: 1_000, nowEpoch: 1_100,
-                                   userIntervalSeconds: 180, watchlistCount: 4,
-                                   marketState: .regular, lowPowerMode: false))
+    let stale = RefreshPolicy.isStale(lastSuccessEpoch: 1_000, nowEpoch: 1_100,
+                                      userIntervalSeconds: 180, watchlistCount: 4,
+                                      marketState: .regular, lowPowerMode: false)
+    #expect(!stale)
 }
 
 @Test func stalenessIsThreeCyclesAndNotThreeUserIntervals() {
@@ -4098,29 +4264,72 @@ private func input(
                               userIntervalSeconds: 60, watchlistCount: 20,
                               marketState: .regular, lowPowerMode: false)
     }
-    #expect(!stale(after: cycle * RateConstants.stalenessMultiplier - 1))
-    #expect(stale(after: cycle * RateConstants.stalenessMultiplier + 1))
+    let justBefore = stale(after: cycle * RateConstants.stalenessMultiplier - 1)
+    let atTheBoundary = stale(after: cycle * RateConstants.stalenessMultiplier)
+    let justAfter = stale(after: cycle * RateConstants.stalenessMultiplier + 1)
+    #expect(!justBefore)
+    // Which side of the boundary the strip dims on is a decision, not an
+    // accident: exactly three cycles old is still current. Probing only
+    // ±1 second leaves `>` and `>=` indistinguishable.
+    #expect(!atTheBoundary)
+    #expect(justAfter)
 }
 
 @Test func aQuoteThatNeverArrivedIsStale() {
     // No successful fetch yet is exactly the state the dimmed strip is for.
-    #expect(RefreshPolicy.isStale(lastSuccessEpoch: nil, nowEpoch: 5_000,
-                                  userIntervalSeconds: 180, watchlistCount: 4,
-                                  marketState: .regular, lowPowerMode: false))
+    let stale = RefreshPolicy.isStale(lastSuccessEpoch: nil, nowEpoch: 5_000,
+                                      userIntervalSeconds: 180, watchlistCount: 4,
+                                      marketState: .regular, lowPowerMode: false)
+    #expect(stale)
 }
 
 @Test func aClosedMarketDoesNotDimTheStrip() {
     // Overnight the last close is the correct number, however old it is.
     // Dimming it every night would make the signal meaningless by morning.
-    #expect(!RefreshPolicy.isStale(lastSuccessEpoch: 0, nowEpoch: 40 * 3600,
-                                   userIntervalSeconds: 180, watchlistCount: 4,
-                                   marketState: .closed, lowPowerMode: false))
+    let stale = RefreshPolicy.isStale(lastSuccessEpoch: 0, nowEpoch: 40 * 3600,
+                                      userIntervalSeconds: 180, watchlistCount: 4,
+                                      marketState: .closed, lowPowerMode: false)
+    #expect(!stale)
 }
 
 @Test func aClockThatJumpedBackwardsDoesNotDimTheStrip() {
-    #expect(!RefreshPolicy.isStale(lastSuccessEpoch: 10_000, nowEpoch: 1_000,
-                                   userIntervalSeconds: 180, watchlistCount: 4,
-                                   marketState: .regular, lowPowerMode: false))
+    // A timezone change or an NTP correction is not a data fault, and the
+    // size of the jump must not turn into a verdict — measuring the magnitude
+    // of the age rather than its value would dim the strip hardest for the
+    // largest correction.
+    for now in [1_000.0, -1_000_000] {
+        let stale = RefreshPolicy.isStale(lastSuccessEpoch: 10_000, nowEpoch: now,
+                                          userIntervalSeconds: 180, watchlistCount: 4,
+                                          marketState: .regular, lowPowerMode: false)
+        #expect(!stale, "nowEpoch \(now)")
+    }
+}
+
+@Test func anAgeThatCannotBeMeasuredDimsTheStrip() {
+    // Unknown freshness must dim, because the dimmed strip *is* the "I do not
+    // know that this is current" signal. Reporting an unmeasurable age as
+    // fresh spends the one signal the strip has on the one case it cannot
+    // vouch for.
+    for now in [Double.infinity, .nan] {
+        let stale = RefreshPolicy.isStale(lastSuccessEpoch: 0, nowEpoch: now,
+                                          userIntervalSeconds: 180, watchlistCount: 4,
+                                          marketState: .regular, lowPowerMode: false)
+        #expect(stale, "nowEpoch \(now)")
+    }
+
+    // A corrupt stored timestamp, not a clock correction: an infinite last
+    // success is unmeasurable in the other direction and dims too.
+    let corruptLastSuccess = RefreshPolicy.isStale(lastSuccessEpoch: .infinity, nowEpoch: 1_000,
+                                                   userIntervalSeconds: 180, watchlistCount: 4,
+                                                   marketState: .regular, lowPowerMode: false)
+    #expect(corruptLastSuccess)
+
+    // The closed-market answer still outranks it: overnight, the last close
+    // is the right number however unmeasurable its age.
+    let closed = RefreshPolicy.isStale(lastSuccessEpoch: 0, nowEpoch: .nan,
+                                       userIntervalSeconds: 180, watchlistCount: 4,
+                                       marketState: .closed, lowPowerMode: false)
+    #expect(!closed)
 }
 
 @Test func anEmptyWatchlistNeverFetches() {
@@ -4128,27 +4337,131 @@ private func input(
 }
 
 @Test func aNonsenseIntervalIsClampedRatherThanObeyed() {
-    // Defence against a hand-edited settings file. Zero would busy-loop.
-    for bad in [0.0, -1, .infinity, .nan] {
+    // Defence against a hand-edited settings file. Zero would busy-loop, and
+    // `1e308` is no harder to type than `-1` — it is the one input that can
+    // make the whole policy non-finite, because a large *finite* interval
+    // survives a positivity check and then overflows on the quiet multiplier.
+    let offered = RateConstants.offeredRefreshIntervals
+    let outsideTheMenu: [Double] = [0, -1, .infinity, -.infinity, .nan,
+                                    1e308, .greatestFiniteMagnitude,
+                                    offered.upperBound + 1, offered.lowerBound - 1]
+
+    for bad in outsideTheMenu {
         let cycle = RefreshPolicy.cycleInterval(userIntervalSeconds: bad, watchlistCount: 1,
                                                 marketState: .regular, lowPowerMode: false)
-        #expect(cycle.isFinite)
-        #expect(cycle >= RateConstants.spacingSeconds)
+        #expect(cycle == RateConstants.defaultRefreshInterval, "interval \(bad) → \(cycle)")
+
+        // The stretch is where the overflow lived: a value clamped only at the
+        // output would still be reporting `inf` here.
+        let stretched = RefreshPolicy.cycleInterval(userIntervalSeconds: bad, watchlistCount: 4,
+                                                    marketState: .pre, lowPowerMode: true)
+        #expect(stretched == RateConstants.defaultRefreshInterval * RateConstants.quietMultiplier,
+                "interval \(bad) → \(stretched)")
+    }
+
+    // Every interval Settings can actually produce is obeyed, so the bound
+    // rejects corruption and nothing else.
+    for good in RateConstants.refreshIntervalChoices {
+        let cycle = RefreshPolicy.cycleInterval(userIntervalSeconds: good, watchlistCount: 1,
+                                                marketState: .regular, lowPowerMode: false)
+        #expect(cycle == good, "interval \(good) → \(cycle)")
     }
 }
 
+@Test func theIntervalBoundIsDerivedFromTheMenuAndNotWrittenDownTwice() {
+    // The bound that rejects a corrupt interval must track the list of
+    // intervals Settings offers. Written down separately it would drift, and
+    // a bound that drifts from the list it bounds is worse than no bound —
+    // it would start rejecting a choice the user can actually pick.
+    let lowest = RateConstants.refreshIntervalChoices.min()
+    let highest = RateConstants.refreshIntervalChoices.max()
+    #expect(RateConstants.offeredRefreshIntervals.lowerBound == lowest)
+    #expect(RateConstants.offeredRefreshIntervals.upperBound == highest)
+}
+
+@Test func aCorruptIntervalCannotBecomeAnInfiniteWait() {
+    // The occluded branch is where a non-finite cycle would reach the caller
+    // as a timer that never fires — a silent, permanent hang no error message
+    // would ever explain.
+    let expected = RateConstants.defaultRefreshInterval * RateConstants.quietMultiplier
+    for bad in [1e308, .greatestFiniteMagnitude, .infinity, .nan] {
+        let d = RefreshPolicy.decide(input(visibility: .occluded, lowPower: true, interval: bad))
+        #expect(d == .wait(seconds: expected), "interval \(bad) → \(d)")
+    }
+}
+
+@Test func aCorruptIntervalCannotSilenceTheStalenessIndicator() {
+    // The same overflow read the other way: `age > inf` is false, so an
+    // eleven-day-old quote would report as fresh.
+    for bad in [1e308, .greatestFiniteMagnitude, .infinity, .nan] {
+        let stale = RefreshPolicy.isStale(lastSuccessEpoch: 0, nowEpoch: 1_000_000,
+                                          userIntervalSeconds: bad, watchlistCount: 4,
+                                          marketState: .regular, lowPowerMode: true)
+        #expect(stale, "interval \(bad)")
+    }
+}
+
+// R27: the brief's sweep never varied `cooldownRemaining` or
+// `circuitOpenRemaining`, so it could not see either R25 failure, and it
+// skipped its assertions entirely on every `.fetch` iteration (`if let wait =
+// d.waitSeconds` is simply false there). This version sweeps hostile
+// remainings crossed with both gating flags, and asserts the real invariant
+// on every iteration, `.fetch` included: the decision is either `.fetch`, or
+// a `.wait` whose seconds are finite, non-negative, and — this is the part a
+// bare finite/non-negative check cannot catch — not zero unless a fetch
+// would in fact have been allowed. A `.wait(seconds: 0)` while cooling down
+// or circuit-closed-for-a-reason is a hot loop wearing a passing test.
 @Test func everyDecisionIsFiniteAndNonNegative() {
-    // A NaN wait becomes a timer that never fires: a silent, permanent hang
-    // that no error message would ever explain.
+    let hostileRemainings: [Double] = [0, -1, .infinity, -.infinity, .nan, 412]
+    // The interval axis was missing, and it is the one axis that can make a
+    // decision non-finite: `1e308` passes a positivity check and then
+    // overflows on the quiet multiplier.
+    let hostileIntervals: [Double] = [RateConstants.defaultRefreshInterval, 900,
+                                      1e308, .greatestFiniteMagnitude, .nan]
+
     for market in [MarketState.pre, .regular, .post, .closed] {
         for visibility in [Visibility.visible, .occluded] {
             for lowPower in [false, true] {
                 for count in [0, 1, 20] {
-                    let d = RefreshPolicy.decide(input(market: market, visibility: visibility,
-                                                       lowPower: lowPower, count: count))
-                    if let wait = d.waitSeconds {
-                        #expect(wait.isFinite)
-                        #expect(wait >= 0)
+                    for isCoolingDown in [false, true] {
+                        for circuitAllows in [false, true] {
+                          for interval in hostileIntervals {
+                            for remaining in hostileRemainings {
+                                let d = RefreshPolicy.decide(input(
+                                    market: market, visibility: visibility,
+                                    lowPower: lowPower, interval: interval, count: count,
+                                    cooling: isCoolingDown, cooldownRemaining: remaining,
+                                    circuitAllows: circuitAllows, circuitOpenRemaining: remaining))
+
+                                switch d {
+                                case .fetch:
+                                    // A fetch is only ever a valid answer when nothing
+                                    // is actively refusing it.
+                                    #expect(!isCoolingDown)
+                                    #expect(circuitAllows)
+                                    #expect(count > 0)
+                                    #expect(visibility == .visible)
+                                    #expect(market != .closed)
+                                case .wait(let wait):
+                                    #expect(wait.isFinite)
+                                    #expect(wait >= 0)
+                                    // A refusal owes the caller a real interval. One
+                                    // second is the floor: below it the wake buys
+                                    // nothing and costs a battery meter.
+                                    #expect(wait >= RateConstants.minimumWaitSeconds,
+                                            "wait \(wait) for interval \(interval), remaining \(remaining)")
+                                    // Zero is only honest when a fetch would in fact
+                                    // have been allowed right now — otherwise the
+                                    // caller wakes immediately and is refused again.
+                                    let fetchWouldBeAllowed = !isCoolingDown && circuitAllows
+                                        && count > 0 && visibility == .visible && market != .closed
+                                    if wait == 0 {
+                                        #expect(fetchWouldBeAllowed)
+                                    }
+                                }
+                            }
+                          }
+                        }
                     }
                 }
             }
@@ -4237,8 +4550,14 @@ public enum RefreshPolicy {
                                      watchlistCount: Int,
                                      marketState: MarketState,
                                      lowPowerMode: Bool) -> Double {
-        // A hand-edited settings file can contain anything at all.
-        let requested = userIntervalSeconds.isFinite && userIntervalSeconds > 0
+        // A hand-edited settings file can contain anything at all, and this
+        // function has to be total over "anything". An interval outside the
+        // menu Settings offers is corrupt in exactly the way `0`, `-1` and NaN
+        // are, and gets the same answer. Rejected at the input rather than
+        // clamped at the output: `1e308 × quietMultiplier` is `inf`, and a
+        // clamped product would leave this function reporting a cadence while
+        // silently having rewritten the setting it claims to honour.
+        let requested = RateConstants.offeredRefreshIntervals.contains(userIntervalSeconds)
             ? userIntervalSeconds
             : RateConstants.defaultRefreshInterval
 
@@ -4270,9 +4589,14 @@ public enum RefreshPolicy {
         guard let lastSuccessEpoch else { return true }
 
         let age = nowEpoch - lastSuccessEpoch
-        // A clock correction can make this negative. Treat that as fresh: the
-        // alternative is dimming the strip because the user changed timezone.
-        guard age.isFinite, age > 0 else { return false }
+        // An age that cannot be measured is not an age this function can
+        // vouch for, and the dimmed strip *is* the "I do not know that this is
+        // current" signal — so a NaN or infinite age dims rather than
+        // reassures. No `age > 0` companion here: a clock correction makes the
+        // age negative, which the comparison below already answers `false`
+        // without help, and a guard that changes no result while naming one is
+        // a guard taking credit for work it does not do.
+        guard age.isFinite else { return true }
 
         let cycle = cycleInterval(userIntervalSeconds: userIntervalSeconds,
                                   watchlistCount: watchlistCount,
@@ -4282,20 +4606,21 @@ public enum RefreshPolicy {
     }
 
     public static func decide(_ input: RefreshInput) -> RefreshDecision {
-        // Ordered by how long each reason lasts, longest first, so the wait we
-        // report is the wait that actually applies. Reporting the shorter of
-        // two live reasons would wake the caller early to be refused again.
-
-        if input.isCoolingDown {
-            return .wait(seconds: max(0, input.cooldownRemaining))
-        }
-
-        if !input.circuitAllows {
-            return .wait(seconds: max(0, input.circuitOpenRemaining))
+        // A cooldown and an open circuit both mean "do not fetch", and when
+        // both are live the longer of the two is the one that actually
+        // applies. So the reported wait is the maximum of the live reasons,
+        // not whichever reason happens to be tested first: reporting the
+        // shorter would wake the caller early to be refused again by the
+        // other. A reason that is not live contributes nothing, and every
+        // live one is at least `minimumWaitSeconds`, so `0` cannot win.
+        if input.isCoolingDown || !input.circuitAllows {
+            let cooldown = input.isCoolingDown ? sanitizedWait(input.cooldownRemaining) : 0
+            let circuit = input.circuitAllows ? 0 : sanitizedWait(input.circuitOpenRemaining)
+            return .wait(seconds: max(cooldown, circuit))
         }
 
         guard input.watchlistCount > 0 else {
-            return .wait(seconds: RateConstants.defaultRefreshInterval)
+            return .wait(seconds: sanitizedWait(RateConstants.defaultRefreshInterval))
         }
 
         let cycle = cycleInterval(userIntervalSeconds: input.userIntervalSeconds,
@@ -4306,7 +4631,7 @@ public enum RefreshPolicy {
         if input.visibility == .occluded {
             // Do not fetch, but do not sleep forever either: the strip must be
             // current the moment it reappears, and unocclusion wakes us anyway.
-            return .wait(seconds: cycle)
+            return .wait(seconds: sanitizedWait(cycle))
         }
 
         if input.marketState == .closed {
@@ -4314,15 +4639,51 @@ public enum RefreshPolicy {
                 // No payload has told us when the market opens — a cold launch
                 // into a weekend. Fall back to a slow poll rather than sleeping
                 // indefinitely; a nil must never become a hang.
-                return .wait(seconds: min(3600, max(cycle, RateConstants.defaultRefreshInterval)))
+                //
+                // No hourly ceiling is written here. The slowest cycle the
+                // interval menu can produce is 45 minutes, so a `min` against
+                // an hour would be a bound that never binds — a guard taking
+                // credit for work the interval table already does. The ceiling
+                // is a requirement on this branch rather than an input to it,
+                // so it lives in `theUnknownOpenFallbackNeverGoesBlindForAnHour`,
+                // which sweeps the whole menu and fails the day a slower
+                // choice is added.
+                return .wait(seconds: sanitizedWait(
+                    max(cycle, RateConstants.defaultRefreshInterval)))
             }
             let untilOpen = open - input.nowEpoch - RateConstants.preOpenWakeLead
             // A stale open time from a payload older than the session it
-            // described would otherwise produce a negative wait.
-            return .wait(seconds: max(0, min(untilOpen, 12 * 3600)))
+            // described would otherwise produce a negative wait; clamp through
+            // the same helper used above rather than a bare `max(0, …)`.
+            return .wait(seconds: sanitizedWait(min(untilOpen, RateConstants.maxClosedMarketWait)))
         }
 
         return .fetch
+    }
+
+    /// Turns a proposed "seconds until it is worth asking again" into a wait
+    /// this type will stand behind. **Every** `.wait` `decide()` returns is
+    /// built here, so no branch can drift out of the invariant.
+    ///
+    /// `max(0, remaining)` looks sufficient and is not, in two directions at
+    /// once. `max(0, Double.nan) == 0`, because Swift's `max` is effectively
+    /// `y >= x ? y : x` and every comparison against NaN is false — so a
+    /// corrupted remaining becomes "ask now" while the condition that produced
+    /// it is still refusing, and the caller spins. And
+    /// `max(0, Double.infinity) == .infinity`: a timer that never fires.
+    ///
+    /// The invariant is `CircuitBreaker`'s, kept here too: a reported wait
+    /// must never be one the caller can spin on. Every site that reaches this
+    /// helper is one where `decide()` has already committed to *not*
+    /// fetching, so zero is not an honest answer — and neither is a
+    /// millisecond. The two failures get different answers: a value that is
+    /// corrupt gets the default interval, a value that is merely too small
+    /// gets the floor.
+    private static func sanitizedWait(_ remaining: Double) -> Double {
+        guard remaining.isFinite, remaining > 0 else {
+            return RateConstants.defaultRefreshInterval
+        }
+        return max(remaining, RateConstants.minimumWaitSeconds)
     }
 }
 ```
