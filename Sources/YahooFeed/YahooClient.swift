@@ -1,14 +1,6 @@
 import Foundation
 import TickerCore
 
-/// The only `URLSession` in the package.
-///
-/// Endpoint choice is spec §3.1: `v8/chart` in preference to `v7/quote`,
-/// because `v7` is reported to be cookie-and-crumb gated. **That report was
-/// never independently confirmed** — confirming it is the point of this task.
-/// If `v8` turns out to need authentication, this file is where that lands;
-/// nothing in `TickerCore` changes.
-
 /// A quote and its instrument's trading calendar, decoded from one response
 /// body. `tradingPeriod` is `nil` when this session's payload did not carry
 /// `currentTradingPeriod` — absent rather than an error, since the quote
@@ -23,6 +15,13 @@ public struct Snapshot: Sendable {
     }
 }
 
+/// The only `URLSession` in the package.
+///
+/// Endpoint choice is spec §3.1: `v8/chart` in preference to `v7/quote`,
+/// because `v7` is reported to be cookie-and-crumb gated. **That report was
+/// never independently confirmed** — confirming it is the point of this task.
+/// If `v8` turns out to need authentication, this file is where that lands;
+/// nothing in `TickerCore` changes.
 public struct YahooClient: QuoteFetching, SymbolSearching {
     /// An absent User-Agent is blocked outright by Yahoo (spec §4.3).
     public static let defaultUserAgent =
