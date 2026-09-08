@@ -72,6 +72,15 @@ Captured:
 - [x] overnight-closed.json — only if the capture ran outside 09:30-16:00 ET
 - [ ] 401-body.json — RECONSTRUCTED, not captured
 
+Still owed (rate-limit-gated, NOT clock-gated — retry it on its own):
+- [ ] search-apple.json — `v1/finance/search?q=apple`. Four attempts on
+      2026-09-08 returned 429; see the note above. Controller ruling R13:
+      this retry is event-driven, taken immediately before Task 15 is
+      dispatched, so the longest possible time has elapsed since the last
+      429. Task 15 blocks rather than fabricates if the file is absent —
+      a hand-written search fixture would be a guess about a response shape
+      nobody has seen, which is the one thing the corpus exists to prevent.
+
 Still owed (clock-gated; collect during the Task 19 trading day):
 - [ ] regular-session — RECAPTURE during a live session if the corpus was
       taken outside 09:30-16:00 ET; the held file is a closed-market stand-in
