@@ -136,6 +136,18 @@ public enum Command: Equatable {
             if let unknownFlag = rest.first(where: { $0.hasPrefix("--") }) {
                 throw ParseError("unknown flag: \(unknownFlag)")
             }
+            // And nothing positional either. `doctor` used to discard whatever
+            // survived the flag check above, so `squigglectl doctor AAPL` ran
+            // the same eight checks and gave no hint that the symbol had been
+            // ignored — a user who meant `quote AAPL` got a clean bill of
+            // health for a question they never asked.
+            //
+            // Reported separately from the flag case rather than folded into
+            // it: telling someone that `AAPL` is an unknown flag misdiagnoses
+            // the mistake, and a misdiagnosis is worse than silence.
+            if let leftover = rest.first {
+                throw ParseError("doctor takes no arguments, got: \(leftover)")
+            }
             return .doctor
 
         default:

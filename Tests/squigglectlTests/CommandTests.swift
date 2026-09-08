@@ -134,13 +134,32 @@ import TickerCore
     }
 }
 
+/// F-4 (fix round 2): the name outran both the parser and the test. The
+/// parser rejected only `--`-prefixed leftovers and silently discarded the
+/// rest, so `Command.parse(["doctor", "AAPL"])` succeeded; the test asserted
+/// only that the bare form parses, which the broken parser also did. Both
+/// halves of the rule the name states are now asserted.
 @Test func doctorTakesNoArguments() throws {
     let parsed = try Command.parse(["doctor"])
     #expect(parsed == .doctor)
+    #expect(throws: ParseError.self) { try Command.parse(["doctor", "AAPL"]) }
+    #expect(throws: ParseError.self) { try Command.parse(["doctor", "AAPL", "MSFT"]) }
 }
 
 /// Same rule as `quote` and `search`: `doctor` has no flags of its own yet,
-/// so a stray `--flag` is a mistake to report, not a token to ignore.
+/// so a stray `--flag` is a mistake to report, not a token to ignore. Kept
+/// distinct from the positional case above because the two get different
+/// wording — calling `AAPL` an unknown flag would misdiagnose the mistake.
 @Test func doctorRejectsAnUnknownFlag() {
     #expect(throws: ParseError.self) { try Command.parse(["doctor", "--bogus"]) }
+}
+
+@Test func doctorNamesTheOffendingTokenWithoutCallingItAFlag() throws {
+    do {
+        _ = try Command.parse(["doctor", "AAPL"])
+        Issue.record("doctor accepted a positional argument")
+    } catch let error as ParseError {
+        #expect(error.message.contains("AAPL"))
+        #expect(!error.message.contains("flag"))
+    }
 }
