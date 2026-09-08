@@ -118,6 +118,34 @@ public struct CircuitBreaker {
     /// a fresh one.
     public mutating func allowsRequest() -> Bool {
         let now = clock.nowSeconds
+        guard wouldAllow(at: now) else { return false }
+        if case .halfOpen = state(at: now) {
+            probeIssuedAt = now
+        }
+        return true
+    }
+
+    /// Whether `allowsRequest()` would return `true` right now, **without**
+    /// issuing the half-open probe permit.
+    ///
+    /// A query, not a command: callers that must decide something — what to
+    /// do next, how long to sleep — *before* they know whether they are
+    /// actually about to make the request ask this instead of
+    /// `allowsRequest()`. Only the caller that is about to make the request,
+    /// at the last moment before it does, calls `allowsRequest()` itself.
+    /// Deciding with the command and never following through spends the one
+    /// half-open probe on a request that never happened, and leaves the
+    /// breaker refusing everyone else for `probeTimeoutSeconds` for nothing.
+    public func wouldAllowRequest() -> Bool {
+        wouldAllow(at: clock.nowSeconds)
+    }
+
+    /// The logic shared by `allowsRequest()` and `wouldAllowRequest()`: what
+    /// the answer would be at a given instant, with no side effect. Given the
+    /// same `now`, `state(at:)` and `probeAge(at:)` are pure functions of it
+    /// and the breaker's own fields, so calling this once for the query and
+    /// once more for the command produces no drift between the two calls.
+    private func wouldAllow(at now: Double) -> Bool {
         switch state(at: now) {
         case .closed:
             return true
@@ -127,7 +155,6 @@ public struct CircuitBreaker {
             if let age = probeAge(at: now), age < RateConstants.probeTimeoutSeconds {
                 return false
             }
-            probeIssuedAt = now
             return true
         }
     }
