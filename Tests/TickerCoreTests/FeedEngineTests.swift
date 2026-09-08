@@ -66,6 +66,80 @@ struct FeedEngineTests {
         #expect(action == .fetch(one))
     }
 
+    @Test func anOpenCircuitCostsNoTokensBecauseTheTokenIsNeverTaken() throws {
+        // F5 was raised as a hypothesis: `pacer.take()` sits above the two
+        // `allowsRequest()` calls, so an open circuit was thought to burn one
+        // token per wake with no request made. Measured, it does not, and this
+        // test is the measurement rather than a claim.
+        //
+        // `RefreshPolicy.decide` is consulted *first* and is handed both
+        // `circuitAllows` and `isCoolingDown`, so an open circuit returns
+        // `.wait` and `next()` returns before it reaches the bucket at all.
+        // The take below the policy is the last word on *when*, not the first.
+        //
+        // Two gates, not one, which is why a single mutation leaves this test
+        // green: setting `circuitAllows: true` is masked by the ladder cooldown
+        // that every one of these scenarios also carries. Falsified by removing
+        // both — `circuitAllows: true` and the `isCoolingDown || !circuitAllows`
+        // branch in `decide` — which reads 4.0 tokens here instead of 5.0.
+        //
+        // And 4.0, not 0.0, is the second half of the answer: even in that
+        // world the engine loses exactly one token in five wakes, not one per
+        // wake, because a 30-second bucket refills across a 60-second sleep.
+        // The hypothesis needs both the gates gone *and* a sleep shorter than
+        // the spacing interval; an open circuit sleeps for half an hour.
+        let a = try sym("AAPL")
+
+        // Network circuit fully open.
+        let c1 = FakeClock()
+        var e1 = engine(c1, [a, try sym("MSFT")])
+        for _ in 0..<RateConstants.circuitFailureThreshold {
+            e1.record(.serverError(status: 500), for: a)
+        }
+        #expect(e1.diagnosticSnapshot.networkCircuit == .open(untilMonotonic: RateConstants.circuitOpenSeconds))
+        for _ in 0..<5 {
+            _ = e1.next(openMarket())
+            c1.advance(60)
+        }
+        #expect(e1.diagnosticSnapshot.tokensAvailable == RateConstants.bucketCapacity,
+                "five wakes under an open network circuit spent tokens")
+
+        // Contract circuit open, network circuit closed — the other half, so a
+        // fix that only threaded one of the two cannot pass.
+        let c2 = FakeClock()
+        var e2 = engine(c2, [a, try sym("MSFT")])
+        e2.record(.missingField(path: "regularMarketPrice"), for: a)
+        #expect(e2.diagnosticSnapshot.networkCircuit == .closed)
+        for _ in 0..<5 {
+            _ = e2.next(openMarket())
+            c2.advance(60)
+        }
+        #expect(e2.diagnosticSnapshot.tokensAvailable == RateConstants.bucketCapacity,
+                "five wakes under an open contract circuit spent tokens")
+
+        // The case that looks most like the hypothesis and still is not it:
+        // the network circuit has aged into half-open, so `wouldAllowRequest()`
+        // grants, while the contract circuit still refuses. The conjunction at
+        // the policy is what saves the token — and, because the query is a
+        // query, the half-open probe permit is not spent either (R57).
+        let c3 = FakeClock()
+        var e3 = engine(c3, [a, try sym("MSFT")])
+        for _ in 0..<RateConstants.circuitFailureThreshold {
+            e3.record(.serverError(status: 500), for: a)
+        }
+        e3.record(.missingField(path: "x"), for: a)
+        c3.advance(RateConstants.circuitOpenSeconds + 1)
+        #expect(e3.diagnosticSnapshot.networkCircuit == .halfOpen)
+        for _ in 0..<6 {
+            _ = e3.next(openMarket())
+            c3.advance(60)
+        }
+        #expect(e3.diagnosticSnapshot.tokensAvailable == RateConstants.bucketCapacity,
+                "a half-open network circuit and an open contract circuit spent tokens")
+        #expect(e3.diagnosticSnapshot.networkCircuit == .halfOpen,
+                "the probe permit was spent on a decision that never fetched")
+    }
+
     // MARK: - Fetch order and pacing
 
     @Test func theFirstActionOnAnOpenMarketIsToFetchTheFirstSymbol() throws {

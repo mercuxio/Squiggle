@@ -158,6 +158,31 @@ public struct FeedEngine {
 
         // The bucket is the last word on *when*. Nothing below this line can
         // bypass it.
+        //
+        // It sits above the two `allowsRequest()` commands below, which reads
+        // like a leak — take a token, then discover a circuit refuses, and the
+        // token is gone with no request made. Measured, it is not one, and for
+        // two independent reasons.
+        //
+        // First, an open circuit never reaches this line. `RefreshPolicy.decide`
+        // above is handed `circuitAllows` and `isCoolingDown` and returns
+        // `.wait` for either, so `next()` has already returned. Both gates are
+        // upstream of the bucket; removing just one leaves the other holding.
+        // Nor can the query below disagree with the query above: both run
+        // `wouldAllow(at:)`, and advancing time only moves `open` to `halfOpen`
+        // or ages a probe past its timeout — strictly more permissive, never
+        // less. There is no window in which this take succeeds and the commands
+        // then refuse.
+        //
+        // Second, even with both gates deleted the cost does not accumulate.
+        // Measured that way: five wakes 60 seconds apart under an open circuit
+        // leave 4.0 of 5.0 tokens, not 0.0 — the bucket refills a token every
+        // 30 seconds, so the one token spent on the first wake is back before
+        // the second. A circuit that is open sleeps for minutes; the bucket
+        // recovers in seconds.
+        //
+        // `anOpenCircuitCostsNoTokensBecauseTheTokenIsNeverTaken` holds both
+        // measurements, so this ordering cannot quietly become a leak later.
         guard pacer.take() else {
             return .sleep(seconds: max(RateConstants.minimumWaitSeconds,
                                        pacer.secondsUntilNextToken()))
