@@ -11,7 +11,13 @@ public struct BackoffLadder {
     private let clock: any MonotonicClock
     private let random: any Randomizing
 
-    private var previousDelay: Double = 0
+    /// Growth state, one field per ladder. Sharing a single field would make
+    /// "per failure class" a lie in the one direction that matters: an
+    /// hour-long unauthorized or contract circuit would hand the very next
+    /// transient 503 the fifteen-minute cap instead of the documented
+    /// thirty-second base.
+    private var previousRateLimitDelay: Double = 0
+    private var previousServerDelay: Double = 0
     private var cooldownUntil: Double?
 
     public init(clock: any MonotonicClock, random: any Randomizing = SystemRandom()) {
@@ -32,7 +38,8 @@ public struct BackoffLadder {
     }
 
     public mutating func recordSuccess() {
-        previousDelay = 0
+        previousRateLimitDelay = 0
+        previousServerDelay = 0
         cooldownUntil = nil
     }
 
@@ -54,41 +61,60 @@ public struct BackoffLadder {
                             max(RateConstants.rateLimitBackoffBase, retryAfter))
             } else {
                 delay = jittered(base: RateConstants.rateLimitBackoffBase,
-                                 cap: RateConstants.rateLimitBackoffCap)
+                                 cap: RateConstants.rateLimitBackoffCap,
+                                 previous: previousRateLimitDelay)
             }
+            previousRateLimitDelay = delay
 
         case .server:
             delay = jittered(base: RateConstants.serverBackoffBase,
-                             cap: RateConstants.serverBackoffCap)
+                             cap: RateConstants.serverBackoffCap,
+                             previous: previousServerDelay)
+            previousServerDelay = delay
 
         case .unauthorized:
+            // Flat, not a rung. Neither cooldown climbs, so neither may feed
+            // a ladder it is not part of.
             delay = RateConstants.unauthorizedCooldown
 
         case .contractFault:
             delay = RateConstants.contractFaultCooldown
         }
 
-        previousDelay = delay
         cooldownUntil = clock.nowSeconds + delay
         return delay
     }
 
     /// Restore a cooldown that outlived the process (spec §4.3, the single
-    /// documented wall-clock exception). Clamped on the way in, so a system
-    /// clock change cannot strand the app for a year.
+    /// documented wall-clock exception). Clamped on the way in to the longest
+    /// cooldown this type can itself produce, so a system clock change cannot
+    /// strand the app for a year — and so a persisted hour-long circuit is not
+    /// silently halved on the way back in. NaN and negatives fail the `> 0`
+    /// guard and clear the cooldown outright.
     public mutating func adoptPersistedCooldown(secondsRemaining: Double) {
-        let clamped = min(max(0, secondsRemaining), RateConstants.rateLimitBackoffCap)
+        let clamped = min(secondsRemaining, RateConstants.maxCooldownSeconds)
         guard clamped > 0 else {
             cooldownUntil = nil
             return
         }
         cooldownUntil = clock.nowSeconds + clamped
-        previousDelay = clamped
+        // Persistence exists so that relaunching during a 429 does not hand
+        // the user a fresh ladder (spec §4.3) — resetting the growth state
+        // here would defeat the only reason the deadline is written out. The
+        // class that produced the deadline is not recorded, so only the
+        // rate-limit ladder is seeded: it is the one persistence protects,
+        // and it is seeded no higher than its own cap.
+        previousRateLimitDelay = min(clamped, RateConstants.rateLimitBackoffCap)
     }
 
-    private func jittered(base: Double, cap: Double) -> Double {
-        let upper = max(base, min(cap, previousDelay * RateConstants.jitterGrowthFactor))
+    private func jittered(base: Double, cap: Double, previous: Double) -> Double {
+        // The cap is applied once, to the range handed to the randomizer, and
+        // not to the draw that comes back. Capping the draw instead would let
+        // a real RNG draw from [base, ∞) and land on the cap almost surely —
+        // a jitter distribution collapsed to a constant, which is precisely
+        // the thundering herd this type exists to break up.
+        let upper = min(cap, max(base, previous * RateConstants.jitterGrowthFactor))
         guard upper > base else { return base }
-        return min(cap, random.double(in: base...upper))
+        return random.double(in: base...upper)
     }
 }

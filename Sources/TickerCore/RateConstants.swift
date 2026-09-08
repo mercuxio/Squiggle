@@ -34,6 +34,18 @@ public enum RateConstants {
     /// fault. Retrying a parse failure faster buys nothing.
     public static let contractFaultCooldown: Double = 60 * 60
 
+    /// The longest cooldown `BackoffLadder` can legitimately produce, and so
+    /// the only defensible clamp for a deadline read back from disk. Derived,
+    /// not written down twice: a bound that drifts from the constants it
+    /// bounds is worse than no bound.
+    /// Every cooldown-producing constant appears here, including
+    /// `serverBackoffCap` which is not the maximum today — the point is that
+    /// raising any one of them cannot leave this bound behind.
+    public static let maxCooldownSeconds: Double = max(
+        max(rateLimitBackoffCap, serverBackoffCap),
+        max(unauthorizedCooldown, contractFaultCooldown)
+    )
+
     public static let circuitFailureThreshold: Int = 5
     public static let circuitOpenSeconds: Double = 30 * 60
 
