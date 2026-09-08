@@ -2,8 +2,8 @@ import Foundation
 import TickerCore
 import YahooFeed
 
-/// `squigglectl probe <symbol> [--record]` — one request, then either a diff
-/// against the recorded shape or a fresh capture.
+/// `squigglectl probe <symbol> [--record NAME]` — one request, then either a
+/// diff against the recorded shape or a fresh capture named `NAME.json`.
 ///
 /// **Baseline.** The comparison is always against
 /// `Tests/Fixtures/yahoo-<TickerCore.payloadObservationDate>/regular-session.json`
@@ -29,7 +29,11 @@ import YahooFeed
 struct ProbeRun {
     let client: any QuoteFetching
     let symbol: Symbol
-    let record: Bool
+    /// `nil` diffs against the recorded shape; a name captures a fresh
+    /// fixture at `yahoo-<today>/<name>.json`. `Command.parse` has already
+    /// restricted this to lowercase letters, digits and hyphens by the time
+    /// it reaches here.
+    let record: String?
     let recordedFixtureURL: URL
     let fixturesRootURL: URL
     let captureLogURL: URL
@@ -37,7 +41,7 @@ struct ProbeRun {
 
     init(client: any QuoteFetching = YahooClient(),
          symbol: Symbol,
-         record: Bool,
+         record: String?,
          recordedFixtureURL: URL = ProbeRun.defaultRecordedFixtureURL,
          fixturesRootURL: URL = URL(fileURLWithPath: "Tests/Fixtures"),
          captureLogURL: URL = URL(fileURLWithPath: "docs/fixture-capture-log.md"),
@@ -78,7 +82,10 @@ struct ProbeRun {
             return 1
         }
 
-        return record ? recordFixture(data) : diffAgainstRecorded(data)
+        if let name = record {
+            return recordFixture(data, name: name)
+        }
+        return diffAgainstRecorded(data)
     }
 
     private func diffAgainstRecorded(_ liveData: Data) -> Int32 {
@@ -113,25 +120,28 @@ struct ProbeRun {
         return breaking.isEmpty ? 0 : 2
     }
 
-    private func recordFixture(_ data: Data) -> Int32 {
+    private func recordFixture(_ data: Data, name: String) -> Int32 {
         let today = Self.dateFormatter.string(from: now())
         let directoryName = "yahoo-\(today)"
         let directory = fixturesRootURL.appendingPathComponent(directoryName, isDirectory: true)
         let relativeDirectory = "Tests/Fixtures/\(directoryName)"
 
-        // Rule 1 (Task 18 brief, step 5): never overwrite an existing
-        // fixture directory. A captured fixture is evidence of what the API
-        // returned on a particular day; replacing it destroys the only
-        // record of the shape the tests were written against.
-        guard !FileManager.default.fileExists(atPath: directory.path) else {
+        let fileName = "\(name).json"
+        let fileURL = directory.appendingPathComponent(fileName)
+        let relativeFile = "\(relativeDirectory)/\(fileName)"
+
+        // A captured fixture is evidence of what the API returned on a
+        // particular day; replacing it destroys the only record of the
+        // shape the tests were written against. The refusal is keyed on
+        // that one file, not on the day's directory — the directory holds
+        // one fixture per scenario, and a second scenario captured the same
+        // day is a different file, not a collision.
+        guard !FileManager.default.fileExists(atPath: fileURL.path) else {
             FileHandle.standardError.write(Data(
-                (Rendering.probeRefusesExistingFixtureDirectory(relativeDirectory) + "\n").utf8))
+                (Rendering.probeRefusesExistingFixtureFile(relativeFile) + "\n").utf8))
             return 1
         }
 
-        let fileName = "chart-\(symbol.raw).json"
-        let fileURL = directory.appendingPathComponent(fileName)
-        let relativeFile = "\(relativeDirectory)/\(fileName)"
         do {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             try data.write(to: fileURL, options: .atomic)
@@ -150,7 +160,8 @@ struct ProbeRun {
             ?? "unknown"
 
         let logLine = Rendering.captureLogLine(
-            date: today, symbol: symbol.raw, marketState: marketStateText, fileWritten: relativeFile)
+            date: today, symbol: symbol.raw, record: name, marketState: marketStateText,
+            fileWritten: relativeFile)
         do {
             try append(logLine, to: captureLogURL)
         } catch {

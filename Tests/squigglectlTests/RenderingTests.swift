@@ -181,25 +181,26 @@ import TickerCore
     #expect(!text.contains("="), "leaked a query string: \(text)")
 }
 
-@Test func probeRefusesExistingFixtureDirectoryNamesTheDirectoryAndExplainsWhy() {
-    let text = Rendering.probeRefusesExistingFixtureDirectory("Tests/Fixtures/yahoo-2026-09-08")
-    #expect(text.contains("Tests/Fixtures/yahoo-2026-09-08"))
+@Test func probeRefusesExistingFixtureFileNamesTheFileAndExplainsWhy() {
+    let text = Rendering.probeRefusesExistingFixtureFile("Tests/Fixtures/yahoo-2026-09-08/regular-session.json")
+    #expect(text.contains("Tests/Fixtures/yahoo-2026-09-08/regular-session.json"))
     #expect(text.contains("already recorded"))
 }
 
 @Test func probeRecordedFixtureNamesTheFileWritten() {
-    let text = Rendering.probeRecordedFixture("Tests/Fixtures/yahoo-2026-09-09/chart-AAPL.json")
-    #expect(text.contains("Tests/Fixtures/yahoo-2026-09-09/chart-AAPL.json"))
+    let text = Rendering.probeRecordedFixture("Tests/Fixtures/yahoo-2026-09-09/regular-session.json")
+    #expect(text.contains("Tests/Fixtures/yahoo-2026-09-09/regular-session.json"))
 }
 
-@Test func captureLogLineIsAMarkdownBulletCarryingDateSymbolStateAndFile() {
-    let text = Rendering.captureLogLine(date: "2026-09-09", symbol: "AAPL",
+@Test func captureLogLineIsAMarkdownBulletCarryingDateSymbolRecordStateAndFile() {
+    let text = Rendering.captureLogLine(date: "2026-09-09", symbol: "AAPL", record: "regular-session",
                                         marketState: "regular session",
-                                        fileWritten: "Tests/Fixtures/yahoo-2026-09-09/chart-AAPL.json")
+                                        fileWritten: "Tests/Fixtures/yahoo-2026-09-09/regular-session.json")
     #expect(text.hasPrefix("- 2026-09-09:"))
     #expect(text.contains("AAPL"))
+    #expect(text.contains("--record regular-session"))
     #expect(text.contains("regular session"))
-    #expect(text.contains("Tests/Fixtures/yahoo-2026-09-09/chart-AAPL.json"))
+    #expect(text.contains("Tests/Fixtures/yahoo-2026-09-09/regular-session.json"))
 }
 
 /// R44 also governs the line `probe --record` appends to
@@ -210,9 +211,9 @@ import TickerCore
 /// could turn a clean repository-relative path into an unsafe line, so this
 /// only needs to confirm no extra `?`/`=` machinery sneaks in.
 @Test func captureLogLineAddsNoQueryStringOrExtraPunctuation() {
-    let text = Rendering.captureLogLine(date: "2026-09-09", symbol: "AAPL",
+    let text = Rendering.captureLogLine(date: "2026-09-09", symbol: "AAPL", record: "regular-session",
                                         marketState: "closed",
-                                        fileWritten: "Tests/Fixtures/yahoo-2026-09-09/chart-AAPL.json")
+                                        fileWritten: "Tests/Fixtures/yahoo-2026-09-09/regular-session.json")
     #expect(!text.contains("?"))
     #expect(!text.contains("="))
 }

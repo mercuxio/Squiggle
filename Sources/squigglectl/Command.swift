@@ -24,9 +24,12 @@ public enum Command: Equatable {
     /// `Sources/squigglectl/DoctorRun.swift`.
     case doctor
     /// One request either way. Without `--record`, diffs the response
-    /// against the recorded shape and reports what moved. With it, captures
-    /// a fresh fixture instead — see `Sources/squigglectl/ProbeRun.swift`.
-    case probe(symbol: String, record: Bool)
+    /// against the recorded shape and reports what moved. With
+    /// `--record NAME`, captures a fresh fixture named `NAME.json` instead —
+    /// see `Sources/squigglectl/ProbeRun.swift`. `record` is `nil` when the
+    /// flag is absent; the operator names the scenario because the tool
+    /// cannot know it from the payload alone.
+    case probe(symbol: String, record: String?)
 
     public static func parse(_ arguments: [String]) throws -> Command {
         guard let subcommand = arguments.first else { return .help }
@@ -155,7 +158,23 @@ public enum Command: Equatable {
             return .doctor
 
         case "probe":
-            let record = takeFlag("--record")
+            // `--record` takes the fixture's scenario name, not a bare flag
+            // — `takeValue` already throws `ParseError("--record needs a
+            // value")` when it's given with nothing after it.
+            let record = try takeValue("--record")
+            if let name = record {
+                // The name becomes a path component
+                // (`Tests/Fixtures/yahoo-<date>/<name>.json`), so it is
+                // restricted to what's safe there — lowercase letters,
+                // digits and hyphens. Rejected outright rather than
+                // sanitised: a rejected name is a typo the operator should
+                // see, not one silently rewritten into something else.
+                let allowed = Set("abcdefghijklmnopqrstuvwxyz0123456789-")
+                guard !name.isEmpty, name.allSatisfy(allowed.contains) else {
+                    throw ParseError(
+                        "--record needs a name of lowercase letters, digits and hyphens only, got \(name)")
+                }
+            }
             // Same rule as `quote`, `search` and `doctor`: a stray `--flag`
             // this verb doesn't know must not be silently swallowed or
             // mistaken for the symbol.

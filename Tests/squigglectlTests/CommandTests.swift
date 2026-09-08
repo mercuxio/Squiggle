@@ -168,20 +168,44 @@ import TickerCore
 
 @Test func probeTakesASymbolAndOptionalRecordFlag() throws {
     let parsed = try Command.parse(["probe", "AAPL"])
-    #expect(parsed == .probe(symbol: "AAPL", record: false))
+    #expect(parsed == .probe(symbol: "AAPL", record: nil))
 
-    let recordForm = try Command.parse(["probe", "^GSPC", "--record"])
-    #expect(recordForm == .probe(symbol: "^GSPC", record: true))
+    let recordForm = try Command.parse(["probe", "^GSPC", "--record", "index"])
+    #expect(recordForm == .probe(symbol: "^GSPC", record: "index"))
 
     // The flag's position relative to the symbol must not matter, same as
-    // `quote`'s `--raw`.
-    let flagFirst = try Command.parse(["probe", "--record", "AAPL"])
-    #expect(flagFirst == .probe(symbol: "AAPL", record: true))
+    // `quote`'s `--raw` — as long as the token right after `--record` is
+    // read as its value rather than the symbol.
+    let flagFirst = try Command.parse(["probe", "--record", "regular-session", "AAPL"])
+    #expect(flagFirst == .probe(symbol: "AAPL", record: "regular-session"))
 }
 
 @Test func probeWithoutASymbolIsAParseError() {
     #expect(throws: ParseError.self) { try Command.parse(["probe"]) }
+    // `--record` with no symbol left after it (the value token is consumed
+    // by `--record` itself) is also a missing-symbol error.
+    #expect(throws: ParseError.self) { try Command.parse(["probe", "--record", "regular-session"]) }
+}
+
+/// F-1 (fix round 1): `--record` given with nothing following it is a parse
+/// error, the same rule `--interval` and `--limit` already follow — not a
+/// flag that silently does nothing.
+@Test func probeRecordWithNoValueIsAParseError() {
+    #expect(throws: ParseError.self) { try Command.parse(["probe", "AAPL", "--record"]) }
     #expect(throws: ParseError.self) { try Command.parse(["probe", "--record"]) }
+}
+
+/// F-1: the name becomes a path component
+/// (`Tests/Fixtures/yahoo-<date>/<name>.json`), so anything that could climb
+/// out of that directory or otherwise misbehave as a path is rejected
+/// before `probe` ever runs, not sanitised into something else.
+@Test func probeRejectsARecordNameThatIsNotLowercaseLettersDigitsAndHyphens() {
+    #expect(throws: ParseError.self) { try Command.parse(["probe", "AAPL", "--record", "../escape"]) }
+    #expect(throws: ParseError.self) { try Command.parse(["probe", "AAPL", "--record", "a/b"]) }
+    #expect(throws: ParseError.self) { try Command.parse(["probe", "AAPL", "--record", "Regular-Session"]) }
+    #expect(throws: ParseError.self) { try Command.parse(["probe", "AAPL", "--record", "has space"]) }
+    #expect(throws: ParseError.self) { try Command.parse(["probe", "AAPL", "--record", "."]) }
+    #expect(throws: ParseError.self) { try Command.parse(["probe", "AAPL", "--record", ""]) }
 }
 
 /// Same rule as `quote`, `search` and `doctor`: an unrecognised `--flag`

@@ -13,14 +13,14 @@ public enum Rendering {
           squigglectl watch [SYMBOL...] [--interval N] [--cycles N]
           squigglectl search <QUERY...> [--limit N]
           squigglectl doctor
-          squigglectl probe <symbol> [--record]
+          squigglectl probe <symbol> [--record NAME]
 
         EXAMPLES
           squigglectl quote AAPL --raw
           squigglectl watch AAPL MSFT --cycles 4
           squigglectl search berkshire hathaway --limit 5
           squigglectl doctor
-          squigglectl probe AAPL
+          squigglectl probe AAPL --record regular-session
 
         OPTIONS
           --raw        print the response body exactly as received
@@ -28,9 +28,10 @@ public enum Rendering {
                        out-of-range values are clamped to the nearest bound, not refused
           --cycles N   stop after N fetches instead of running until interrupted
           --limit N    at most N search results (default 10, max 20)
-          --record     (probe only) capture a fresh fixture instead of diffing
-                       against the recorded one; refuses if today's fixture
-                       directory already exists
+          --record NAME (probe only) capture a fresh fixture as NAME.json instead
+                       of diffing against the recorded one; NAME is lowercase
+                       letters, digits and hyphens only; refuses if that file
+                       already exists for today
         """
 
     /// One line per quote, for `squigglectl watch`'s running log.
@@ -297,12 +298,12 @@ public enum Rendering {
         }
     }
 
-    /// `probe --record`'s refusal when today's fixture directory already
-    /// exists. `directory` is repository-relative (`Tests/Fixtures/yahoo-
-    /// <date>`), never an absolute filesystem path, to keep this safe under
-    /// R44.
-    public static func probeRefusesExistingFixtureDirectory(_ directory: String) -> String {
-        "refusing to overwrite \(directory) — a fixture is already recorded there; " +
+    /// `probe --record`'s refusal when the named fixture file already
+    /// exists for today. `file` is repository-relative (`Tests/Fixtures/
+    /// yahoo-<date>/<name>.json`), never an absolute filesystem path, to
+    /// keep this safe under R44.
+    public static func probeRefusesExistingFixtureFile(_ file: String) -> String {
+        "refusing to overwrite \(file) — a fixture is already recorded there; " +
             "a captured fixture is evidence and is never replaced in place"
     }
 
@@ -313,12 +314,14 @@ public enum Rendering {
     }
 
     /// `probe --record`'s one line appended to `docs/fixture-capture-log.md`.
+    /// `record` is the scenario name passed to `--record`, so the logged
+    /// command is the one that would actually reproduce this capture.
     /// `fileWritten` is repository-relative and `marketState` is already
     /// `describe(_ state: MarketState)`'s wording — no price, no body
     /// excerpt, no URL, no absolute path, per R44.
-    public static func captureLogLine(date: String, symbol: String, marketState: String,
-                                      fileWritten: String) -> String {
-        "- \(date): `squigglectl probe \(symbol) --record` — market state at capture: " +
+    public static func captureLogLine(date: String, symbol: String, record: String,
+                                      marketState: String, fileWritten: String) -> String {
+        "- \(date): `squigglectl probe \(symbol) --record \(record)` — market state at capture: " +
             "\(marketState); wrote \(fileWritten)"
     }
 }

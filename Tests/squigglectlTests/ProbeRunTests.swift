@@ -48,7 +48,7 @@ private let expectedDateFormatter: DateFormatter = {
 @Test func identicalLiveBodyAgainstItsOwnRecordingReportsNoChangeAndExitsZero() async throws {
     let data = try Fixture.data("regular-session.json")
     let run = ProbeRun(client: FakeFetcher(result: .success(data)),
-                       symbol: try #require(Symbol("AAPL")), record: false,
+                       symbol: try #require(Symbol("AAPL")), record: nil,
                        recordedFixtureURL: Fixture.directory.appendingPathComponent("regular-session.json"))
     #expect(await run.run() == 0)
 }
@@ -58,7 +58,7 @@ private let expectedDateFormatter: DateFormatter = {
 @Test func aLiveBodyMissingARequiredFieldExitsTwo() async throws {
     let liveJSON = #"{"chart":{"result":[{"meta":{"currency":"USD"}}]}}"#
     let run = ProbeRun(client: FakeFetcher(result: .success(Data(liveJSON.utf8))),
-                       symbol: try #require(Symbol("AAPL")), record: false,
+                       symbol: try #require(Symbol("AAPL")), record: nil,
                        recordedFixtureURL: Fixture.directory.appendingPathComponent("regular-session.json"))
     #expect(await run.run() == 2)
 }
@@ -79,14 +79,14 @@ private let expectedDateFormatter: DateFormatter = {
     let liveData = try JSONSerialization.data(withJSONObject: json)
 
     let run = ProbeRun(client: FakeFetcher(result: .success(liveData)),
-                       symbol: try #require(Symbol("AAPL")), record: false,
+                       symbol: try #require(Symbol("AAPL")), record: nil,
                        recordedFixtureURL: Fixture.directory.appendingPathComponent("regular-session.json"))
     #expect(await run.run() == 0)
 }
 
 @Test func aTickerErrorFromTheClientExitsOneWithoutAttemptingADiff() async throws {
     let run = ProbeRun(client: FakeFetcher(result: .failure(TickerError.rateLimited(retryAfterSeconds: nil))),
-                       symbol: try #require(Symbol("AAPL")), record: false)
+                       symbol: try #require(Symbol("AAPL")), record: nil)
     #expect(await run.run() == 1)
 }
 
@@ -97,7 +97,7 @@ private let expectedDateFormatter: DateFormatter = {
 @Test func aNonTickerErrorFromTheClientIsWrappedRatherThanCrashing() async throws {
     struct Boom: Error {}
     let run = ProbeRun(client: FakeFetcher(result: .failure(Boom())),
-                       symbol: try #require(Symbol("AAPL")), record: false)
+                       symbol: try #require(Symbol("AAPL")), record: nil)
     #expect(await run.run() == 1)
 }
 
@@ -106,7 +106,7 @@ private let expectedDateFormatter: DateFormatter = {
 /// vanished". `ProbeRun` must turn that into exit 1, not a crash.
 @Test func aNonJSONLiveBodyExitsOneRatherThanCrashing() async throws {
     let run = ProbeRun(client: FakeFetcher(result: .success(Data("<html>429</html>".utf8))),
-                       symbol: try #require(Symbol("AAPL")), record: false,
+                       symbol: try #require(Symbol("AAPL")), record: nil,
                        recordedFixtureURL: Fixture.directory.appendingPathComponent("regular-session.json"))
     #expect(await run.run() == 1)
 }
@@ -114,26 +114,27 @@ private let expectedDateFormatter: DateFormatter = {
 @Test func aMissingRecordedFixtureExitsOneRatherThanCrashing() async throws {
     let missing = tempDirectory().appendingPathComponent("does-not-exist.json")
     let run = ProbeRun(client: FakeFetcher(result: .success(Data("{}".utf8))),
-                       symbol: try #require(Symbol("AAPL")), record: false,
+                       symbol: try #require(Symbol("AAPL")), record: nil,
                        recordedFixtureURL: missing)
     #expect(await run.run() == 1)
 }
 
 // MARK: - --record mode
 
-@Test func recordWritesTheBodyVerbatimToChartSymbolJSONUnderTodaysDirectory() async throws {
+@Test func recordWritesTheBodyVerbatimToTheNamedFixtureUnderTodaysDirectory() async throws {
     let root = tempDirectory()
     let logURL = root.appendingPathComponent("capture-log.md")
     let fixedNow = Date(timeIntervalSince1970: 1_800_000_000)
     let body = Data(#"{"chart":{"result":[{"meta":{"regularMarketPrice":1}}]}}"#.utf8)
 
     let run = ProbeRun(client: FakeFetcher(result: .success(body)),
-                       symbol: try #require(Symbol("AAPL")), record: true,
+                       symbol: try #require(Symbol("AAPL")), record: "regular-session",
                        fixturesRootURL: root, captureLogURL: logURL, now: { fixedNow })
     #expect(await run.run() == 0)
 
     let dateText = expectedDateFormatter.string(from: fixedNow)
-    let writtenURL = root.appendingPathComponent("yahoo-\(dateText)").appendingPathComponent("chart-AAPL.json")
+    let writtenURL = root.appendingPathComponent("yahoo-\(dateText)")
+        .appendingPathComponent("regular-session.json")
     let written = try Data(contentsOf: writtenURL)
     #expect(written == body)
 }
@@ -149,7 +150,7 @@ private let expectedDateFormatter: DateFormatter = {
     let body = Data(#"{"chart":{"result":[{"meta":{"regularMarketPrice":1}}]}}"#.utf8)
 
     let run = ProbeRun(client: FakeFetcher(result: .success(body)),
-                       symbol: try #require(Symbol("AAPL")), record: true,
+                       symbol: try #require(Symbol("AAPL")), record: "regular-session",
                        fixturesRootURL: root, captureLogURL: logURL, now: { fixedNow })
     #expect(await run.run() == 0)
 
@@ -174,7 +175,7 @@ private let expectedDateFormatter: DateFormatter = {
         """.utf8)
 
     let run = ProbeRun(client: FakeFetcher(result: .success(body)),
-                       symbol: try #require(Symbol("AAPL")), record: true,
+                       symbol: try #require(Symbol("AAPL")), record: "regular-session",
                        fixturesRootURL: root, captureLogURL: logURL, now: { fixedNow })
     #expect(await run.run() == 0)
 
@@ -195,13 +196,13 @@ private let expectedDateFormatter: DateFormatter = {
     let body = Data(#"{"chart":{"result":[{"meta":{"regularMarketPrice":1}}]}}"#.utf8)
 
     let run = ProbeRun(client: FakeFetcher(result: .success(body)),
-                       symbol: try #require(Symbol("AAPL")), record: true,
+                       symbol: try #require(Symbol("AAPL")), record: "regular-session",
                        fixturesRootURL: root, captureLogURL: logURL, now: { fixedNow })
     #expect(await run.run() == 0)
 
     let dateText = expectedDateFormatter.string(from: fixedNow)
     let logText = try String(contentsOf: logURL, encoding: .utf8)
-    #expect(logText.contains("Tests/Fixtures/yahoo-\(dateText)/chart-AAPL.json"))
+    #expect(logText.contains("Tests/Fixtures/yahoo-\(dateText)/regular-session.json"))
     // Never this machine's actual temp path.
     #expect(!logText.contains(root.path))
 }
@@ -214,7 +215,7 @@ private let expectedDateFormatter: DateFormatter = {
     let body = Data(#"{"chart":{"result":[{"meta":{"regularMarketPrice":1}}]}}"#.utf8)
 
     let run = ProbeRun(client: FakeFetcher(result: .success(body)),
-                       symbol: try #require(Symbol("AAPL")), record: true,
+                       symbol: try #require(Symbol("AAPL")), record: "regular-session",
                        fixturesRootURL: root, captureLogURL: logURL, now: { fixedNow })
     #expect(await run.run() == 0)
 
@@ -223,29 +224,89 @@ private let expectedDateFormatter: DateFormatter = {
     #expect(logText.contains("AAPL"))
 }
 
-/// Rule 1 of the brief's step 5: a captured fixture is evidence and is never
-/// replaced in place. The directory is keyed by date, not by symbol — a
-/// second `--record` on the same day, even for a different symbol, is
-/// refused rather than silently adding a file next to the first.
-@Test func recordRefusesToOverwriteAnExistingFixtureDirectoryForTheSameDate() async throws {
+/// F-1 (fix round 1), measurement 1: the refusal is keyed on the fixture
+/// file, not on the day's directory. `docs/fixture-capture-log.md` requires
+/// two captures on one Saturday (`weekend` and
+/// `crypto-while-equities-closed`, both AAPL and BTC-USD respectively) — two
+/// different scenario names on the same simulated day must both succeed,
+/// and both files must actually be on disk afterwards.
+@Test func twoDifferentlyNamedRecordsOnTheSameDayBothSucceed() async throws {
     let root = tempDirectory()
     let logURL = root.appendingPathComponent("capture-log.md")
     let fixedNow = Date(timeIntervalSince1970: 1_800_000_000)
     let dateText = expectedDateFormatter.string(from: fixedNow)
-    let existingDirectory = root.appendingPathComponent("yahoo-\(dateText)")
-    try FileManager.default.createDirectory(at: existingDirectory, withIntermediateDirectories: true)
-    let sentinel = existingDirectory.appendingPathComponent("chart-AAPL.json")
-    let originalBytes = Data("original".utf8)
-    try originalBytes.write(to: sentinel)
+    let directory = root.appendingPathComponent("yahoo-\(dateText)")
 
-    let run = ProbeRun(client: FakeFetcher(result: .success(Data("{}".utf8))),
-                       symbol: try #require(Symbol("MSFT")), record: true,
-                       fixturesRootURL: root, captureLogURL: logURL, now: { fixedNow })
-    #expect(await run.run() == 1)
+    let first = ProbeRun(client: FakeFetcher(result: .success(Data(#"{"first":true}"#.utf8))),
+                         symbol: try #require(Symbol("AAPL")), record: "weekend",
+                         fixturesRootURL: root, captureLogURL: logURL, now: { fixedNow })
+    let firstExitCode = await first.run()
+    #expect(firstExitCode == 0)
 
-    // The existing evidence is untouched...
-    let stillThere = try Data(contentsOf: sentinel)
-    #expect(stillThere == originalBytes)
-    // ...and nothing was logged, because nothing was actually captured.
-    #expect(!FileManager.default.fileExists(atPath: logURL.path))
+    let second = ProbeRun(
+        client: FakeFetcher(result: .success(Data(#"{"second":true}"#.utf8))),
+        symbol: try #require(Symbol("BTC-USD")), record: "crypto-while-equities-closed",
+        fixturesRootURL: root, captureLogURL: logURL, now: { fixedNow })
+    let secondExitCode = await second.run()
+    #expect(secondExitCode == 0)
+
+    #expect(FileManager.default.fileExists(
+        atPath: directory.appendingPathComponent("weekend.json").path))
+    #expect(FileManager.default.fileExists(
+        atPath: directory.appendingPathComponent("crypto-while-equities-closed.json").path))
 }
+
+/// F-1, measurement 2: the same name twice on the same simulated day is
+/// still refused, and the first capture's bytes are untouched — asserted on
+/// the bytes themselves, not just the exit code, so a refusal that quietly
+/// truncated or re-wrote the file would still fail this.
+@Test func recordingTheSameNameTwiceOnTheSameDayRefusesTheSecondAndLeavesTheFirstUntouched() async throws {
+    let root = tempDirectory()
+    let logURL = root.appendingPathComponent("capture-log.md")
+    let fixedNow = Date(timeIntervalSince1970: 1_800_000_000)
+    let dateText = expectedDateFormatter.string(from: fixedNow)
+    let fixtureURL = root.appendingPathComponent("yahoo-\(dateText)").appendingPathComponent("weekend.json")
+
+    let firstBody = Data(#"{"chart":{"result":[{"meta":{"regularMarketPrice":1}}]}}"#.utf8)
+    let first = ProbeRun(client: FakeFetcher(result: .success(firstBody)),
+                         symbol: try #require(Symbol("AAPL")), record: "weekend",
+                         fixturesRootURL: root, captureLogURL: logURL, now: { fixedNow })
+    #expect(await first.run() == 0)
+
+    let second = ProbeRun(client: FakeFetcher(result: .success(Data(#"{"different":true}"#.utf8))),
+                          symbol: try #require(Symbol("AAPL")), record: "weekend",
+                          fixturesRootURL: root, captureLogURL: logURL, now: { fixedNow })
+    let secondExitCode = await second.run()
+    #expect(secondExitCode == 1)
+
+    let stillThere = try Data(contentsOf: fixtureURL)
+    #expect(stillThere == firstBody)
+}
+
+/// F-1, measurement 3, end to end: `Command.parse` rejects a record name
+/// carrying a path separator or `..` — `CommandTests.swift` covers the
+/// parse error itself — and because `Command.parse` never touches the
+/// filesystem (see its own doc comment), a temporary fixtures root that
+/// nothing has run against yet stays empty. This confirms that emptiness
+/// by measurement rather than trusting the doc comment's claim.
+@Test func aRecordNameWithAPathSeparatorIsRejectedBeforeAnythingIsWritten() throws {
+    let root = tempDirectory()
+    for badName in ["../escape", "a/b", ".."] {
+        do {
+            _ = try Command.parse(["probe", "AAPL", "--record", badName])
+            Issue.record("expected a ParseError for record name \(badName)")
+        } catch is ParseError {
+            // Expected.
+        }
+    }
+    let contents = try FileManager.default.contentsOfDirectory(atPath: root.path)
+    #expect(contents.isEmpty)
+}
+
+/// F-1, measurement 4: `--record` given with nothing after it is a parse
+/// error, using the same `takeValue(_:)` helper `--interval` and `--limit`
+/// already rely on for this — not a flag that silently does nothing.
+@Test func recordWithNoValueFollowingItIsAParseError() {
+    #expect(throws: ParseError.self) { try Command.parse(["probe", "AAPL", "--record"]) }
+}
+
