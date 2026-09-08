@@ -26,3 +26,32 @@ import TickerCore
     #expect(!text.contains("/"), "leaked an absolute path: \(text)")
     #expect(text.contains("watchlist.json"))
 }
+
+/// F-6: `Rendering.render(_:)` for search results had no tests at all.
+@Test func renderingNoSearchResultsSaysSo() {
+    #expect(Rendering.render([]) == "no matches")
+}
+
+@Test func renderingOneSearchResultShowsSymbolNameAndExchange() throws {
+    let symbol = try #require(Symbol("AAPL"))
+    let result = SearchResult(symbol: symbol, name: "Apple Inc.", exchange: "NASDAQ", kind: "EQUITY")
+    #expect(Rendering.render([result]) == "AAPL  Apple Inc.  (NASDAQ)")
+}
+
+@Test func renderingOmitsTheExchangeSuffixWhenExchangeIsEmpty() throws {
+    let symbol = try #require(Symbol("XYZ"))
+    let result = SearchResult(symbol: symbol, name: "Some Co", exchange: "", kind: "")
+    #expect(Rendering.render([result]) == "XYZ  Some Co")
+}
+
+@Test func renderingPadsSymbolsToTheWidestOneAndJoinsWithNewlines() throws {
+    let v = try #require(Symbol("V"))
+    let aapl = try #require(Symbol("AAPL"))
+    let results = [
+        SearchResult(symbol: v, name: "Vee Corp", exchange: "", kind: ""),
+        SearchResult(symbol: aapl, name: "Apple Inc.", exchange: "NASDAQ", kind: "EQUITY"),
+    ]
+    // "V" is padded out to the width of "AAPL" (4) before the two-space
+    // separator, so the names line up in a monospaced terminal.
+    #expect(Rendering.render(results) == "V     Vee Corp\nAAPL  Apple Inc.  (NASDAQ)")
+}
