@@ -68,8 +68,14 @@ public enum RefreshPolicy {
                                      watchlistCount: Int,
                                      marketState: MarketState,
                                      lowPowerMode: Bool) -> Double {
-        // A hand-edited settings file can contain anything at all.
-        let requested = userIntervalSeconds.isFinite && userIntervalSeconds > 0
+        // A hand-edited settings file can contain anything at all, and this
+        // function has to be total over "anything". An interval outside the
+        // menu Settings offers is corrupt in exactly the way `0`, `-1` and NaN
+        // are, and gets the same answer. Rejected at the input rather than
+        // clamped at the output: `1e308 × quietMultiplier` is `inf`, and a
+        // clamped product would leave this function reporting a cadence while
+        // silently having rewritten the setting it claims to honour.
+        let requested = RateConstants.offeredRefreshIntervals.contains(userIntervalSeconds)
             ? userIntervalSeconds
             : RateConstants.defaultRefreshInterval
 
@@ -101,9 +107,14 @@ public enum RefreshPolicy {
         guard let lastSuccessEpoch else { return true }
 
         let age = nowEpoch - lastSuccessEpoch
-        // A clock correction can make this negative. Treat that as fresh: the
-        // alternative is dimming the strip because the user changed timezone.
-        guard age.isFinite, age > 0 else { return false }
+        // An age that cannot be measured is not an age this function can
+        // vouch for, and the dimmed strip *is* the "I do not know that this is
+        // current" signal — so a NaN or infinite age dims rather than
+        // reassures. No `age > 0` companion here: a clock correction makes the
+        // age negative, which the comparison below already answers `false`
+        // without help, and a guard that changes no result while naming one is
+        // a guard taking credit for work it does not do.
+        guard age.isFinite else { return true }
 
         let cycle = cycleInterval(userIntervalSeconds: userIntervalSeconds,
                                   watchlistCount: watchlistCount,
@@ -113,20 +124,21 @@ public enum RefreshPolicy {
     }
 
     public static func decide(_ input: RefreshInput) -> RefreshDecision {
-        // Ordered by how long each reason lasts, longest first, so the wait we
-        // report is the wait that actually applies. Reporting the shorter of
-        // two live reasons would wake the caller early to be refused again.
-
-        if input.isCoolingDown {
-            return .wait(seconds: sanitizedWait(input.cooldownRemaining))
-        }
-
-        if !input.circuitAllows {
-            return .wait(seconds: sanitizedWait(input.circuitOpenRemaining))
+        // A cooldown and an open circuit both mean "do not fetch", and when
+        // both are live the longer of the two is the one that actually
+        // applies. So the reported wait is the maximum of the live reasons,
+        // not whichever reason happens to be tested first: reporting the
+        // shorter would wake the caller early to be refused again by the
+        // other. A reason that is not live contributes nothing, and every
+        // live one is at least `minimumWaitSeconds`, so `0` cannot win.
+        if input.isCoolingDown || !input.circuitAllows {
+            let cooldown = input.isCoolingDown ? sanitizedWait(input.cooldownRemaining) : 0
+            let circuit = input.circuitAllows ? 0 : sanitizedWait(input.circuitOpenRemaining)
+            return .wait(seconds: max(cooldown, circuit))
         }
 
         guard input.watchlistCount > 0 else {
-            return .wait(seconds: RateConstants.defaultRefreshInterval)
+            return .wait(seconds: sanitizedWait(RateConstants.defaultRefreshInterval))
         }
 
         let cycle = cycleInterval(userIntervalSeconds: input.userIntervalSeconds,
@@ -137,7 +149,7 @@ public enum RefreshPolicy {
         if input.visibility == .occluded {
             // Do not fetch, but do not sleep forever either: the strip must be
             // current the moment it reappears, and unocclusion wakes us anyway.
-            return .wait(seconds: cycle)
+            return .wait(seconds: sanitizedWait(cycle))
         }
 
         if input.marketState == .closed {
@@ -145,8 +157,9 @@ public enum RefreshPolicy {
                 // No payload has told us when the market opens — a cold launch
                 // into a weekend. Fall back to a slow poll rather than sleeping
                 // indefinitely; a nil must never become a hang.
-                return .wait(seconds: min(RateConstants.unknownOpenPollSeconds,
-                                          max(cycle, RateConstants.defaultRefreshInterval)))
+                return .wait(seconds: sanitizedWait(
+                    min(RateConstants.unknownOpenPollSeconds,
+                        max(cycle, RateConstants.defaultRefreshInterval))))
             }
             let untilOpen = open - input.nowEpoch - RateConstants.preOpenWakeLead
             // A stale open time from a payload older than the session it
@@ -158,41 +171,28 @@ public enum RefreshPolicy {
         return .fetch
     }
 
-    /// Turns a caller-reported "seconds remaining" into a wait this type will
-    /// actually stand behind. Called at every site in `decide()` that turns a
-    /// caller-supplied remaining into a `.wait`, so the three sites cannot
-    /// drift apart.
+    /// Turns a proposed "seconds until it is worth asking again" into a wait
+    /// this type will stand behind. **Every** `.wait` `decide()` returns is
+    /// built here, so no branch can drift out of the invariant.
     ///
     /// `max(0, remaining)` looks sufficient and is not, in two directions at
-    /// once:
+    /// once. `max(0, Double.nan) == 0`, because Swift's `max` is effectively
+    /// `y >= x ? y : x` and every comparison against NaN is false — so a
+    /// corrupted remaining becomes "ask now" while the condition that produced
+    /// it is still refusing, and the caller spins. And
+    /// `max(0, Double.infinity) == .infinity`: a timer that never fires.
     ///
-    /// - `max(0, Double.nan) == 0`, because Swift's `max` is effectively
-    ///   `y >= x ? y : x` and *every* comparison against NaN is false. A
-    ///   corrupted remaining would silently become "ask now" while the
-    ///   condition that produced it — `isCoolingDown`, an open circuit — is
-    ///   still true. The caller wakes immediately, is refused again, and
-    ///   spins: a hot loop in an app that lives in a battery meter.
-    /// - `max(0, Double.infinity) == .infinity` — a timer that never fires: a
-    ///   silent, permanent hang no error message would ever explain.
-    ///
-    /// A third case is less obvious than either: a remaining that is exactly
-    /// zero, or has gone negative, while the flag that produced it still says
-    /// "blocked" (an expired-but-not-yet-refreshed `BackoffLadder` cooldown,
-    /// a `nextRegularOpenEpoch` that is stale) is not corrupted in the
-    /// NaN/Infinity sense, but reporting it verbatim breaks the same
-    /// invariant `CircuitBreaker` states on itself: **a reported wait of zero
-    /// must mean asking now is genuinely allowed.** Every call site in
-    /// `decide()` that reaches this helper is one where `decide()` has
-    /// already committed to *not* returning `.fetch` — so zero is never the
-    /// honest answer there, corrupted or not.
-    ///
-    /// So: a remaining that is not finite, or not strictly positive, is
-    /// treated the same way — the default refresh interval, never `0`, never
-    /// infinity.
+    /// The invariant is `CircuitBreaker`'s, kept here too: a reported wait
+    /// must never be one the caller can spin on. Every site that reaches this
+    /// helper is one where `decide()` has already committed to *not*
+    /// fetching, so zero is not an honest answer — and neither is a
+    /// millisecond. The two failures get different answers: a value that is
+    /// corrupt gets the default interval, a value that is merely too small
+    /// gets the floor.
     private static func sanitizedWait(_ remaining: Double) -> Double {
         guard remaining.isFinite, remaining > 0 else {
             return RateConstants.defaultRefreshInterval
         }
-        return remaining
+        return max(remaining, RateConstants.minimumWaitSeconds)
     }
 }

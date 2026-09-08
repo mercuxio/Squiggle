@@ -63,6 +63,20 @@ public enum RateConstants {
     public static let refreshIntervalChoices: [Double] = [60, 180, 300, 900]
     public static let defaultRefreshInterval: Double = 180
 
+    /// The span a stored refresh interval can legitimately fall in, and so the
+    /// only defensible bound on one read back from disk. Derived from the menu
+    /// rather than written down twice, for the same reason `maxCooldownSeconds`
+    /// is derived: a bound that drifts from the list it bounds is worse than no
+    /// bound. Adding a choice widens this automatically.
+    public static let offeredRefreshIntervals: ClosedRange<Double> =
+        (refreshIntervalChoices.min() ?? defaultRefreshInterval) ...
+        (refreshIntervalChoices.max() ?? defaultRefreshInterval)
+
+    /// The shortest wait any policy will report. A decision *not* to fetch is
+    /// not worth waking a millisecond later to re-take; `FeedEngine` applies
+    /// the same floor to the sleeps it derives.
+    public static let minimumWaitSeconds: Double = 1
+
     /// Extended-hours and Low Power Mode both stretch the cycle by this.
     public static let quietMultiplier: Double = 3
 
