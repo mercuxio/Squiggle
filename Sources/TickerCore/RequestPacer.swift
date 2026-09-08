@@ -103,13 +103,23 @@ public struct RequestPacer {
 
     private mutating func refill() {
         let now = clock.nowSeconds
-        // Never trust time to move forward. A suspended process, a fake, or a
-        // future refactor could hand us a smaller number. The real danger
-        // isn't the backward reading itself (that credits nothing — elapsed
-        // clamps to zero) but letting lastRefill regress to it: a clock that
-        // later returns to where it already was would then look like it
-        // travelled forward from the dip, minting tokens for time that never
-        // passed. Keeping lastRefill a high-water mark closes that path.
+        // Never trust time to move forward. A fake, or a future refactor,
+        // could hand us a smaller number. The real danger isn't the backward
+        // reading itself (that credits nothing — elapsed clamps to zero) but
+        // letting lastRefill regress to it: a clock that later returns to
+        // where it already was would then look like it travelled forward from
+        // the dip, minting tokens for time that never passed. Keeping
+        // lastRefill a high-water mark closes that path.
+        //
+        // Sleep is not one of the cases this clamp is for, and it is worth
+        // saying so, because the clamp is otherwise the reason a reader would
+        // believe wake-from-sleep is handled here. It is handled, by the clock
+        // this project uses simply stopping: measured across 14.37 hours of
+        // real sleep on 2026-09-08, `ProcessInfo.systemUptime` and
+        // `mach_absolute_time` both read 596,619s where `mach_continuous_time`
+        // read 648,346s. A suspended process resumes with a clock that stopped,
+        // never one that ran backwards — so the bucket does not refill across a
+        // suspend, and there is no wake burst to defend against.
         let elapsed = max(0, now - lastRefill)
         lastRefill = max(lastRefill, now)
         tokens = min(capacity, tokens + elapsed / effectiveSpacingSeconds)
