@@ -461,25 +461,48 @@ struct FeedEngineTests {
     /// disagree, the runner is the bug." Against the pre-fix engine this
     /// fails on both counts: the request count blows through the budget, and
     /// it is nowhere near what the `cycleDeadline`-gated model predicts.
+    ///
+    /// Finding 4 (fix round 2): a single hard-coded `interval: 60, count: 10`
+    /// only ever exercised the floor-dominated regime of
+    /// `RefreshPolicy.cycleInterval` — `floor = count * spacingSeconds = 300`
+    /// beats `requested = 60`, so `userIntervalSeconds` never actually binds.
+    /// Swept across every choice in `RateConstants.refreshIntervalChoices`
+    /// and the same watchlist sizes `BudgetSweepTests` uses (1, 2, 4, 10,
+    /// 20) — which covers both regimes, e.g. interval 900 / count 4 is
+    /// interval-dominated (floor is only 120) while interval 60 / count 10 is
+    /// floor-dominated — the measured drift between `FeedEngine` and the
+    /// `DaySimulation` oracle equals the watchlist count itself at every
+    /// interval except the largest (900), where it falls to 15 at count 20
+    /// because the interval, not the spacing floor, is what is binding
+    /// there. The worst case seen anywhere in that sweep is 20 requests, at
+    /// count 20 — not a number picked to make one lucky configuration pass
+    /// with room to spare, but the ceiling the evidence actually supports.
+    /// A per-cycle off-by-one that drops or double-serves one symbol costs
+    /// roughly 78 requests across a day — four times this bound — so a flat
+    /// 20 stays tight enough to catch it.
     @Test func theCycleGateKeepsFeedEngineUnderBudgetAndInStepWithTheDaySimulation() throws {
-        let interval: Double = 60
-        let count = 10
+        let tolerance = 20
 
-        let actual = try driveFeedEngine(userInterval: interval, watchlistCount: count)
-        let predicted = DaySimulation.run(userInterval: interval, watchlistCount: count).requests
+        for interval in RateConstants.refreshIntervalChoices {
+            for count in [1, 2, 4, 10, 20] {
+                let actual = try driveFeedEngine(userInterval: interval, watchlistCount: count)
+                let predicted = DaySimulation.run(userInterval: interval,
+                                                   watchlistCount: count).requests
 
-        #expect(actual < 1_200, "\(actual) requests exceeds the 1,200/day budget")
+                #expect(actual < 1_200,
+                        "interval \(interval) x \(count): \(actual) exceeds the 1,200/day budget")
 
-        // Not an exact match: `DaySimulation` paces individual within-cycle
-        // fetches by an explicit per-symbol `nextSymbolDue`, while
-        // `FeedEngine` paces them through the shared token bucket's burst
-        // allowance, so a handful of requests can land on either side of a
-        // session boundary. The tolerance is a small fraction of the
-        // prediction, not a number picked to make this pass.
-        let drift = abs(actual - predicted)
-        let tolerance = max(20, predicted / 10)
-        #expect(drift <= tolerance,
-                "engine fetched \(actual); the cycleDeadline model predicts \(predicted)")
+                // Not an exact match: `DaySimulation` paces individual
+                // within-cycle fetches by an explicit per-symbol
+                // `nextSymbolDue`, while `FeedEngine` paces them through the
+                // shared token bucket's burst allowance, so a handful of
+                // requests can land on either side of a session boundary.
+                let drift = abs(actual - predicted)
+                let message = "interval \(interval) x \(count): engine fetched \(actual); "
+                    + "the cycleDeadline model predicts \(predicted) (drift \(drift))"
+                #expect(drift <= tolerance, "\(message)")
+            }
+        }
     }
 
     // MARK: - R57: the half-open probe belongs to the fetch, not the query
@@ -521,5 +544,78 @@ struct FeedEngineTests {
             Issue.record("the half-open probe was spent on a decision that never fetched")
             return
         }
+    }
+
+    // MARK: - Finding 5: setUserInterval must pace the very next cycle
+
+    /// `setUserInterval` exists for plan 2's menu bar app, whose Settings
+    /// refresh-interval control can change the interval while the engine
+    /// keeps running. Its whole purpose is `cycleDeadline = 0`: without that
+    /// reset, a deadline already computed from the *old* interval keeps
+    /// gating the next pass, and the new interval would not take effect
+    /// until the pass after that — one full cycle late. This test is built
+    /// to fail on exactly that regression: it pins the deadline `next()`
+    /// computes for the pass immediately following `setUserInterval`, not
+    /// merely the stored `userIntervalSeconds` value (a test that only
+    /// checked the stored value would pass even if the reset were deleted).
+    @Test func setUserIntervalPacesTheVeryNextCycleByTheNewIntervalNotTheOld() throws {
+        let clock = FakeClock()
+        let s = try sym("AAPL")
+        var e = engine(clock, [s], interval: 60)
+
+        // With one symbol, the cursor reaches `live.count` on the very first
+        // fetch, but the wrap-and-recompute logic runs at the *top* of
+        // `next()`, so `cycleDeadline` is not touched by this call.
+        guard case .fetch = e.next(openMarket()) else {
+            Issue.record("expected the first fetch to go out")
+            return
+        }
+        e.recordSuccess(stubQuote(s), for: s)
+
+        // This call wraps the cursor and — before immediately refetching,
+        // since the pass it just started also has only one symbol —
+        // computes `cycleDeadline` from the *old* 60s interval: for one
+        // symbol the spacing floor is 30s, so cycle = max(60, 30) = 60.
+        guard case .fetch = e.next(openMarket()) else {
+            Issue.record("expected the wrap-and-refetch to go out")
+            return
+        }
+        e.recordSuccess(stubQuote(s), for: s)
+
+        // Widen the interval with the clock left exactly where it is. The
+        // stale 60s deadline computed above is still 60 seconds in the
+        // future at this instant.
+        e.setUserInterval(900)
+
+        // The witness for the reset: without it, the stale deadline (60s in
+        // the future, per the clock, which has not moved) would still gate
+        // the next pass, and this call would come back `.sleep` instead.
+        // With the reset, `cycleDeadline` reads 0 — "already due" — so this
+        // call both wraps immediately and recomputes the deadline from the
+        // interval `setUserInterval` just installed, i.e. 900, not 60.
+        guard case .fetch(let symbol) = e.next(openMarket()) else {
+            let message = "setUserInterval did not reset cycleDeadline: the stale 60s "
+                + "deadline computed before the call is still gating the next pass"
+            Issue.record("\(message)")
+            return
+        }
+        #expect(symbol == s)
+        e.recordSuccess(stubQuote(s), for: s)
+
+        // And the deadline that call just recomputed must be paced by 900,
+        // not 60: with the clock still unmoved, a 60s-paced engine would
+        // already be due again (60 <= 0 is false, but so would a much larger
+        // stale value be reported as leftover from the old interval) — what
+        // actually distinguishes 900 from 60 here is the reported wait
+        // itself, which only a correctly-reset, newly-computed deadline
+        // reports as ~900s rather than ~60s.
+        guard case .sleep(let seconds) = e.next(openMarket()) else {
+            let message = "expected the freshly-started pass to gate on its new deadline "
+                + "rather than fetch again immediately"
+            Issue.record("\(message)")
+            return
+        }
+        #expect(seconds > 800,
+                "the new cycle should be paced ~900s out, not ~60s: got \(seconds)")
     }
 }
