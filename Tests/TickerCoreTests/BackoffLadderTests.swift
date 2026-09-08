@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import TickerCore
 
@@ -38,7 +39,8 @@ private func ladder(_ clock: FakeClock, _ random: FakeRandom = FakeRandom()) -> 
     // local bug into an hour of silence.
     #expect(FailureKind(.invalidSymbol("not a symbol")) == .server)
     #expect(FailureKind(.storeSchemaUnsupported(version: 99)) == .server)
-    #expect(FailureKind(.storeCorrupt(quarantinedAt: "2026-09-08")) == .server)
+    let quarantined = URL(fileURLWithPath: "/tmp/squiggle.json.bad-2026-09-08")
+    #expect(FailureKind(.storeCorrupt(quarantinedAt: quarantined)) == .server)
 }
 
 @Test func beingOfflineDoesNotAdvanceTheLadder() {

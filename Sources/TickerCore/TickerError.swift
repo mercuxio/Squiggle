@@ -1,3 +1,5 @@
+import Foundation
+
 /// Every way this package can fail, as data.
 ///
 /// No case carries a user-facing sentence. The `path` strings are JSON key
@@ -26,7 +28,7 @@ public enum TickerError: Error, Equatable, Sendable {
 
     // Persistence.
     case storeSchemaUnsupported(version: Int)
-    case storeCorrupt(quarantinedAt: String)
+    case storeCorrupt(quarantinedAt: URL)
 
     /// Whether this is a fault in the agreement rather than in the network.
     /// Drives the separate one-hour contract circuit (spec §4.3).
