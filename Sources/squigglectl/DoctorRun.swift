@@ -66,10 +66,27 @@ struct DoctorRun {
         // report the cooldown as check 7. Two reads of `Date()` could straddle
         // the deadline and have `doctor` skip a request it then reported no
         // cooldown for.
+        //
+        // The stored deadline is clamped to `RateConstants.maxCooldownSeconds`
+        // before it gates anything, the same clamp
+        // `BackoffLadder.adoptPersistedCooldown(secondsRemaining:)` applies to
+        // the same value, so `doctor` and `watch` agree on what a persisted
+        // deadline means. The clamp does not make a corrupt store harmless —
+        // `doctor` does not write to the store, so a bad deadline still gates
+        // every check below on every run — it only makes the number reported
+        // one the app could actually have produced, and lets that corruption
+        // be named on check 7 rather than repeated verbatim.
         let now = Date().timeIntervalSince1970
         var cooldownRemaining: Double?
+        var cooldownExceededMax = false
         if let until = loadedStore?.cooldownUntilEpoch, until > now {
-            cooldownRemaining = until - now
+            let raw = until - now
+            if raw > RateConstants.maxCooldownSeconds {
+                cooldownRemaining = RateConstants.maxCooldownSeconds
+                cooldownExceededMax = true
+            } else {
+                cooldownRemaining = raw
+            }
         }
         let cooldownDetail = cooldownRemaining
             .map { "active for another \(Int($0.rounded(.up)))s" }
@@ -135,8 +152,20 @@ struct DoctorRun {
                                   detail: searchDetail ?? searchError.map(Rendering.diagnosis)))
 
         // 3. tradingPeriods — free, from the snapshot check 1 already
-        // fetched. No second request either way.
-        let (tradingStatus, tradingDetail) = Self.evaluateTradingPeriods(snapshot?.tradingPeriod)
+        // fetched. No second request either way. `evaluateTradingPeriods`
+        // only ever sees a real response: when check 1 was skipped (the
+        // cooldown gate) or failed, `snapshot` is `nil` and there was no
+        // response to have an opinion about, so this reports `.skipped`
+        // rather than asking `evaluateTradingPeriods` to explain an absence
+        // it never had a request behind.
+        let tradingStatus: CheckStatus
+        let tradingDetail: String?
+        if let snapshot {
+            (tradingStatus, tradingDetail) = Self.evaluateTradingPeriods(snapshot.tradingPeriod)
+        } else {
+            tradingStatus = .skipped
+            tradingDetail = "no response to read — see the quote check above"
+        }
         checks.append(Check(id: .tradingPeriods, status: tradingStatus))
         print(Rendering.checkLine(Check(id: .tradingPeriods, status: tradingStatus),
                                   detail: tradingDetail))
@@ -162,15 +191,25 @@ struct DoctorRun {
                                   detail: setAsideNames.isEmpty ? nil : setAsideNames.joined(separator: ", ")))
 
         // 7. cooldown — the same deadline checks 1 and 2 were gated on, in the
-        // position the brief fixed for it.
+        // position the brief fixed for it. When the stored deadline exceeded
+        // `RateConstants.maxCooldownSeconds`, this is where that gets said:
+        // not the raw stored value, not a path, not an epoch, just the fact
+        // that the file holds a deadline `BackoffLadder` could not have
+        // written and that it has been treated as the maximum instead.
         let cooldownStatus: CheckStatus
+        var cooldownCheckDetail = cooldownDetail
         if loadedStore == nil {
             cooldownStatus = .skipped
         } else {
             cooldownStatus = cooldownRemaining == nil ? .ok : .degraded
+            if cooldownExceededMax {
+                let finding = "the stored deadline exceeds the longest cooldown the app can " +
+                    "produce and has been treated as that maximum"
+                cooldownCheckDetail = cooldownDetail.map { "\($0); \(finding)" } ?? finding
+            }
         }
         checks.append(Check(id: .cooldown, status: cooldownStatus))
-        print(Rendering.checkLine(Check(id: .cooldown, status: cooldownStatus), detail: cooldownDetail))
+        print(Rendering.checkLine(Check(id: .cooldown, status: cooldownStatus), detail: cooldownCheckDetail))
 
         // 8. budget — the closed-form estimate for the stored settings, and
         // whether the pacer is quietly overriding them (R79).
