@@ -38,6 +38,27 @@ func run() async -> Int32 {
             FileHandle.standardError.write(Data("\(error)\n".utf8))
             return 1
         }
+
+    case .watch(let symbolArgs, let intervalSeconds, let maxCycles):
+        let store = FileWatchlistStore(url: FileWatchlistStore.defaultURL(applicationName: "Squiggle"))
+        var symbols = symbolArgs
+        if symbols.isEmpty {
+            // No symbols on the command line: fall back to the watchlist on
+            // disk, exactly as the app itself would show. A store that fails
+            // to load (first launch, a quarantined file) is treated the same
+            // as an empty one here — `doctor`, not `watch`, is where that
+            // gets diagnosed.
+            symbols = (try? store.load().symbols) ?? []
+        }
+        guard !symbols.isEmpty else {
+            FileHandle.standardError.write(Data(
+                "watch needs at least one symbol, either on the command line or in the watchlist\n"
+                    .utf8))
+            return 2
+        }
+        let loop = WatchLoop(client: YahooClient(), store: store, symbols: symbols,
+                             intervalSeconds: intervalSeconds, maxCycles: maxCycles)
+        return await loop.run()
     }
 }
 

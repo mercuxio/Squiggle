@@ -8,6 +8,21 @@ import TickerCore
 /// never independently confirmed** — confirming it is the point of this task.
 /// If `v8` turns out to need authentication, this file is where that lands;
 /// nothing in `TickerCore` changes.
+
+/// A quote and its instrument's trading calendar, decoded from one response
+/// body. `tradingPeriod` is `nil` when this session's payload did not carry
+/// `currentTradingPeriod` — absent rather than an error, since the quote
+/// itself is still good.
+public struct Snapshot: Sendable {
+    public let quote: Quote
+    public let tradingPeriod: TradingPeriod?
+
+    public init(quote: Quote, tradingPeriod: TradingPeriod?) {
+        self.quote = quote
+        self.tradingPeriod = tradingPeriod
+    }
+}
+
 public struct YahooClient: QuoteFetching, SymbolSearching {
     /// An absent User-Agent is blocked outright by Yahoo (spec §4.3).
     public static let defaultUserAgent =
@@ -45,6 +60,23 @@ public struct YahooClient: QuoteFetching, SymbolSearching {
             URLQueryItem(name: "interval", value: "1d"),
         ]
         return try await body(of: components, symbol: symbol)
+    }
+
+    /// One request, both facts. `Quote` and `TradingPeriod` are parsed from
+    /// the same `v8/chart` body, so a caller that wants both — `squigglectl
+    /// watch` and, later, the app's own polling loop — must decode them from
+    /// one fetch rather than asking a second endpoint and doubling its share
+    /// of the daily budget (spec §3.2).
+    public func snapshot(for symbol: Symbol) async throws -> Snapshot {
+        let data = try await fetch(symbol)
+        return Snapshot(
+            quote: try YahooQuoteDecoding.quote(from: data, symbol: symbol),
+            // The trading calendar is a bonus fact this same body happens to
+            // carry, not something `snapshot(for:)` promises: an older
+            // instrument, or a shape Yahoo has not sent this session, simply
+            // yields `nil` here rather than failing a request that otherwise
+            // produced a perfectly good quote.
+            tradingPeriod: try? YahooQuoteDecoding.tradingPeriod(from: data))
     }
 
     public func search(_ query: String) async throws -> Data {
