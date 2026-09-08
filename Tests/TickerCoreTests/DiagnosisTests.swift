@@ -121,7 +121,9 @@ import Testing
     // so rounding each session's `sessionSeconds / cycle` up (rather than
     // down) sometimes credits a partial final cycle the simulation never
     // gets to start. Measured worst case across this grid is 40, at 900s x
-    // 20 symbols (760 simulated vs 800 estimated). Widening this number
+    // 20 symbols — 580 simulated against 620 estimated, re-taken after F1
+    // changed the day model (the pair used to read 760 and 800; the gap of 40
+    // survived the change, the two endpoints did not). Widening this number
     // later should be a visible, deliberate act, not a quiet tolerance creep.
     let acceptableOvershoot = 40
 
