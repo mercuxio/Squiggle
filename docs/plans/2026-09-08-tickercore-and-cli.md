@@ -3925,6 +3925,16 @@ git commit -m "feat: independent network and contract circuit breakers"
 
 Everything so far answers "may I?". This task answers "should I, and when next?". It is a **pure function of its inputs** — no clock read, no I/O — which is what makes the 24-hour budget simulation in Task 12 possible at all.
 
+> **Corrected before execution (ruling R24).** `cycleInterval` and `isStale`
+> originally took a `visibility:` parameter that neither function ever read —
+> threaded faithfully through Tasks 12, 16 and 18 by callers who had every
+> reason to believe it mattered. It is removed from both signatures here and at
+> all fifteen call sites in this plan. `visibility` remains on `RefreshInput`,
+> where `decide` genuinely reads it. Same principle as Task 10's R23: a
+> parameter that cannot influence a result advertises an influence it does not
+> have, and unlike a dead local a dead *parameter* is a lie the compiler will
+> never catch, because every caller keeps dutifully supplying a value.
+
 **Files:**
 - Create: `Sources/TickerCore/RefreshPolicy.swift`
 - Test: `Tests/TickerCoreTests/RefreshPolicyTests.swift`
@@ -3935,7 +3945,7 @@ Everything so far answers "may I?". This task answers "should I, and when next?"
   - `TickerCore.Visibility` — `enum { case visible, occluded }`, `Sendable`.
   - `TickerCore.RefreshInput` — `struct` with `nowMonotonic: Double`, `nowEpoch: Double`, `marketState: MarketState`, `visibility: Visibility`, `lowPowerMode: Bool`, `userIntervalSeconds: Double`, `watchlistCount: Int`, `nextRegularOpenEpoch: Double?`, `isCoolingDown: Bool`, `cooldownRemaining: Double`, `circuitAllows: Bool`, `circuitOpenRemaining: Double`.
   - `TickerCore.RefreshDecision` — `enum { case fetch, wait(seconds: Double) }`, `Equatable, Sendable`; `var waitSeconds: Double?`.
-  - `TickerCore.RefreshPolicy` — `enum` with `static func decide(_ input: RefreshInput) -> RefreshDecision` , `static func cycleInterval(userIntervalSeconds:watchlistCount:marketState:visibility:lowPowerMode:) -> Double` and `static func isStale(lastSuccessEpoch:nowEpoch:userIntervalSeconds:watchlistCount:marketState:visibility:lowPowerMode:) -> Bool`.
+  - `TickerCore.RefreshPolicy` — `enum` with `static func decide(_ input: RefreshInput) -> RefreshDecision` , `static func cycleInterval(userIntervalSeconds:watchlistCount:marketState:lowPowerMode:) -> Double` and `static func isStale(lastSuccessEpoch:nowEpoch:userIntervalSeconds:watchlistCount:marketState:lowPowerMode:) -> Bool`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -4027,14 +4037,11 @@ private func input(
 
 @Test func extendedHoursAndLowPowerBothStretchTheCycle() {
     let base = RefreshPolicy.cycleInterval(userIntervalSeconds: 300, watchlistCount: 4,
-                                           marketState: .regular, visibility: .visible,
-                                           lowPowerMode: false)
+                                           marketState: .regular, lowPowerMode: false)
     let pre = RefreshPolicy.cycleInterval(userIntervalSeconds: 300, watchlistCount: 4,
-                                          marketState: .pre, visibility: .visible,
-                                          lowPowerMode: false)
+                                          marketState: .pre, lowPowerMode: false)
     let saving = RefreshPolicy.cycleInterval(userIntervalSeconds: 300, watchlistCount: 4,
-                                             marketState: .regular, visibility: .visible,
-                                             lowPowerMode: true)
+                                             marketState: .regular, lowPowerMode: true)
     #expect(pre == base * RateConstants.quietMultiplier)
     #expect(saving == base * RateConstants.quietMultiplier)
 }
@@ -4043,8 +4050,7 @@ private func input(
     // Low Power Mode during pre-market should not produce a nine-times
     // interval; the user asked for a slower ticker, not a stopped one.
     let both = RefreshPolicy.cycleInterval(userIntervalSeconds: 300, watchlistCount: 4,
-                                           marketState: .pre, visibility: .visible,
-                                           lowPowerMode: true)
+                                           marketState: .pre, lowPowerMode: true)
     #expect(both == 300 * RateConstants.quietMultiplier)
 }
 
@@ -4053,8 +4059,7 @@ private func input(
     // symbols the floor is 600s, so a 60s setting cannot be honoured — and
     // must not be pretended to be.
     let interval = RefreshPolicy.cycleInterval(userIntervalSeconds: 60, watchlistCount: 20,
-                                               marketState: .regular, visibility: .visible,
-                                               lowPowerMode: false)
+                                               marketState: .regular, lowPowerMode: false)
     #expect(interval == 20 * RateConstants.spacingSeconds)
 }
 
@@ -4066,7 +4071,6 @@ private func input(
             let cycle = RefreshPolicy.cycleInterval(userIntervalSeconds: interval,
                                                     watchlistCount: count,
                                                     marketState: .regular,
-                                                    visibility: .visible,
                                                     lowPowerMode: false)
             #expect(cycle >= interval, "count \(count), interval \(interval) → \(cycle)")
             #expect(cycle >= Double(count) * RateConstants.spacingSeconds)
@@ -4080,8 +4084,7 @@ private func input(
     // ignore the one signal it has.
     #expect(!RefreshPolicy.isStale(lastSuccessEpoch: 1_000, nowEpoch: 1_100,
                                    userIntervalSeconds: 180, watchlistCount: 4,
-                                   marketState: .regular, visibility: .visible,
-                                   lowPowerMode: false))
+                                   marketState: .regular, lowPowerMode: false))
 }
 
 @Test func stalenessIsThreeCyclesAndNotThreeUserIntervals() {
@@ -4089,13 +4092,11 @@ private func input(
     // at 60s takes ten minutes per pass. Measuring against the setting would
     // dim a perfectly healthy large watchlist permanently.
     let cycle = RefreshPolicy.cycleInterval(userIntervalSeconds: 60, watchlistCount: 20,
-                                            marketState: .regular, visibility: .visible,
-                                            lowPowerMode: false)
+                                            marketState: .regular, lowPowerMode: false)
     func stale(after elapsed: Double) -> Bool {
         RefreshPolicy.isStale(lastSuccessEpoch: 0, nowEpoch: elapsed,
                               userIntervalSeconds: 60, watchlistCount: 20,
-                              marketState: .regular, visibility: .visible,
-                              lowPowerMode: false)
+                              marketState: .regular, lowPowerMode: false)
     }
     #expect(!stale(after: cycle * RateConstants.stalenessMultiplier - 1))
     #expect(stale(after: cycle * RateConstants.stalenessMultiplier + 1))
@@ -4105,8 +4106,7 @@ private func input(
     // No successful fetch yet is exactly the state the dimmed strip is for.
     #expect(RefreshPolicy.isStale(lastSuccessEpoch: nil, nowEpoch: 5_000,
                                   userIntervalSeconds: 180, watchlistCount: 4,
-                                  marketState: .regular, visibility: .visible,
-                                  lowPowerMode: false))
+                                  marketState: .regular, lowPowerMode: false))
 }
 
 @Test func aClosedMarketDoesNotDimTheStrip() {
@@ -4114,15 +4114,13 @@ private func input(
     // Dimming it every night would make the signal meaningless by morning.
     #expect(!RefreshPolicy.isStale(lastSuccessEpoch: 0, nowEpoch: 40 * 3600,
                                    userIntervalSeconds: 180, watchlistCount: 4,
-                                   marketState: .closed, visibility: .visible,
-                                   lowPowerMode: false))
+                                   marketState: .closed, lowPowerMode: false))
 }
 
 @Test func aClockThatJumpedBackwardsDoesNotDimTheStrip() {
     #expect(!RefreshPolicy.isStale(lastSuccessEpoch: 10_000, nowEpoch: 1_000,
                                    userIntervalSeconds: 180, watchlistCount: 4,
-                                   marketState: .regular, visibility: .visible,
-                                   lowPowerMode: false))
+                                   marketState: .regular, lowPowerMode: false))
 }
 
 @Test func anEmptyWatchlistNeverFetches() {
@@ -4133,8 +4131,7 @@ private func input(
     // Defence against a hand-edited settings file. Zero would busy-loop.
     for bad in [0.0, -1, .infinity, .nan] {
         let cycle = RefreshPolicy.cycleInterval(userIntervalSeconds: bad, watchlistCount: 1,
-                                                marketState: .regular, visibility: .visible,
-                                                lowPowerMode: false)
+                                                marketState: .regular, lowPowerMode: false)
         #expect(cycle.isFinite)
         #expect(cycle >= RateConstants.spacingSeconds)
     }
@@ -4239,7 +4236,6 @@ public enum RefreshPolicy {
     public static func cycleInterval(userIntervalSeconds: Double,
                                      watchlistCount: Int,
                                      marketState: MarketState,
-                                     visibility: Visibility,
                                      lowPowerMode: Bool) -> Double {
         // A hand-edited settings file can contain anything at all.
         let requested = userIntervalSeconds.isFinite && userIntervalSeconds > 0
@@ -4266,7 +4262,6 @@ public enum RefreshPolicy {
                                userIntervalSeconds: Double,
                                watchlistCount: Int,
                                marketState: MarketState,
-                               visibility: Visibility,
                                lowPowerMode: Bool) -> Bool {
         // While the market is shut, the last close is the right number no
         // matter how old it is. Dimming overnight would spend the signal on
@@ -4282,7 +4277,6 @@ public enum RefreshPolicy {
         let cycle = cycleInterval(userIntervalSeconds: userIntervalSeconds,
                                   watchlistCount: watchlistCount,
                                   marketState: marketState,
-                                  visibility: visibility,
                                   lowPowerMode: lowPowerMode)
         return age > cycle * RateConstants.stalenessMultiplier
     }
@@ -4307,7 +4301,6 @@ public enum RefreshPolicy {
         let cycle = cycleInterval(userIntervalSeconds: input.userIntervalSeconds,
                                   watchlistCount: input.watchlistCount,
                                   marketState: input.marketState,
-                                  visibility: input.visibility,
                                   lowPowerMode: input.lowPowerMode)
 
         if input.visibility == .occluded {
@@ -4459,7 +4452,6 @@ private struct DaySimulation {
                         userIntervalSeconds: userInterval,
                         watchlistCount: watchlistCount,
                         marketState: market,
-                        visibility: visibility,
                         lowPowerMode: lowPowerMode)
                 case .wait(let seconds):
                     // Never advance by zero; that is an infinite loop, and a
@@ -6212,8 +6204,7 @@ public struct FeedEngine {
         guard !live.isEmpty else {
             return .sleep(seconds: RefreshPolicy.cycleInterval(
                 userIntervalSeconds: userIntervalSeconds, watchlistCount: 0,
-                marketState: context.marketState, visibility: context.visibility,
-                lowPowerMode: context.lowPowerMode))
+                marketState: context.marketState, lowPowerMode: context.lowPowerMode))
         }
 
         // A cycle in progress finishes before a new one starts; otherwise a
@@ -6226,8 +6217,7 @@ public struct FeedEngine {
             cursor = 0
             cycleDeadline = now + RefreshPolicy.cycleInterval(
                 userIntervalSeconds: userIntervalSeconds, watchlistCount: live.count,
-                marketState: context.marketState, visibility: context.visibility,
-                lowPowerMode: context.lowPowerMode)
+                marketState: context.marketState, lowPowerMode: context.lowPowerMode)
         }
 
         // The bucket is the last word. Nothing below this line can bypass it.
@@ -6725,7 +6715,6 @@ public enum Diagnosis {
             userIntervalSeconds: userIntervalSeconds,
             watchlistCount: watchlistCount,
             marketState: .regular,
-            visibility: .visible,
             lowPowerMode: false)
 
         // Squiggle only fetches while some session is open. Pre-market through
