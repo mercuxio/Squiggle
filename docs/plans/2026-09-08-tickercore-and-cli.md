@@ -1933,6 +1933,13 @@ final class FakeRandom: Randomizing, @unchecked Sendable {
 import Testing
 @testable import TickerCore
 
+// NOTE: this suite's standalone `swift-testing` package (see
+// ExpectMacroTests.swift) also mis-compiles `#expect(...)` whenever the
+// checked expression is a direct call to a `mutating` method on a `var` —
+// its call-capturing expansion binds the receiver as an immutable `$0`.
+// `RequestPacer.take()` is exactly that shape, so every such call is hoisted
+// into a `let` before the `#expect` rather than written inline.
+
 @Test func aFreshPacerAllowsABurstUpToCapacityAndNoMore() {
     let clock = FakeClock()
     var pacer = RequestPacer(clock: clock)
@@ -1940,22 +1947,32 @@ import Testing
     // Capacity 5 exists so a launch, an unocclusion and a manual refresh do
     // not each have to wait 30 seconds. It is a burst allowance, not a rate.
     for attempt in 1...Int(RateConstants.bucketCapacity) {
-        #expect(pacer.take(), "token \(attempt) should have been available")
+        let granted = pacer.take()
+        #expect(granted, "token \(attempt) should have been available")
     }
-    #expect(!pacer.take())
+    let extra = pacer.take()
+    #expect(!extra)
 }
 
 @Test func theBucketRefillsAtExactlyOnePerSpacingInterval() {
     let clock = FakeClock()
     var pacer = RequestPacer(clock: clock)
-    while pacer.take() {}
+    var drained = 0
+    while pacer.take() {
+        drained += 1
+        if drained >= 100 { break }
+    }
+    #expect(drained < 100, "take() never returned false")
 
     clock.advance(RateConstants.spacingSeconds - 0.001)
-    #expect(!pacer.take(), "a token appeared before the spacing floor elapsed")
+    let tooEarly = pacer.take()
+    #expect(!tooEarly, "a token appeared before the spacing floor elapsed")
 
     clock.advance(0.002)
-    #expect(pacer.take())
-    #expect(!pacer.take(), "two tokens appeared for one interval")
+    let onTime = pacer.take()
+    #expect(onTime)
+    let secondInARow = pacer.take()
+    #expect(!secondInARow, "two tokens appeared for one interval")
 }
 
 @Test func theBucketNeverAccumulatesMoreThanCapacity() {
@@ -1963,11 +1980,20 @@ import Testing
     // is the invariant that makes the daily budget hold across a lid-open.
     let clock = FakeClock()
     var pacer = RequestPacer(clock: clock)
-    while pacer.take() {}
+    var initialDrain = 0
+    while pacer.take() {
+        initialDrain += 1
+        if initialDrain >= 100 { break }
+    }
+    #expect(initialDrain < 100, "take() never returned false")
 
     clock.advance(hours: 168)
     var granted = 0
-    while pacer.take() { granted += 1 }
+    while pacer.take() {
+        granted += 1
+        if granted >= 100 { break }
+    }
+    #expect(granted < 100, "take() never returned false")
     #expect(granted == Int(RateConstants.bucketCapacity))
 }
 
@@ -1994,12 +2020,18 @@ import Testing
     pacer.halveCapacity()
 
     var granted = 0
-    while pacer.take() { granted += 1 }
+    while pacer.take() {
+        granted += 1
+        if granted >= 100 { break }
+    }
+    #expect(granted < 100, "take() never returned false")
     #expect(granted == Int(RateConstants.bucketCapacity / 2))
 
     clock.advance(RateConstants.spacingSeconds * 2)
-    #expect(pacer.take())
-    #expect(!pacer.take(), "halving did not slow the refill")
+    let refilled = pacer.take()
+    #expect(refilled)
+    let second = pacer.take()
+    #expect(!second, "halving did not slow the refill")
 }
 
 @Test func capacityNeverHalvesBelowOne() {
@@ -2009,7 +2041,8 @@ import Testing
     var pacer = RequestPacer(clock: clock)
     for _ in 0..<10 { pacer.halveCapacity() }
     clock.advance(RateConstants.spacingSeconds * 10)
-    #expect(pacer.take())
+    let granted = pacer.take()
+    #expect(granted)
 }
 
 @Test func timeGoingBackwardsDoesNotMintTokens() {
@@ -2017,24 +2050,77 @@ import Testing
     // process, or a future refactor to a wall clock could. Never trust it.
     let clock = FakeClock(1000)
     var pacer = RequestPacer(clock: clock)
-    while pacer.take() {}
+    var drained = 0
+    while pacer.take() {
+        drained += 1
+        if drained >= 100 { break }
+    }
+    #expect(drained < 100, "take() never returned false")
 
     let rewound = FakeClock(0)
     var rewoundPacer = RequestPacer(clock: rewound)
-    while rewoundPacer.take() {}
+    var rewoundDrained = 0
+    while rewoundPacer.take() {
+        rewoundDrained += 1
+        if rewoundDrained >= 100 { break }
+    }
+    #expect(rewoundDrained < 100, "take() never returned false")
     rewound.advance(-500)
-    #expect(!rewoundPacer.take())
+    let mintedFromRewind = rewoundPacer.take()
+    #expect(!mintedFromRewind)
+}
+
+@Test func anOscillatingClockDoesNotMintTokens() {
+    // A clock that jumps backward and then returns to (or through) a point
+    // it has already visited must not be credited twice for a span of time
+    // that never actually elapsed. Drain the bucket, then oscillate several
+    // times and confirm no tokens appeared.
+    let clock = FakeClock(0)
+    var pacer = RequestPacer(clock: clock)
+    var drained = 0
+    while pacer.take() {
+        drained += 1
+        if drained >= 100 { break }
+    }
+    #expect(drained < 100, "take() never returned false")
+    #expect(pacer.availableTokens == 0)
+
+    for _ in 0..<5 {
+        clock.advance(-100)
+        _ = pacer.secondsUntilNextToken() // forces a refill() without spending a token
+        clock.advance(100)
+        _ = pacer.secondsUntilNextToken()
+    }
+
+    #expect(
+        pacer.availableTokens == 0,
+        "oscillating the clock back to its starting point minted \(pacer.availableTokens) tokens"
+    )
+
+    // A genuine forward advance past the high-water mark must still credit
+    // correctly — exactly one token for one spacing interval, not more.
+    clock.advance(RateConstants.spacingSeconds)
+    let earned = pacer.take()
+    #expect(earned, "a real spacing interval should have earned a token")
+    let extra = pacer.take()
+    #expect(!extra, "the oscillation should not have earned a bonus token")
 }
 
 @Test func theWaitReportedMatchesTheWaitEnforced() {
     let clock = FakeClock()
     var pacer = RequestPacer(clock: clock)
-    while pacer.take() {}
+    var drained = 0
+    while pacer.take() {
+        drained += 1
+        if drained >= 100 { break }
+    }
+    #expect(drained < 100, "take() never returned false")
 
     let wait = pacer.secondsUntilNextToken()
     #expect(wait > 0)
     clock.advance(wait)
-    #expect(pacer.take(), "the pacer reported a wait of \(wait) and then refused")
+    let granted = pacer.take()
+    #expect(granted, "the pacer reported a wait of \(wait) and then refused")
 }
 ```
 
@@ -2155,6 +2241,30 @@ public enum RateConstants {
 }
 ```
 
+**Two defects were found here in review and are already fixed in the code below
+(controller rulings R11 and R12) — do not "simplify" either one back out.**
+
+1. *The refill rate must scale with capacity.* The original `refill()` added
+   `elapsed / spacingSeconds`, a flat rate independent of `capacity`, so
+   `halveCapacity()` shrank only the burst and left the sustained rate to Yahoo
+   untouched — contradicting this task's own test name
+   (`halvingTheCapacityHalvesTheBurstAndTheRate`) and the AIMD doc comment.
+   `effectiveSpacingSeconds` fixes it. Reachable capacities are 5 / 2.5 / 1.25 / 1,
+   giving 30s / 60s / 120s / 150s: bounded, never zero.
+2. *`lastRefill` must be a high-water mark.* Clamping `elapsed` to zero is not enough.
+   Assigning `lastRefill = now` on a backward reading lets an oscillating clock credit
+   the same interval repeatedly — measured, not theorised: a drained bucket refilled
+   0 -> 5.0 tokens over five oscillations of a clock with **zero** net progress. That is
+   an unbounded minting path in the one type the spec calls a safety property.
+   `lastRefill = max(lastRefill, now)` credits only genuine progress past the highest
+   point ever seen. `anOscillatingClockDoesNotMintTokens` pins it and fails if the
+   high-water mark is removed.
+
+Note also that the loops in the tests above are bounded with an explicit ceiling and a
+`"take() never returned false"` assertion. That is not decoration: with unbounded
+`while pacer.take()` loops, a `take()` that wrongly returns `true` makes the suite
+**hang** rather than fail — an ambiguous ten-minute CPU peg instead of a red test.
+
 - [ ] **Step 5: Write `RequestPacer`**
 
 `Sources/TickerCore/RequestPacer.swift`:
@@ -2167,7 +2277,9 @@ public enum RateConstants {
 /// future feature — can flood Yahoo, because nothing else holds the tokens.
 ///
 /// Capacity is a *burst* allowance; the long-run rate is one request per
-/// `spacingSeconds` regardless of how often `take()` is called.
+/// the current effective spacing — `spacingSeconds` at full capacity, longer
+/// once `halveCapacity()` has scaled it back — regardless of how often
+/// `take()` is called.
 public struct RequestPacer {
     private let clock: any MonotonicClock
     private var capacity: Double
@@ -2202,17 +2314,31 @@ public struct RequestPacer {
     public mutating func secondsUntilNextToken() -> Double {
         refill()
         guard tokens < 1 else { return 0 }
-        return (1 - tokens) * RateConstants.spacingSeconds
+        return (1 - tokens) * effectiveSpacingSeconds
+    }
+
+    /// Seconds to accrue one token at the current capacity. Halving capacity
+    /// must also halve the sustained rate — a halved burst allowance that
+    /// still refills at the un-throttled rate would leave the long-run rate
+    /// to Yahoo untouched by the one signal (a 429) telling us to slow down.
+    /// Scales `spacingSeconds` by how far `capacity` has fallen from the
+    /// un-throttled `bucketCapacity`.
+    private var effectiveSpacingSeconds: Double {
+        RateConstants.spacingSeconds * (RateConstants.bucketCapacity / capacity)
     }
 
     private mutating func refill() {
         let now = clock.nowSeconds
         // Never trust time to move forward. A suspended process, a fake, or a
-        // future refactor could hand us a smaller number, and minting tokens
-        // from it would break the only guarantee this type makes.
+        // future refactor could hand us a smaller number. The real danger
+        // isn't the backward reading itself (that credits nothing — elapsed
+        // clamps to zero) but letting lastRefill regress to it: a clock that
+        // later returns to where it already was would then look like it
+        // travelled forward from the dip, minting tokens for time that never
+        // passed. Keeping lastRefill a high-water mark closes that path.
         let elapsed = max(0, now - lastRefill)
-        lastRefill = now
-        tokens = min(capacity, tokens + elapsed / RateConstants.spacingSeconds)
+        lastRefill = max(lastRefill, now)
+        tokens = min(capacity, tokens + elapsed / effectiveSpacingSeconds)
     }
 }
 ```
