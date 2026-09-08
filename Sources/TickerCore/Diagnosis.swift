@@ -98,6 +98,22 @@ public enum Diagnosis {
     /// this assumes that schedule rather than the day's actual one; that is
     /// why this is an estimate and the sweep is the number actually asserted
     /// against.
+    ///
+    /// Each session's count rounds its `sessionSeconds / cycle` **up**, not
+    /// down. `DaySimulation` runs one continuous timeline: a cycle already in
+    /// flight when a session boundary passes carries its deadline across that
+    /// boundary, so the next session does not always start counting from a
+    /// clean zero the way this per-session split does. That phase shift can
+    /// let the real simulation start one more cycle inside a session than a
+    /// fresh-start `floor` would credit it — measured at 180s, where flooring
+    /// under-reported the sweep by 1 request at one symbol, 2 at two, 4 at
+    /// four. `ceil` accepts a partial final cycle as billable, which is the
+    /// same assumption the pacer ceiling below already makes, and it is what
+    /// keeps this a genuine upper bound rather than a number the sweep can
+    /// walk under. It never widens the estimate by more than one session's
+    /// worth of one cycle, so the overshoot stays small — worst measured case
+    /// is 900s × 20, 40 requests over 760, and `min` with the pacer ceiling
+    /// still holds it near the sweep everywhere the floor did.
     public static func estimatedDailyRequests(userIntervalSeconds: Double,
                                               watchlistCount: Int) -> Int {
         guard watchlistCount > 0 else { return 0 }
@@ -112,7 +128,7 @@ public enum Diagnosis {
                 watchlistCount: watchlistCount,
                 marketState: marketState,
                 lowPowerMode: false)
-            return Int((sessionSeconds / cycle).rounded(.down)) * watchlistCount
+            return Int((sessionSeconds / cycle).rounded(.up)) * watchlistCount
         }
 
         let naive = requests(regularSeconds, marketState: .regular)

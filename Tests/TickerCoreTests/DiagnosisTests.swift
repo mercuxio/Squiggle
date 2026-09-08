@@ -109,11 +109,38 @@ import Testing
 
 @Test func theBudgetEstimateMatchesTheSweepsWorstCase() {
     // Task 12 measures the real number by simulation; this is the closed-form
-    // version the user sees. They must not contradict each other.
-    let estimate = Diagnosis.estimatedDailyRequests(userIntervalSeconds: 60,
-                                                    watchlistCount: 20)
-    #expect(estimate > 0)
-    #expect(estimate <= 1_200)
+    // version the user sees. They must not contradict each other: the
+    // estimate has to be a genuine upper bound on what `DaySimulation`
+    // measures, everywhere `BudgetSweepTests` sweeps, and it must not drift
+    // far above that measurement either.
+    //
+    // The margin below covers the one gap the closed form cannot close
+    // exactly: `DaySimulation` runs one continuous timeline, so a cycle
+    // already under way when a session boundary passes carries its deadline
+    // across that boundary. A per-session split can't see that carry-over,
+    // so rounding each session's `sessionSeconds / cycle` up (rather than
+    // down) sometimes credits a partial final cycle the simulation never
+    // gets to start. Measured worst case across this grid is 40, at 900s x
+    // 20 symbols (760 simulated vs 800 estimated). Widening this number
+    // later should be a visible, deliberate act, not a quiet tolerance creep.
+    let acceptableOvershoot = 40
+
+    for interval in RateConstants.refreshIntervalChoices {
+        for count in [1, 2, 4, 10, 20] {
+            let sim = DaySimulation.run(userInterval: interval, watchlistCount: count)
+            let estimate = Diagnosis.estimatedDailyRequests(userIntervalSeconds: interval,
+                                                            watchlistCount: count)
+            let label = "interval \(interval)s x \(count) symbols -> estimate \(estimate), sim \(sim.requests)"
+            #expect(estimate >= sim.requests, "\(label): estimate undercuts the sweep")
+            #expect(estimate <= sim.requests + acceptableOvershoot,
+                    "\(label): estimate overshoots the sweep by more than \(acceptableOvershoot)")
+
+            // Spec §4.2's cap is a separate claim from the sweep comparison
+            // above and must not be lost just because the name now points at
+            // the sweep instead.
+            #expect(estimate <= 1_200, "\(label): estimate exceeds the daily budget")
+        }
+    }
 }
 
 @Test func theBudgetEstimateIsFlatAcrossWatchlistSizesAtTheSpacingFloor() {
