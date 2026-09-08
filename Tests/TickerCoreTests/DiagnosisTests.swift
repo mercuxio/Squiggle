@@ -286,3 +286,38 @@ import Testing
 @Test func anEmptyWatchlistEstimatesNoRequests() {
     #expect(Diagnosis.estimatedDailyRequests(userIntervalSeconds: 60, watchlistCount: 0) == 0)
 }
+
+@Test func theEstimatorCannotReachTheBudgetOnAnyInput() {
+    // Pins the measurement that `pacerThrottlesSettings`' documentation rests
+    // on, because that documentation once claimed the opposite and nothing
+    // would have caught it.
+    //
+    // `estimatedDailyRequests` prices a US equity day — 6.5h regular, 5.5h
+    // pre, 4h post, eight hours shut — so no interval it can be handed buys
+    // 1,200 requests. Swept far outside the offered menu, down to a tenth of a
+    // second, the largest figure it returns is 741, at 19 symbols. (Nineteen
+    // rather than twenty because `budgetFloor` scales with the count: at 20 the
+    // floor is 1,440s a cycle against 19's 1,368s, and the extra symbol does
+    // not pay for the longer cycle.)
+    //
+    // The exact figure is asserted, not just "under budget": a bound the code
+    // cannot approach is decoration, and this file has been burned twice now
+    // by keeping one. 741 fails the moment the day model or the floor moves,
+    // which is when someone should be looking.
+    var worst = 0
+    var worstAt = ""
+    for tenths in 1...36_000 {
+        let interval = Double(tenths) / 10
+        for count in 1...RateConstants.maxWatchlistCount {
+            let estimate = Diagnosis.estimatedDailyRequests(userIntervalSeconds: interval,
+                                                            watchlistCount: count)
+            if estimate > worst {
+                worst = estimate
+                worstAt = "\(interval)s x \(count) symbols"
+            }
+        }
+    }
+    let reached = "the estimator reached \(worst) at \(worstAt)"
+    #expect(worst == 741, "\(reached)")
+    #expect(worst < RateConstants.dailyRequestBudget, "\(reached)")
+}

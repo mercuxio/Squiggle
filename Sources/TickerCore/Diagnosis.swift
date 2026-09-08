@@ -176,11 +176,28 @@ public enum Diagnosis {
     /// `estimatedDailyRequests` ended in `min(naive, pacerDailyCeiling)`, a
     /// constant below the budget, so "is the estimate over budget" was
     /// unreachable for every possible input and said `[ok]` to precisely the
-    /// user it should have warned. That clamp is gone;
-    /// `estimatedDailyRequests` can now return a figure over
-    /// `RateConstants.dailyRequestBudget`, and comparing the two is the
-    /// over-budget check that was missing. `squigglectl doctor` is where that
-    /// comparison belongs, since it is the thing with a status to report.
+    /// user it should have warned. That clamp is gone.
+    ///
+    /// It does **not** follow that comparing the estimate against the budget
+    /// is now a useful check, and an earlier draft of this comment said it
+    /// did. Measured instead of assumed: swept over every watchlist size 1...20
+    /// against intervals from 0.1s to 3600s — far outside anything Settings
+    /// offers — the largest figure `estimatedDailyRequests` returns is **741**,
+    /// at 19 symbols. Against a budget of 1,200 the comparison is unreachable
+    /// for every possible input, which is the same defect the clamp caused,
+    /// relocated rather than removed. `theEstimatorCannotReachTheBudgetOnAnyInput`
+    /// pins the 741 so this cannot quietly become true again unnoticed.
+    ///
+    /// The reason is structural, not a matter of the numbers happening to work
+    /// out. This estimator prices a *US equity* day: 6.5h regular, 5.5h pre,
+    /// 4h post, and eight hours shut. The budget is a claim about the app on
+    /// *any* calendar, and the case that can exceed it is an instrument that
+    /// never closes — which this function does not model and should not, since
+    /// `doctor` reports on the user's stored settings and not on what their
+    /// symbols trade as. The budget is enforced where the 24-hour case is
+    /// visible: `RefreshPolicy.budgetFloor` and `RequestPacer`'s daily bucket,
+    /// asserted on the continuous calendar in
+    /// `theDailyBudgetHoldsAcrossEveryReachableConfiguration`.
     ///
     /// Compared against `.regular` with Low Power Mode off because the quiet
     /// multiplier scales the cycle and not the setting: including it would
