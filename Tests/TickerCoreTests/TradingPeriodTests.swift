@@ -55,6 +55,16 @@ private func period(
     #expect(inverted.state(atEpoch: 250) == .closed)
 }
 
+@Test func regularWinsWhenYahooEmitsOverlappingWindows() {
+    // Some venues arrive with real overlap, not just shared boundaries.
+    // pre 100-250 and regular 200-350 share [200, 250); regular and
+    // post 300-450 share [300, 350). Either overlap must resolve to
+    // .regular, not to whichever window happens to be checked first.
+    let p = period(pre: (100, 250), regular: (200, 350), post: (300, 450))
+    #expect(p.state(atEpoch: 220) == .regular)
+    #expect(p.state(atEpoch: 320) == .regular)
+}
+
 @Test func theNextOpenIsOnlyReportedWhenItIsStillAhead() {
     let p = period()
     #expect(p.nextRegularOpenEpoch(after: 100) == 200)
