@@ -777,7 +777,21 @@ capture "VOD.L"     "non-usd-listing"
 chmod +x scripts/capture-fixtures.sh
 ```
 
-- [ ] **Step 2: Run it during a regular US session**
+- [ ] **Step 2: Run it, and be honest about which session you ran it in**
+
+`regular-session.json` is consumed by Tasks 5, 6, 7 and 18, so its **name is
+an interface** and must not change. Its *content* only has to satisfy what
+those tests actually assert: a positive price, a currency, a short name, a
+non-nil change whose sign agrees with the arithmetic, and a
+`currentTradingPeriod.regular` window no longer than 6.5 hours. Every one of
+those holds for a body fetched while the market is closed — none of them
+assert the session is live.
+
+So: run the capture whenever you are running it. If that is outside 09:30–16:00
+ET, **also** write the AAPL body to `overnight-closed.json` from the *same*
+request (`cp`, not a second fetch — a second fetch buys nothing and spends a
+token), and record in the log that `regular-session.json` is presently a
+stand-in awaiting the live recapture Task 19 already schedules for ~10:30 ET.
 
 ```bash
 ./scripts/capture-fixtures.sh
@@ -834,9 +848,12 @@ Captured:
 - [x] crypto (BTC-USD)
 - [x] non-usd-listing (VOD.L)
 - [x] 429-body.html — hand-built from the shape recorded in spec §3.2
+- [x] overnight-closed.json — only if the capture ran outside 09:30-16:00 ET
 - [ ] 401-body.json — RECONSTRUCTED, not captured
 
 Still owed (clock-gated; collect during the Task 19 trading day):
+- [ ] regular-session — RECAPTURE during a live session if the corpus was
+      taken outside 09:30-16:00 ET; the held file is a closed-market stand-in
 - [ ] pre-market — capture AAPL between 04:00 and 09:30 ET
 - [ ] post-market — capture AAPL between 16:00 and 20:00 ET
 - [ ] weekend — capture AAPL on a Saturday; `currentTradingPeriod` should
@@ -5981,7 +5998,7 @@ private func dotted(_ components: [String]) -> String {
     // the digester changed, not the API.
     let url = URL(fileURLWithPath: #filePath)
         .deletingLastPathComponent().deletingLastPathComponent()
-        .appendingPathComponent("Fixtures/yahoo-2026-09-08/chart-aapl.json")
+        .appendingPathComponent("Fixtures/yahoo-2026-09-08/regular-session.json")
     let d = try ShapeDigest.digest(of: Data(contentsOf: url))
     #expect(ShapeDigest.diff(recorded: d, live: d).isEmpty)
     // Only the required paths must be present. Yahoo omits some optional
@@ -6003,7 +6020,7 @@ private func dotted(_ components: [String]) -> String {
 @Test func digestingSurvivesEveryTruncationOfTheFixture() throws {
     let url = URL(fileURLWithPath: #filePath)
         .deletingLastPathComponent().deletingLastPathComponent()
-        .appendingPathComponent("Fixtures/yahoo-2026-09-08/chart-aapl.json")
+        .appendingPathComponent("Fixtures/yahoo-2026-09-08/regular-session.json")
     let data = try Data(contentsOf: url)
     for length in stride(from: 0, to: data.count, by: 11) {
         _ = try? ShapeDigest.digest(of: Data(data.prefix(length)))
@@ -6259,16 +6276,23 @@ that state. `docs/fixture-capture-log.md` lists them. In a **second terminal**,
 at each of these moments, run one capture — and no more, because every one of
 these spends from the same daily budget the watch loop is spending:
 
-| Local time (US Eastern) | Fixture |
+| Local time (US Eastern) | Fixture to end up with |
 |---|---|
-| ~05:00 | `chart-aapl-premarket.json` |
-| ~10:30 | `chart-aapl-regular.json` (already held from Task 3; re-capture only if that one is stale) |
-| ~17:00 | `chart-aapl-postmarket.json` |
-| ~22:00 | `chart-aapl-closed.json` |
-| any time Saturday | `chart-aapl-weekend.json` |
+| ~05:00 | `pre-market.json` |
+| ~10:30 | `regular-session.json` — Task 3 captured this one outside a live session; this is the recapture that makes the name true |
+| ~17:00 | `post-market.json` |
+| ~22:00 | `overnight-closed.json` — already discharged by Task 3; recapture only if stale |
+| any time Saturday | `weekend.json`, and `crypto-while-equities-closed.json` from BTC-USD |
+
+`probe --record` always writes `chart-<symbol>.json` and never overwrites, so
+capturing five session states into one dated directory would collide on the
+first repeat. Capture, then rename to the name in the table — these are the
+names Task 3's owed list uses and the only ones later tests look for:
 
 ```bash
 swift run --build-system native squigglectl probe AAPL --record
+mv Tests/Fixtures/yahoo-$(date +%F)/chart-aapl.json \
+   Tests/Fixtures/yahoo-$(date +%F)/pre-market.json   # or the row's name
 ```
 
 - [ ] **Step 3: Exercise the conditions no test can fake**
