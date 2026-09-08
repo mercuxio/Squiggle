@@ -20,9 +20,9 @@ func run() async -> Int32 {
     case .help:
         print(Rendering.usage)
         return 0
-    case .quote(let raw, let printRaw, _):
-        guard let symbol = Symbol(raw) else {
-            FileHandle.standardError.write(Data("not a usable symbol: \(raw)\n".utf8))
+    case .quote(let symbolText, let printRaw, _):
+        guard let symbol = Symbol(symbolText) else {
+            FileHandle.standardError.write(Data("not a usable symbol: \(symbolText)\n".utf8))
             return 2
         }
         do {
