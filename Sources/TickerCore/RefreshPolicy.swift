@@ -16,7 +16,18 @@ public struct RefreshInput: Sendable {
     public var lowPowerMode: Bool
     public var userIntervalSeconds: Double
     public var watchlistCount: Int
-    public var nextRegularOpenEpoch: Double?
+    /// The next **session** open — the earliest of pre, regular and post that
+    /// is still ahead — and not the next *regular* open.
+    ///
+    /// The distinction is load-bearing, which is why the field is named for
+    /// it. The closed-market branch below sleeps until this instant minus
+    /// `preOpenWakeLead`, and that is the only wake a closed Mac gets. Pass
+    /// the regular open and Squiggle sleeps from midnight to 09:29, silently
+    /// skipping the whole 04:00-09:30 pre-market session for everyone whose
+    /// Mac was closed-market when the wake was scheduled — which is everyone
+    /// who leaves it on overnight. `TradingPeriod.nextSessionOpenEpoch(after:)`
+    /// computes the right value; callers should not compute their own.
+    public var nextSessionOpenEpoch: Double?
     public var isCoolingDown: Bool
     public var cooldownRemaining: Double
     public var circuitAllows: Bool
@@ -24,7 +35,7 @@ public struct RefreshInput: Sendable {
 
     public init(nowMonotonic: Double, nowEpoch: Double, marketState: MarketState,
                 visibility: Visibility, lowPowerMode: Bool, userIntervalSeconds: Double,
-                watchlistCount: Int, nextRegularOpenEpoch: Double?, isCoolingDown: Bool,
+                watchlistCount: Int, nextSessionOpenEpoch: Double?, isCoolingDown: Bool,
                 cooldownRemaining: Double, circuitAllows: Bool, circuitOpenRemaining: Double) {
         self.nowMonotonic = nowMonotonic
         self.nowEpoch = nowEpoch
@@ -33,7 +44,7 @@ public struct RefreshInput: Sendable {
         self.lowPowerMode = lowPowerMode
         self.userIntervalSeconds = userIntervalSeconds
         self.watchlistCount = watchlistCount
-        self.nextRegularOpenEpoch = nextRegularOpenEpoch
+        self.nextSessionOpenEpoch = nextSessionOpenEpoch
         self.isCoolingDown = isCoolingDown
         self.cooldownRemaining = cooldownRemaining
         self.circuitAllows = circuitAllows
@@ -153,7 +164,7 @@ public enum RefreshPolicy {
         }
 
         if input.marketState == .closed {
-            guard let open = input.nextRegularOpenEpoch else {
+            guard let open = input.nextSessionOpenEpoch else {
                 // No payload has told us when the market opens — a cold launch
                 // into a weekend. Fall back to a slow poll rather than sleeping
                 // indefinitely; a nil must never become a hang.

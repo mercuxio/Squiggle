@@ -20,7 +20,7 @@ private func input(
                  lowPowerMode: lowPower,
                  userIntervalSeconds: interval,
                  watchlistCount: count,
-                 nextRegularOpenEpoch: nextOpen,
+                 nextSessionOpenEpoch: nextOpen,
                  isCoolingDown: cooling,
                  cooldownRemaining: cooldownRemaining,
                  circuitAllows: circuitAllows,

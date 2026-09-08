@@ -19,9 +19,15 @@ private enum Day {
         }
     }
 
-    /// The next 09:30, as a second-of-day offset that may exceed a day.
-    static func nextRegularOpen(afterSecondOfDay t: Double) -> Double {
-        t < regularOpen ? regularOpen : regularOpen + length
+    /// The next *session* open — pre included — as a second-of-day offset
+    /// that may exceed a day. Mirrors
+    /// `TradingPeriod.nextSessionOpenEpoch(after:)`: overnight the wake
+    /// belongs at 04:00, not at 09:30, or the simulated Mac sleeps through
+    /// pre-market exactly as the real one did.
+    static func nextSessionOpen(afterSecondOfDay t: Double) -> Double {
+        if t < preOpen { return preOpen }
+        if t < regularOpen { return regularOpen }
+        return preOpen + length
     }
 }
 
@@ -79,7 +85,7 @@ private struct DaySimulation {
                     lowPowerMode: lowPowerMode,
                     userIntervalSeconds: userInterval,
                     watchlistCount: watchlistCount,
-                    nextRegularOpenEpoch: Day.nextRegularOpen(afterSecondOfDay: t),
+                    nextSessionOpenEpoch: Day.nextSessionOpen(afterSecondOfDay: t),
                     isCoolingDown: false,
                     cooldownRemaining: 0,
                     circuitAllows: true,
@@ -183,11 +189,35 @@ private let dailyBudget = 1_200
     #expect(sim.requests == 0)
 }
 
-@Test func lowPowerModeCutsTheDayByRoughlyTheQuietMultiplier() {
+@Test func lowPowerModeStretchesRegularHoursAndLeavesTheQuietOnesAlone() {
+    // The old name and its `<= normal / 2` claimed a whole-day saving of the
+    // quiet multiplier, which was never what the policy does and is now
+    // visibly false: extended hours are *already* stretched by
+    // `quietMultiplier`, and `cycleInterval` deliberately does not compound
+    // the two. So Low Power Mode buys nothing at all before 09:30 or after
+    // 16:00, and the day-level saving is bounded by the regular session alone.
+    // Derived here rather than measured-and-pinned, in the same shape as the
+    // ceiling above.
+    let quietSpacing = RateConstants.spacingSeconds * RateConstants.quietMultiplier
+    let extended = Int((Day.regularOpen - Day.preOpen) / quietSpacing)
+        + Int((Day.postClose - Day.regularClose) / quietSpacing)
+    let regular = Int((Day.regularClose - Day.regularOpen) / RateConstants.spacingSeconds)
+    let lowPowerCeiling = extended
+        + Int(Double(regular) / RateConstants.quietMultiplier)
+        + Int(RateConstants.bucketCapacity)
+
     let normal = DaySimulation.run(userInterval: 180, watchlistCount: 10)
     let saving = DaySimulation.run(userInterval: 180, watchlistCount: 10, lowPowerMode: true)
+
     #expect(saving.requests < normal.requests)
-    #expect(Double(saving.requests) <= Double(normal.requests) / 2)
+    #expect(saving.requests <= lowPowerCeiling,
+            "low power cost \(saving.requests) against a derived ceiling of \(lowPowerCeiling)")
+
+    // And the saving must be the regular session's, not something smaller
+    // that happens to be under the ceiling: two thirds of regular hours.
+    let expectedSaving = regular - Int(Double(regular) / RateConstants.quietMultiplier)
+    #expect(normal.requests - saving.requests >= expectedSaving - 10,
+            "low power saved only \(normal.requests - saving.requests) of an expected \(expectedSaving)")
 }
 
 @Test func aClosedMarketProducesNoBusyLoop() {
