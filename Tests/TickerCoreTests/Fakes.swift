@@ -25,3 +25,10 @@ final class FakeRandom: Randomizing, @unchecked Sendable {
         return range.lowerBound + (range.upperBound - range.lowerBound) * position
     }
 }
+
+/// A minimal, valid `Quote` for tests that only care that *a* quote was
+/// recorded against a symbol, not what is in it.
+func stubQuote(_ symbol: Symbol, price: Double = 100) -> Quote {
+    Quote(symbol: symbol, shortName: nil, price: price, previousClose: nil,
+          currency: "USD", asOfEpoch: nil)
+}
