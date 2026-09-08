@@ -65,19 +65,71 @@ import Testing
     #expect(granted == Int(RateConstants.bucketCapacity))
 }
 
-@Test func theLongRunRateIsOnePerSpacingIntervalNoMatterHowOftenItIsAsked() {
-    // Poll it every second for a simulated day. The bucket, not the caller,
-    // decides the rate.
+@Test func theShortRunRateIsOnePerSpacingIntervalNoMatterHowOftenItIsAsked() {
+    // Poll it every second and let the bucket, not the caller, decide the
+    // rate.
+    //
+    // Ten minutes, not a day: the day-horizon bucket refills every 72 seconds
+    // against this one's 30, so it becomes the binding bucket somewhere past
+    // 771 seconds (where `n/72 + 20` falls below `n/30 + 5`) and this
+    // assertion would then be measuring that bucket instead. The day is
+    // measured in `theDailyBucketHoldsAWholeDayToTheBudget` below.
+    let horizon = 600
     let clock = FakeClock()
     var pacer = RequestPacer(clock: clock)
     var granted = 0
-    for _ in 0..<86_400 {
+    for _ in 0..<horizon {
         if pacer.take() { granted += 1 }
         clock.advance(1)
     }
-    let ceiling = Int(86_400 / RateConstants.spacingSeconds + RateConstants.bucketCapacity)
+    let ceiling = Int(Double(horizon) / RateConstants.spacingSeconds + RateConstants.bucketCapacity)
     #expect(granted <= ceiling, "granted \(granted), ceiling \(ceiling)")
     #expect(granted >= ceiling - 2, "granted \(granted); the bucket is throttling below its rate")
+}
+
+@Test func theDailyBucketHoldsAWholeDayToTheBudget() {
+    // The bound the spacing bucket cannot supply. Asked for a request every
+    // second for a day — which is what a runaway retry, a UI action wired to
+    // the wrong handler, or an instrument whose market never closes all look
+    // like from in here — the spacing bucket alone grants 86,400 / 30 = 2,880,
+    // more than twice spec §4.2's budget. Nothing else in Squiggle counts
+    // requests per day, so if this bucket does not hold, nothing does.
+    let clock = FakeClock()
+    var pacer = RequestPacer(clock: clock)
+    var granted = 0
+    for _ in 0..<Int(RateConstants.secondsPerDay) {
+        if pacer.take() { granted += 1 }
+        clock.advance(1)
+    }
+
+    // The bucket's own bound is the budget plus its burst allowance, spent
+    // once at the start of the day and never refunded above the refill rate.
+    let ceiling = RateConstants.dailyRequestBudget + Int(RequestPacer.dailyBucketCapacity)
+    #expect(granted <= ceiling, "granted \(granted) against a ceiling of \(ceiling)")
+
+    // And it must not throttle *below* the budget either, or the day's
+    // allowance is being quietly spent on nothing. A budget that is never
+    // reachable is as wrong as one that is exceeded.
+    #expect(granted >= RateConstants.dailyRequestBudget,
+            "granted only \(granted) of a \(RateConstants.dailyRequestBudget) budget")
+}
+
+@Test func theDailyBucketStillAllowsAFullWatchlistPassAtTheSpacingRate() {
+    // The daily bucket refills every 72 seconds, so without a burst allowance
+    // of its own a cold launch would dribble one symbol into the strip every
+    // 72 seconds and a 20-symbol watchlist would take 24 minutes to appear.
+    // Its capacity is one full pass over the largest watchlist the app admits,
+    // which is what makes the two buckets agree about what a burst is.
+    let clock = FakeClock()
+    var pacer = RequestPacer(clock: clock)
+    var granted = 0
+    for _ in 0..<(RateConstants.maxWatchlistCount * Int(RateConstants.spacingSeconds)) {
+        if pacer.take() { granted += 1 }
+        clock.advance(1)
+    }
+    let dribbled = "a full pass took more than \(RateConstants.spacingSeconds)s per symbol: "
+        + "\(granted) of \(RateConstants.maxWatchlistCount) symbols served"
+    #expect(granted >= RateConstants.maxWatchlistCount, "\(dribbled)")
 }
 
 @Test func halvingTheCapacityHalvesTheBurstAndTheRate() {

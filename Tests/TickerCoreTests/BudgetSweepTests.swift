@@ -16,12 +16,37 @@ enum Day {
     static let postClose: Double = 20 * 3600         // 20:00
     static let length: Double = 24 * 3600
 
-    static func state(atSecondOfDay t: Double) -> MarketState {
-        switch t {
-        case preOpen..<regularOpen: return .pre
-        case regularOpen..<regularClose: return .regular
-        case regularClose..<postClose: return .post
-        default: return .closed
+    /// Which trading calendar the simulated instrument keeps.
+    ///
+    /// `.equity` is the US listing schedule above. `.continuous` is the one a
+    /// budget claim actually has to survive: through the real decoder,
+    /// `Tests/Fixtures/`' `crypto.json` and `currency-pair.json` report
+    /// `.regular` for 1,439 of a day's 1,440 minutes, so `BTC-USD` or
+    /// `EURUSD=X` in a watchlist is a market that never shuts. Both symbols
+    /// are on this project's own list of spellings that must round-trip
+    /// verbatim, so this calendar is reachable without hand-editing anything.
+    /// Modelling only `.equity` was what let the 1,200/day figure stand as an
+    /// arithmetic consequence of an eight-hour overnight close rather than as
+    /// an enforced property.
+    ///
+    /// `.closed` is a weekend or a holiday: shut for the whole 24 hours.
+    enum Calendar {
+        case equity
+        case continuous
+        case closed
+    }
+
+    static func state(atSecondOfDay t: Double, calendar: Calendar = .equity) -> MarketState {
+        switch calendar {
+        case .continuous: return .regular
+        case .closed: return .closed
+        case .equity:
+            switch t {
+            case preOpen..<regularOpen: return .pre
+            case regularOpen..<regularClose: return .regular
+            case regularClose..<postClose: return .post
+            default: return .closed
+            }
         }
     }
 
@@ -30,7 +55,12 @@ enum Day {
     /// `TradingPeriod.nextSessionOpenEpoch(after:)`: overnight the wake
     /// belongs at 04:00, not at 09:30, or the simulated Mac sleeps through
     /// pre-market exactly as the real one did.
-    static func nextSessionOpen(afterSecondOfDay t: Double) -> Double {
+    ///
+    /// A `.continuous` instrument is open now, so the next open is now: there
+    /// is no closed branch for it to reach.
+    static func nextSessionOpen(afterSecondOfDay t: Double,
+                                calendar: Calendar = .equity) -> Double {
+        if calendar == .continuous { return t }
         if t < preOpen { return preOpen }
         if t < regularOpen { return regularOpen }
         return preOpen + length
@@ -71,7 +101,7 @@ struct DaySimulation {
                     watchlistCount: Int,
                     visibility: Visibility = .visible,
                     lowPowerMode: Bool = false,
-                    marketOverride: MarketState? = nil,
+                    calendar: Day.Calendar = .equity,
                     honourPacer: Bool = true) -> DaySimulation {
         var sim = DaySimulation()
         let clock = FakeClock()
@@ -83,7 +113,7 @@ struct DaySimulation {
 
         var t: Double = 0
         while t < Day.length {
-            let market = marketOverride ?? Day.state(atSecondOfDay: t)
+            let market = Day.state(atSecondOfDay: t, calendar: calendar)
 
             if pendingSymbols > 0 {
                 if t >= nextSymbolDue {
@@ -108,7 +138,8 @@ struct DaySimulation {
                     lowPowerMode: lowPowerMode,
                     userIntervalSeconds: userInterval,
                     watchlistCount: watchlistCount,
-                    nextSessionOpenEpoch: Day.nextSessionOpen(afterSecondOfDay: t),
+                    nextSessionOpenEpoch: Day.nextSessionOpen(afterSecondOfDay: t,
+                                                              calendar: calendar),
                     isCoolingDown: false,
                     cooldownRemaining: 0,
                     circuitAllows: true,
@@ -138,57 +169,92 @@ struct DaySimulation {
     }
 }
 
-/// Spec §4.2: the whole configuration space must fit under this.
-private let dailyBudget = 1_200
+/// Spec §4.2: the whole configuration space must fit under this. Read from
+/// `RateConstants` rather than written down here, because the policy and the
+/// pacer now enforce this same number — a second copy would be free to drift
+/// from the one the code obeys.
+private let dailyBudget = RateConstants.dailyRequestBudget
 
 @Test func theDailyBudgetHoldsAcrossEveryReachableConfiguration() {
-    var worst = (interval: 0.0, count: 0, requests: 0)
+    // Both calendars, because the budget is a claim about the app and not
+    // about the US equity session table. `.continuous` is the one that has
+    // teeth: with the market never shut, nothing but the policy and the pacer
+    // stand between the watchlist and 2,880 requests a day.
+    var worst: [Day.Calendar: (interval: Double, count: Int, requests: Int)] = [:]
 
-    for interval in RateConstants.refreshIntervalChoices {
-        for count in [1, 2, 4, 10, 20] {
-            let sim = DaySimulation.run(userInterval: interval, watchlistCount: count)
-            #expect(sim.requests <= dailyBudget,
-                    "interval \(interval)s x \(count) symbols -> \(sim.requests) requests")
-            if sim.requests > worst.requests {
-                worst = (interval, count, sim.requests)
+    for calendar in [Day.Calendar.equity, .continuous] {
+        for interval in RateConstants.refreshIntervalChoices {
+            for count in [1, 2, 4, 10, 20] {
+                let sim = DaySimulation.run(userInterval: interval, watchlistCount: count,
+                                            calendar: calendar)
+                let overspend = "\(calendar), interval \(interval)s x \(count) symbols -> "
+                    + "\(sim.requests) requests"
+                #expect(sim.requests <= dailyBudget, "\(overspend)")
+                if sim.requests > (worst[calendar]?.requests ?? 0) {
+                    worst[calendar] = (interval, count, sim.requests)
+                }
             }
         }
     }
 
-    // Fail loudly if the sweep silently stopped exercising anything. The
-    // floor is 1,000 rather than a token 400 because it now has a second job:
-    // the shipped defect this file exposed — waking at the regular open and
-    // sleeping through pre-market — measured 938 here, and a sanity floor
-    // that a known regression walks under is not a sanity floor.
-    let notRunning = "the worst case was only \(worst.requests) requests; the simulation is "
+    // Fail loudly if either arm of the sweep silently stopped exercising
+    // anything. The floors are per-calendar because the two spend very
+    // different amounts: an equity day is shut for eight hours and quiet for
+    // another nine and a half, so a floor set from the continuous day's
+    // spending would be one the equity day walks under while working
+    // perfectly.
+    //
+    // Measured after the budget floor landed: 505 on the equity calendar
+    // (900s x 20), 1,180 on the continuous one (60s x 1). The floors sit
+    // below those by roughly a session's worth of cycles, which is enough
+    // room for a boundary to shift and not enough for a whole session to stop
+    // being polled.
+    let equity = worst[.equity]?.requests ?? 0
+    let continuous = worst[.continuous]?.requests ?? 0
+    let equityIdle = "the worst equity day was only \(equity) requests; the simulation is "
         + "not running, or extended hours have stopped being polled"
-    #expect(worst.requests > 1_000, "\(notRunning)")
+    let continuousIdle = "the worst continuous day was only \(continuous) requests; a market "
+        + "that never closes should be spending close to the whole budget"
+    #expect(equity > 400, "\(equityIdle)")
+    #expect(continuous > 900, "\(continuousIdle)")
 }
 
-@Test func theSpacingFloorMakesCostFlatInWatchlistSize() {
-    // Once the 30s floor binds, cost stops tracking watchlist size — a
-    // 20-symbol list and a 2-symbol list run at the same underlying rate,
-    // and differ only in how much each loses at session boundaries. That
-    // flatness is what the daily budget rests on, so it is what gets pinned.
-    // If some future change makes cost climb with watchlist size again, the
-    // floor has stopped doing its job and this fails before the budget does.
-    // count x 30s >= 60s. At two symbols the floor exactly meets the 60s
-    // interval rather than overriding it; above two it is the floor that sets
-    // the cadence. Either way the interval has stopped being what decides.
+@Test func theFloorsMakeCostFlatInWatchlistSize() {
+    // Once a floor binds, cost stops tracking watchlist size — a 20-symbol list
+    // and a 2-symbol list run at the same underlying rate, and differ only in
+    // how much each loses at session boundaries. Both floors scale linearly in
+    // the count, so the per-day cost `count / (k x count)` does not contain the
+    // count at all. That flatness is what the daily budget rests on, so it is
+    // what gets pinned. If some future change makes cost climb with watchlist
+    // size again, a floor has stopped doing its job and this fails before the
+    // budget does.
     let flooredCounts = [2, 4, 10, 20]
     let counts = flooredCounts.map { DaySimulation.run(userInterval: 60, watchlistCount: $0).requests }
     let lo = counts.min()!, hi = counts.max()!
-    // Measured spread is 4 (1156 at two and four symbols, 1160 at ten and
-    // twenty — the difference is boundary loss, not rate). 10 leaves room for
-    // a boundary to shift without leaving room for cost to track size again.
-    #expect(hi - lo <= 10, "spread across watchlist sizes was \(lo)...\(hi)")
+    // Measured spread is 16 (704 at two and four symbols, 710 at ten, 720 at
+    // twenty — boundary loss, not rate). 20 leaves room for a boundary to shift
+    // without leaving room for cost to track size again; a cost that tracked
+    // size would put twenty symbols ten times above two.
+    #expect(hi - lo <= 20, "spread across watchlist sizes was \(lo)...\(hi)")
 
-    // One symbol is the exception and must stay it: below the floor the
-    // user's 60s interval is what binds, so one request per 60s against the
-    // floored one per 30s — exactly half, by construction rather than by
-    // measurement, so it is pinned exactly.
+    // One symbol is the exception, and the *shape* of the exception is the
+    // interesting part. It used to be the whole day: with only the 30s floor,
+    // one symbol at a 60s setting ran on its interval everywhere and cost
+    // exactly half of a floored day. The budget floor is 72s a symbol, above
+    // the 60s interval, so the regular session is now floored at one symbol
+    // just as it is at twenty and costs the same there.
+    //
+    // What is left is the quiet sessions: `3 x max(60, 30 x 1)` is 180s, which
+    // clears the 72s budget floor, so pre- and post-market alone still run on
+    // the user's interval at one symbol. The whole shortfall is therefore one
+    // symbol's worth of one quiet day, derived here rather than measured.
     let single = DaySimulation.run(userInterval: 60, watchlistCount: 1).requests
-    #expect(single * 2 <= lo, "one symbol cost \(single) against a floored \(lo)")
+    let quietSeconds = (Day.regularOpen - Day.preOpen) + (Day.postClose - Day.regularClose)
+    let quietCycle = 60 * RateConstants.quietMultiplier
+    let oneSymbolQuiet = Int(quietSeconds / quietCycle)
+    let shortfall = "one symbol cost \(single) against a floored \(lo); the gap is "
+        + "\(lo - single) where one quiet day for one symbol is \(oneSymbolQuiet)"
+    #expect(lo - single == oneSymbolQuiet, "\(shortfall)")
 }
 
 @Test func theDayCostsWhatTheSessionStructurePredicts() {
@@ -196,11 +262,31 @@ private let dailyBudget = 1_200
     // interval, extended hours at a third of that, nothing overnight. A
     // ceiling taken from the whole 24 hours instead would be 2885 — looser
     // than the budget assertion above, and so unable to fail.
-    let quietSpacing = RateConstants.spacingSeconds * RateConstants.quietMultiplier
-    let ceiling = Int((Day.regularClose - Day.regularOpen) / RateConstants.spacingSeconds)
-        + Int((Day.regularOpen - Day.preOpen) / quietSpacing)
-        + Int((Day.postClose - Day.regularClose) / quietSpacing)
-        + Int(RateConstants.bucketCapacity)
+    // Derived from the two per-symbol floors, not from `spacingSeconds` alone.
+    // The old derivation used the 30s spacing floor by itself and produced
+    // 1,165 — which the sweep, once the budget floor landed, could no longer
+    // come within 445 requests of. A ceiling the measurement cannot approach is
+    // the same decoration as one it cannot fail, so the tighter floor is the
+    // one that has to appear here.
+    let budgetPerSymbol = RateConstants.secondsPerDay / Double(RateConstants.dailyRequestBudget)
+    let perSymbol = max(RateConstants.spacingSeconds, budgetPerSymbol)
+    let quietPerSymbol = max(RateConstants.spacingSeconds * RateConstants.quietMultiplier,
+                             budgetPerSymbol)
+
+    // Taken over the counts swept below rather than at any single one: the
+    // per-session `ceil` is what a continuous timeline spends crossing a
+    // session boundary, and how much that is depends on the count. Twenty
+    // symbols is the worst of them, at 725.
+    func sessionCeiling(_ count: Int) -> Int {
+        func term(_ seconds: Double, _ floorPerSymbol: Double) -> Int {
+            Int((seconds / (floorPerSymbol * Double(count))).rounded(.up)) * count
+        }
+        return term(Day.regularClose - Day.regularOpen, perSymbol)
+            + term(Day.regularOpen - Day.preOpen, quietPerSymbol)
+            + term(Day.postClose - Day.regularClose, quietPerSymbol)
+            + Int(RateConstants.bucketCapacity)
+    }
+    let ceiling = [1, 2, 4, 10, 20].map(sessionCeiling).max()!
 
     var worst = 0
     for interval in RateConstants.refreshIntervalChoices {
@@ -218,8 +304,9 @@ private let dailyBudget = 1_200
     // decoration in the other direction. Until the pre-market wake was fixed
     // the 220-request pre term was money the harness could not spend: the
     // honest bound on what it ran was ~945 against a measured 938, so 1165
-    // read far tighter than it was. Now every term is reachable and the gap is
-    // 5 requests — the bucket's opening burst, spent once at 04:00.
+    // read far tighter than it was. Every term is reachable now and the gap is
+    // 5 requests — the bucket's opening burst, spent once at 04:00 — with the
+    // ceiling at 725 and the sweep's worst day at 720.
     let unreachable = "the ceiling is \(ceiling) but the sweep only spends \(worst); "
         + "a term in it has become unreachable"
     #expect(ceiling - worst <= 10, "\(unreachable)")
@@ -233,7 +320,7 @@ private let dailyBudget = 1_200
 }
 
 @Test func aWeekendCostsAlmostNothing() {
-    let sim = DaySimulation.run(userInterval: 60, watchlistCount: 20, marketOverride: .closed)
+    let sim = DaySimulation.run(userInterval: 60, watchlistCount: 20, calendar: .closed)
     #expect(sim.requests == 0)
 }
 
@@ -261,11 +348,29 @@ private let dailyBudget = 1_200
     #expect(saving.requests <= lowPowerCeiling,
             "low power cost \(saving.requests) against a derived ceiling of \(lowPowerCeiling)")
 
-    // And the saving must be the regular session's, not something smaller
-    // that happens to be under the ceiling: two thirds of regular hours.
-    let expectedSaving = regular - Int(Double(regular) / RateConstants.quietMultiplier)
-    #expect(normal.requests - saving.requests >= expectedSaving - 10,
-            "low power saved only \(normal.requests - saving.requests) of an expected \(expectedSaving)")
+    // And the saving must be the regular session's, not something smaller that
+    // happens to be under the ceiling. It is no longer two thirds of regular
+    // hours, and the reason is worth writing down: at ten symbols the budget
+    // floor already holds the regular cycle at 720s, while Low Power stretches
+    // `max(180, 10 x 30) = 300` to 900s. The cycle goes 720 -> 900, not 300 ->
+    // 900, so the saving is a fifth of regular hours rather than two thirds —
+    // 65 requests against the 520 this test used to expect. The floor took most
+    // of that saving already and is not going to pay it twice.
+    //
+    // Derived from the two cycles the policy actually returns, and bounded on
+    // both sides: a one-sided `>=` here would be satisfied by a Low Power mode
+    // that stopped fetching altogether.
+    let regularCycle = RefreshPolicy.cycleInterval(userIntervalSeconds: 180, watchlistCount: 10,
+                                                   marketState: .regular, lowPowerMode: false)
+    let savingCycle = RefreshPolicy.cycleInterval(userIntervalSeconds: 180, watchlistCount: 10,
+                                                  marketState: .regular, lowPowerMode: true)
+    let regularSpan = Day.regularClose - Day.regularOpen
+    let expectedSaving = Int(regularSpan / regularCycle * 10) - Int(regularSpan / savingCycle * 10)
+    let saved = normal.requests - saving.requests
+    #expect(saved >= expectedSaving - 10,
+            "low power saved only \(saved) of an expected \(expectedSaving)")
+    #expect(saved <= expectedSaving + 10,
+            "low power saved \(saved), well past the \(expectedSaving) the regular session holds")
 }
 
 @Test func aClosedMarketProducesNoBusyLoop() {
@@ -370,10 +475,37 @@ private let dailyBudget = 1_200
         clock.advance(1)
     }
 
-    // Twice over, so this fails on a halved refill rate rather than only at
-    // the moment supply and demand exactly collide.
-    #expect(worstDemand * 2 <= supply,
+    // Not "twice over" any more, and the reason is the point of the daily
+    // bucket. That bucket refills at exactly the budget, and the policy's own
+    // budget floor targets exactly the budget, so demanding 2x headroom would
+    // be demanding that the policy spend at most half the allowance it is
+    // designed to spend. On a market that never closes the two meet almost
+    // exactly: 1,200 asked against 1,220 supplied. The margin visible here is
+    // the US equity calendar's overnight, and it is a property of the calendar
+    // rather than of the pacer, so it is not what gets asserted.
+    #expect(worstDemand <= supply,
             "the worst day asks \(worstDemand); the pacer supplies \(supply) in the same day")
+
+    // The claim the headroom comparison used to stand in for, measured
+    // directly: across both calendars and every configuration, the pacer
+    // refuses nothing. This assertion had no teeth when the bucket refilled
+    // every 30 seconds — the simulator spaces its own requests at exactly
+    // `spacingSeconds`, so it could not outrun that bucket however small it
+    // was. The daily bucket refills every 72 seconds, on a period the simulator
+    // knows nothing about, so a mis-sized one shows up here immediately:
+    // building it with `bucketCapacity` (5) instead of one full watchlist pass
+    // measured 4,277 refusals at ten symbols and 30,660 at twenty on a
+    // continuous day, and turned a cold launch into a 24-minute dribble.
+    for calendar in [Day.Calendar.equity, .continuous] {
+        for interval in RateConstants.refreshIntervalChoices {
+            for count in [1, 2, 4, 10, 20] {
+                let swept = DaySimulation.run(userInterval: interval, watchlistCount: count,
+                                              calendar: calendar)
+                #expect(swept.pacerRefusals == 0,
+                        "\(calendar) \(interval)s x \(count) -> \(swept.pacerRefusals) refusals")
+            }
+        }
+    }
 
     // A day-long count cannot see the burst allowance: over 24 hours the
     // capacity contributes its own size and nothing more, and cutting

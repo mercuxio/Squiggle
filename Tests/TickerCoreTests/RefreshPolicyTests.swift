@@ -172,7 +172,15 @@ private let neverBlindLongerThan: Double = 3600
                                             lowPowerMode: false)
     #expect(RefreshPolicy.decide(input(visibility: .occluded)) == .wait(seconds: cycle))
 
-    let quiet = cycle * RateConstants.quietMultiplier
+    // Not `cycle * quietMultiplier`. The multiplier stretches the cadence the
+    // user asked for, and the budget floor is then applied to the result — so
+    // once the floor is the binding term in regular hours, the quiet cycle is
+    // *not* three times the regular one. At these inputs (4 symbols, the 180s
+    // default) regular hours run at the floor, `max(180, 120, 288) = 288`,
+    // while quiet hours run at `max(180 x 3, 288) = 540`. Both are pinned
+    // outright, because deriving one from the other is what hid the difference.
+    #expect(cycle == 288)
+    let quiet: Double = 540
     #expect(RefreshPolicy.decide(input(visibility: .occluded, lowPower: true))
             == .wait(seconds: quiet))
     #expect(RefreshPolicy.decide(input(market: .pre, visibility: .occluded))
@@ -202,20 +210,33 @@ private let neverBlindLongerThan: Double = 3600
     #expect(both == 300 * RateConstants.quietMultiplier)
 }
 
-@Test func theSpacingFloorRaisesTheCycleForLargeWatchlists() {
-    // Spec §4.1: cycleInterval = max(userInterval, n × spacing). With 20
-    // symbols the floor is 600s, so a 60s setting cannot be honoured — and
-    // must not be pretended to be.
+@Test func theFloorsRaiseTheCycleForLargeWatchlists() {
+    // Spec §4.1: a 60s setting cannot be honoured across 20 symbols, and must
+    // not be pretended to be. Two floors say so and the larger one wins: 20 x
+    // 30s of spacing is 600s, and the budget floor is 20 x 72s = 1,440s.
+    //
+    // Both are asserted, and in that order, because the spacing floor alone is
+    // what this test used to check — and a 600s cycle on an instrument that
+    // never closes is 2,880 requests a day against a 1,200 budget. Passing the
+    // weaker floor is not evidence of passing the stronger one.
     let interval = RefreshPolicy.cycleInterval(userIntervalSeconds: 60, watchlistCount: 20,
                                                marketState: .regular, lowPowerMode: false)
-    #expect(interval == 20 * RateConstants.spacingSeconds)
+    #expect(interval >= 20 * RateConstants.spacingSeconds)
+    #expect(interval == RefreshPolicy.budgetFloor(watchlistCount: 20))
+    #expect(interval == 1_440)
 }
 
 @Test func aWatchlistLargerThanSquiggleSupportsIsCappedNotBelieved() {
     // `maxWatchlistCount` is the largest list the app admits. Without the
     // clamp the floor scales with the number given, and `Int.max` symbols
     // become a cycle of nine trillion years — a hang wearing a cadence's name.
-    let capped = Double(RateConstants.maxWatchlistCount) * RateConstants.spacingSeconds
+    // The cap is expressed as "behaves exactly as `maxWatchlistCount` does"
+    // rather than as one floor's arithmetic, so it keeps holding whichever
+    // floor happens to bind. It is 1,440s today, from the budget floor.
+    let capped = RefreshPolicy.cycleInterval(userIntervalSeconds: 60,
+                                             watchlistCount: RateConstants.maxWatchlistCount,
+                                             marketState: .regular, lowPowerMode: false)
+    #expect(capped == 1_440)
     let oversized = RefreshPolicy.cycleInterval(userIntervalSeconds: 60, watchlistCount: 100_000,
                                                 marketState: .regular, lowPowerMode: false)
     #expect(oversized == capped)
@@ -357,11 +378,16 @@ private let neverBlindLongerThan: Double = 3600
     }
 
     // Every interval Settings can actually produce is obeyed, so the bound
-    // rejects corruption and nothing else.
+    // rejects corruption and nothing else. A single symbol's budget floor is
+    // 72s, which the 60s choice sits under, so the comparison is against the
+    // floors rather than against the raw choice — otherwise this would be
+    // asserting that the floors do not apply.
     for good in RateConstants.refreshIntervalChoices {
         let cycle = RefreshPolicy.cycleInterval(userIntervalSeconds: good, watchlistCount: 1,
                                                 marketState: .regular, lowPowerMode: false)
-        #expect(cycle == good, "interval \(good) → \(cycle)")
+        let honoured = max(good, max(RateConstants.spacingSeconds,
+                                     RefreshPolicy.budgetFloor(watchlistCount: 1)))
+        #expect(cycle == honoured, "interval \(good) → \(cycle)")
     }
 }
 

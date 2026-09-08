@@ -55,6 +55,20 @@ public enum RateConstants {
     /// and a probe that is never reissued wedges the breaker permanently.
     public static let probeTimeoutSeconds: Double = 60
 
+    /// Spec §4.2: the whole configuration space must fit under this, on every
+    /// calendar and not only on one that shuts for eight hours a night.
+    ///
+    /// A constant here rather than a literal in `BudgetSweepTests` because
+    /// `RefreshPolicy.budgetFloor` and `RequestPacer`'s daily bucket both
+    /// enforce it: the number the tests check against and the number the code
+    /// obeys have to be the same number, or the test is checking a second copy
+    /// that is free to drift.
+    public static let dailyRequestBudget: Int = 1_200
+
+    /// The span the budget is a budget *over*. Written once so the two places
+    /// that divide by it cannot disagree about how long a day is.
+    public static let secondsPerDay: Double = 24 * 3600
+
     public static let maxWatchlistCount: Int = 20
 
     /// The largest `quotesCount` a search request ever asks Yahoo for, and

@@ -135,27 +135,61 @@ import Testing
             #expect(estimate <= sim.requests + acceptableOvershoot,
                     "\(label): estimate overshoots the sweep by more than \(acceptableOvershoot)")
 
-            // Spec §4.2's cap used to be checked here too, once per grid
-            // point, as `estimate <= 1_200`. It has moved to
-            // `thePacersOwnCeilingSitsUnderTheDailyBudget` below, because it
-            // was unfalsifiable where it stood: `estimatedDailyRequests` ends
-            // in `min(naive, pacerDailyCeiling)` and that ceiling is a
-            // constant 1,165 with no argument in it, so the assertion held for
-            // any implementation that kept the clamp — including one wrong by
-            // hundreds at every point on this grid. The claim is about the
-            // rate constants, so it is now asserted once, against them.
+            // Spec §4.2's cap is deliberately *not* asserted here, and the
+            // reason has changed, so it is worth writing down again.
+            //
+            // It used to be unfalsifiable because `estimatedDailyRequests`
+            // ended in `min(naive, pacerDailyCeiling)` — a constant with no
+            // argument in it — so the assertion held for any implementation
+            // that kept the clamp, including one wrong by hundreds at every
+            // point on this grid. That clamp is gone (see `Diagnosis`).
+            //
+            // It is still unfalsifiable, for a better reason, and this one is
+            // measured rather than argued: this estimator prices a *US equity*
+            // day, and 6.5h of regular session against a 30s spacing floor
+            // cannot buy 1,200 requests. Swept over every watchlist size 1...20
+            // and intervals down to 1s, with `cycleInterval`'s budget floor
+            // deleted, the largest number this function returns is 1,197 — at
+            // 1s x 19 symbols, a point the Settings menu cannot even reach.
+            // An assertion that survives deleting the mechanism it is meant to
+            // guard is decoration, and this file has already been burned once
+            // by keeping one.
+            //
+            // The budget is asserted where it can fail: on a calendar that
+            // offers no overnight relief, in
+            // `thePolicyHoldsTheBudgetWithoutHelpFromThePacersBackstop` below
+            // (1,440/1,920/2,880 against 1,200 with the floor deleted), and
+            // end-to-end in `theDailyBudgetHoldsAcrossEveryReachableConfiguration`.
+            // What this grid checks is that the estimate tracks the simulation,
+            // which is the only claim it is in a position to make.
         }
     }
 }
 
-@Test func thePacersOwnCeilingSitsUnderTheDailyBudget() {
-    // Spec §4.2's 1,200/day budget, asserted where it is actually decided.
-    // This fails the day someone raises `bucketCapacity` or lowers
-    // `spacingSeconds` far enough to push the pacer over budget, which is
-    // exactly the change it exists to catch — and unlike the per-call check it
-    // replaced, it can fail.
-    #expect(Diagnosis.pacerDailyCeiling <= 1_200,
-            "the pacer can emit \(Diagnosis.pacerDailyCeiling) requests/day, over spec §4.2's budget")
+@Test func thePolicyHoldsTheBudgetWithoutHelpFromThePacersBackstop() {
+    // The pacer's daily bucket is the backstop, and a backstop that binds in
+    // normal operation is not a backstop — it is the mechanism, running with no
+    // margin behind it. So the policy has to hold the budget on its own, on the
+    // calendar that offers it no help at all: an instrument that never closes,
+    // where every second of the day is a `.regular` second and there is no
+    // overnight stretch to average the cost down.
+    //
+    // This is the claim the removed `pacerDailyCeiling` constant used to make
+    // and could not keep. That constant summed a 6.5h regular session and two
+    // quiet ones — a US equity calendar — and so asserted the budget held only
+    // where the calendar was already holding it. Here the calendar contributes
+    // nothing.
+    for interval in RateConstants.refreshIntervalChoices {
+        for count in [1, 2, 4, 10, 20] {
+            let cycle = RefreshPolicy.cycleInterval(userIntervalSeconds: interval,
+                                                    watchlistCount: count,
+                                                    marketState: .regular,
+                                                    lowPowerMode: false)
+            let perDay = Double(count) * RateConstants.secondsPerDay / cycle
+            #expect(perDay <= Double(RateConstants.dailyRequestBudget),
+                    "interval \(interval)s x \(count) symbols -> \(perDay) requests/day, never closing")
+        }
+    }
 }
 
 @Test func theSpacingFloorIsReportedWhenItOverridesTheChosenInterval() {
@@ -168,12 +202,19 @@ import Testing
     #expect(Diagnosis.pacerThrottlesSettings(userIntervalSeconds: 60, watchlistCount: 3))
 }
 
-@Test func aSettingTheSpacingFloorCanHonourIsNotReportedAsThrottled() {
-    // 2 symbols need 60s per pass, which is exactly what a 60s interval asks
-    // for: the floor binds without overriding anything, and warning here would
-    // spend the signal on a user with nothing to fix.
-    #expect(!Diagnosis.pacerThrottlesSettings(userIntervalSeconds: 60, watchlistCount: 2))
-    #expect(!Diagnosis.pacerThrottlesSettings(userIntervalSeconds: 900, watchlistCount: 20))
+@Test func aSettingEveryFloorCanHonourIsNotReportedAsThrottled() {
+    // Warning a user with nothing to fix spends the signal. These are the
+    // settings both floors clear: one symbol at 15 minutes wants a cycle 12.5
+    // times the 72s the budget floor asks for, and four symbols at 5 minutes
+    // want 300s against a 288s floor.
+    //
+    // The rows here used to be `60 x 2` and `900 x 20`, chosen when `n x 30s`
+    // was the only floor. The budget floor is the larger one at every watchlist
+    // size — 72s a symbol against 30 — so both of those are now genuinely
+    // throttled and belong in the test above, not this one. The name changed
+    // with them: it is no longer the spacing floor that decides this.
+    #expect(!Diagnosis.pacerThrottlesSettings(userIntervalSeconds: 900, watchlistCount: 1))
+    #expect(!Diagnosis.pacerThrottlesSettings(userIntervalSeconds: 300, watchlistCount: 4))
     #expect(!Diagnosis.pacerThrottlesSettings(userIntervalSeconds: 60, watchlistCount: 0))
 }
 
@@ -187,12 +228,51 @@ import Testing
     #expect(throttled)
 }
 
-@Test func theBudgetEstimateIsFlatAcrossWatchlistSizesAtTheSpacingFloor() {
-    // The invariant from spec §4.2, restated where a user can see it: once
-    // the 30s floor binds, adding symbols costs nothing per day.
-    let small = Diagnosis.estimatedDailyRequests(userIntervalSeconds: 60, watchlistCount: 4)
-    let large = Diagnosis.estimatedDailyRequests(userIntervalSeconds: 60, watchlistCount: 20)
-    #expect(small == large)
+@Test func theBudgetEstimateIsFlatAcrossWatchlistSizesOnceTheFloorsBind() {
+    // The invariant from spec §4.2, restated where a user can see it: once a
+    // floor binds, adding symbols costs nothing per day. Both floors scale
+    // linearly in the count, so `count / (k x count)` does not depend on the
+    // count at all — a twentieth symbol is free.
+    //
+    // Asserted on the rate first, because that is where the invariant is exact,
+    // and the number it lands on is the budget itself: at a 60s setting the
+    // budget floor binds at every size, so a never-closing day costs exactly
+    // the budget and not a request more.
+    for count in [1, 2, 4, 10, 20] {
+        let cycle = RefreshPolicy.cycleInterval(userIntervalSeconds: 60, watchlistCount: count,
+                                                marketState: .regular, lowPowerMode: false)
+        let perDay = Double(count) * RateConstants.secondsPerDay / cycle
+        #expect(perDay == Double(RateConstants.dailyRequestBudget),
+                "\(count) symbols -> \(perDay) requests/day")
+    }
+
+    // The reported estimate inherits that flatness only approximately, and only
+    // from two symbols up. Two things get in the way, and neither is a cost
+    // that grew:
+    //
+    // One symbol is genuinely cheaper, in the quiet sessions alone: `3 x max(60,
+    // 30 x 1)` is 180s, which clears the 72s budget floor, so pre- and
+    // post-market still run on the user's own interval there. It reports 515
+    // against 706 at two symbols, and that gap is measured exactly in
+    // `BudgetSweepTests.theFloorsMakeCostFlatInWatchlistSize`.
+    //
+    // Above that, each of the three sessions rounds its own `sessionSeconds /
+    // cycle` up, so the estimate can carry as much as one extra pass per
+    // session — 3 x count requests — over the flat rate. That is the envelope
+    // asserted here. Measured across 2, 4, 10 and 20 symbols the spread is 14
+    // requests (706 to 720) where the envelope allows 66, so this stays a bound
+    // on a rounding artefact and not a licence for cost to track size: a cost
+    // that tracked size would put twenty symbols at ten times two.
+    let reference = 2
+    let base = Diagnosis.estimatedDailyRequests(userIntervalSeconds: 60,
+                                                watchlistCount: reference)
+    for count in [4, 10, 20] {
+        let estimate = Diagnosis.estimatedDailyRequests(userIntervalSeconds: 60,
+                                                        watchlistCount: count)
+        let envelope = 3 * (count + reference)
+        #expect(abs(estimate - base) <= envelope,
+                "\(reference) symbols -> \(base), \(count) symbols -> \(estimate)")
+    }
 }
 
 @Test func aLongerRefreshIntervalEstimatesFewerRequests() {

@@ -84,12 +84,48 @@ public enum RefreshPolicy {
             : RateConstants.defaultRefreshInterval
     }
 
+    /// The watchlist size this type will reason about: at least one symbol,
+    /// never more than the app admits. Its own function because both
+    /// `cycleInterval` and `budgetFloor` need the same clamp, and `Int.max`
+    /// symbols becoming a cycle of nine trillion years is a hang wearing a
+    /// cadence's name.
+    private static func clampedCount(_ watchlistCount: Int) -> Int {
+        max(1, min(watchlistCount, RateConstants.maxWatchlistCount))
+    }
+
+    /// The shortest cycle that keeps a full pass over `watchlistCount` symbols
+    /// inside `RateConstants.dailyRequestBudget` on an instrument that never
+    /// closes.
+    ///
+    /// One pass costs `count` requests, so a day of passes at cycle `c` costs
+    /// `count × 86_400 / c`; requiring that to stay under the budget gives
+    /// `c >= count × 86_400 / budget`. At 20 symbols that is 1,440 seconds, at
+    /// 5 symbols 360, at one symbol 72.
+    ///
+    /// This exists because the budget was, until it did, an arithmetic
+    /// consequence of the US equity calendar rather than a property anything
+    /// enforced: the 30-second spacing floor bounds a burst and cannot bound a
+    /// day, and a `BTC-USD` or `EURUSD=X` in the watchlist is a market that
+    /// never shuts. Deriving the bound from the budget itself rather than from
+    /// market hours is the point — a market-hours heuristic is what produced
+    /// the overshoot.
+    ///
+    /// Its own function, like `honouredInterval`, so `Diagnosis` and the tests
+    /// can name the same number the policy obeys instead of re-deriving it.
+    public static func budgetFloor(watchlistCount: Int) -> Double {
+        Double(clampedCount(watchlistCount)) * RateConstants.secondsPerDay
+            / Double(RateConstants.dailyRequestBudget)
+    }
+
     /// How long one full pass over the watchlist should take.
     ///
-    /// `max(userInterval, n × spacing)` — the 30s floor between requests means
-    /// a 20-symbol watchlist needs ten minutes per pass whatever the user
-    /// chose. Squiggle honours the floor and reports the real cadence rather
-    /// than pretending to obey a setting it cannot.
+    /// `max(max(userInterval, n × spacing) × quiet, budget floor)` — the 30s
+    /// floor between requests means a 20-symbol watchlist needs ten minutes per
+    /// pass whatever the user chose, and the budget floor (`budgetFloor` above)
+    /// means it needs twenty-four. Squiggle honours both floors and reports the
+    /// real cadence rather than pretending to obey a setting it cannot. See the
+    /// body for why the budget floor sits outside the quiet multiplier rather
+    /// than inside it.
     public static func cycleInterval(userIntervalSeconds: Double,
                                      watchlistCount: Int,
                                      marketState: MarketState,
@@ -102,14 +138,29 @@ public enum RefreshPolicy {
         // honour. See `honouredInterval` above for the rule itself.
         let requested = honouredInterval(userIntervalSeconds)
 
-        let count = max(1, min(watchlistCount, RateConstants.maxWatchlistCount))
-        let floor = Double(count) * RateConstants.spacingSeconds
-        let base = max(requested, floor)
+        let count = clampedCount(watchlistCount)
+        let spacingFloor = Double(count) * RateConstants.spacingSeconds
+        let base = max(requested, spacingFloor)
 
         // Extended hours and Low Power Mode each stretch the cycle. They do
         // not compound: the user asked for a slower ticker, not a stopped one.
         let quiet = marketState == .pre || marketState == .post || lowPowerMode
-        return quiet ? base * RateConstants.quietMultiplier : base
+        let cadence = quiet ? base * RateConstants.quietMultiplier : base
+
+        // The budget floor is applied *after* the stretch, not folded into
+        // `base` above, and the difference is not cosmetic: `max(a, f) × k` and
+        // `max(a × k, f)` differ by a factor of `k` whenever the floor is the
+        // binding term. The multiplier stretches the cadence the user asked
+        // for; the budget floor is a lower bound on the cycle itself, and it is
+        // already sufficient on its own — a cycle at the floor spends exactly
+        // the budget over a day that never closes, so tripling it in quiet
+        // hours would buy a third of the budget nobody asked to save at the
+        // cost of a ticker three times staler. It also went blind: at twenty
+        // symbols in Low Power the folded form produced a 4,320-second cycle,
+        // which the closed-market fallback below then adopted, breaking
+        // `theUnknownOpenFallbackNeverGoesBlindForAnHour`. This is the shortest
+        // cycle that honours both the stretch and the budget.
+        return max(cadence, budgetFloor(watchlistCount: count))
     }
 
     /// Whether the strip should dim (spec §7). Measured against the cycle

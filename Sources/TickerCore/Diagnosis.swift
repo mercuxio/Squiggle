@@ -99,6 +99,17 @@ public enum Diagnosis {
     /// why this is an estimate and the sweep is the number actually asserted
     /// against.
     ///
+    /// **This number is not clamped, and must not be.** It used to end in
+    /// `min(naive, pacerDailyCeiling)` — a cap derived from a 16-hour US equity
+    /// day — which made it structurally incapable of returning a figure over
+    /// spec §4.2's budget, for any input at all. That is the shape of the
+    /// original defect: the overshoot was derived correctly three separate
+    /// times in this file's own comments and then capped out of the report each
+    /// time. An estimate that cannot express the condition it exists to reveal
+    /// is not an estimate. The budget is now held by `RefreshPolicy.budgetFloor`
+    /// and `RequestPacer`'s daily bucket, which are mechanisms; this is a
+    /// report, and a report's job is to say what it sees.
+    ///
     /// Each session's count rounds its `sessionSeconds / cycle` **up**, not
     /// down. `DaySimulation` runs one continuous timeline: a cycle already in
     /// flight when a session boundary passes carries its deadline across that
@@ -112,8 +123,7 @@ public enum Diagnosis {
     /// keeps this a genuine upper bound rather than a number the sweep can
     /// walk under. It never widens the estimate by more than one session's
     /// worth of one cycle, so the overshoot stays small — worst measured case
-    /// is 900s × 20, 40 requests over 760, and `min` with the pacer ceiling
-    /// still holds it near the sweep everywhere the floor did.
+    /// is 900s × 20, 40 requests over 760.
     public static func estimatedDailyRequests(userIntervalSeconds: Double,
                                               watchlistCount: Int) -> Int {
         guard watchlistCount > 0 else { return 0 }
@@ -127,62 +137,50 @@ public enum Diagnosis {
             return Int((sessionSeconds / cycle).rounded(.up)) * watchlistCount
         }
 
-        let naive = requests(regularSeconds, marketState: .regular)
+        return requests(regularSeconds, marketState: .regular)
             + requests(preSeconds, marketState: .pre)
             + requests(postSeconds, marketState: .post)
-
-        // Even split by session, the naive sum can still overshoot once the
-        // spacing floor binds tighter than a session's own arithmetic implies.
-        // The pacer's own ceiling is what actually bounds the day, so cap the
-        // estimate there.
-        return min(naive, pacerDailyCeiling)
     }
 
     // The three sessions `BudgetSweepTests`' `Day` model sweeps against —
     // 04:00 pre-open, 09:30-16:00 regular, 20:00 post-close. Hoisted out of
-    // `estimatedDailyRequests` so `pacerDailyCeiling` below is derived from
-    // the same numbers rather than from a second copy of them.
+    // `estimatedDailyRequests` because all three arms need them.
+    //
+    // A `pacerDailyCeiling` constant used to live here, derived from these same
+    // three spans and asserted to sit under the budget. It is gone with the
+    // clamp that was its only caller: it described the pacer's day bound in
+    // terms of a US equity calendar, which is the assumption that let the
+    // budget be exceeded on an instrument that never closes. The pacer's real
+    // day bound is `RateConstants.dailyRequestBudget` plus its burst, is stated
+    // by `RequestPacer` itself, and is measured second-by-second in
+    // `theDailyBucketHoldsAWholeDayToTheBudget` — a bound worth having is one
+    // the type that enforces it can be asked for.
     private static let regularSeconds: Double = 6.5 * 3600
     private static let preSeconds: Double = 5.5 * 3600
     private static let postSeconds: Double = 4 * 3600
 
-    /// The most requests the pacer can emit in one trading day, whatever the
-    /// user's settings say: one every `spacingSeconds` through the regular
-    /// session, one every `spacingSeconds × quietMultiplier` through each quiet
-    /// one, plus a full bucket's worth of burst.
-    ///
-    /// No argument appears in it — it is a constant of the rate table, 1,165
-    /// today — which is why spec §4.2's 1,200/day budget is a claim about
-    /// *this* and not about any one call's return value. It is asserted once,
-    /// in `thePacersOwnCeilingSitsUnderTheDailyBudget`, where raising
-    /// `bucketCapacity` or lowering `spacingSeconds` fails a test; asserted
-    /// per-call against an already-clamped estimate it held for any
-    /// implementation at all, which is how it came to be checked 20 times and
-    /// mean nothing.
-    static let pacerDailyCeiling: Int = {
-        let quietSpacing = RateConstants.spacingSeconds * RateConstants.quietMultiplier
-        return Int(regularSeconds / RateConstants.spacingSeconds)
-            + Int(preSeconds / quietSpacing)
-            + Int(postSeconds / quietSpacing)
-            + Int(RateConstants.bucketCapacity)
-    }()
-
     /// Whether the pacer, rather than the user's chosen interval, is what sets
     /// how often Squiggle actually fetches (R79).
     ///
-    /// `RefreshPolicy.cycleInterval` takes `max(honoured interval, n × 30s)`:
-    /// the floor between any two requests means a 20-symbol watchlist needs
-    /// ten minutes per pass whatever the user picked. When that floor is the
-    /// larger term the ticker is slower than its own settings claim — a 60s
-    /// interval across 20 symbols runs a 600s cycle — and nothing else in the
+    /// `RefreshPolicy.cycleInterval` floors the cycle at both `n × 30s` and the
+    /// budget-derived `n × 86_400 / dailyRequestBudget`. When either floor is
+    /// the larger term the ticker is slower than its own settings claim — a 60s
+    /// interval across 20 symbols runs a 1,440s cycle — and nothing else in the
     /// app says so.
     ///
-    /// This is the condition worth reporting, and the reason it replaced a
-    /// comparison against the daily budget: `estimatedDailyRequests` ends in
-    /// `min(naive, pacerDailyCeiling)`, and that ceiling is a constant below
-    /// the budget, so "is the estimate over budget" was unreachable for every
-    /// possible input. It said `[ok]` to precisely the user it should have
-    /// warned.
+    /// This reports *that* condition and nothing else. It is deliberately not
+    /// the over-budget check: this returns true exactly when the floors bind,
+    /// which after the budget floor landed is a common and entirely healthy
+    /// state, whereas being over budget is now a genuine fault. The two used to
+    /// be conflated here because the over-budget question was unanswerable —
+    /// `estimatedDailyRequests` ended in `min(naive, pacerDailyCeiling)`, a
+    /// constant below the budget, so "is the estimate over budget" was
+    /// unreachable for every possible input and said `[ok]` to precisely the
+    /// user it should have warned. That clamp is gone;
+    /// `estimatedDailyRequests` can now return a figure over
+    /// `RateConstants.dailyRequestBudget`, and comparing the two is the
+    /// over-budget check that was missing. `squigglectl doctor` is where that
+    /// comparison belongs, since it is the thing with a status to report.
     ///
     /// Compared against `.regular` with Low Power Mode off because the quiet
     /// multiplier scales the cycle and not the setting: including it would
