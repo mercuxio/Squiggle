@@ -7234,9 +7234,27 @@ static func mark(_ status: CheckStatus) -> String {
 }
 ```
 
-**`doctor` prints no quote values, no file contents and no URLs with query
-strings.** Its output is meant to be pasteable into an email, and the whole
-point of never persisting a credential is undone if the diagnostic prints one.
+**`doctor` prints no quote values, no file contents, no URLs with query
+strings, and no absolute filesystem paths.** Its output is meant to be
+pasteable into an email, and the whole point of never persisting a credential
+is undone if the diagnostic prints one.
+
+The filesystem clause is a correction (ruling R44), and it is not hypothetical.
+`TickerError.storeCorrupt` carries a `URL` — the path the corrupt file was set
+aside to, something like
+`/Users/<account>/Library/Application Support/Squiggle/squiggle.json.bad-2026-09-08`.
+That URL has no query string, so the original wording permitted printing it
+while appearing to forbid exactly this kind of leak. An absolute path discloses
+the user's account name, which is a real name often enough to matter, in a
+string the support policy actively asks them to paste into an email.
+
+Print the **last path component only** where a location must be named at all
+(`squiggle.json.bad-2026-09-08`), and prefer naming no path: the check's label
+already says which file it is about. The architecture makes this easy to hold
+rather than easy to forget — `TickerCore` vends no user-facing strings, so
+`squigglectl` is the only place a path could be interpolated, and the
+`.storeCorrupt` case in `Diagnosis.status(for:)` deliberately ignores its
+payload.
 
 - [ ] **Step 6: Test the wording layer**
 
