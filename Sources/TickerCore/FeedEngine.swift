@@ -63,8 +63,8 @@ public struct FeedEngine {
     /// the network one, because retrying a parse failure faster buys nothing.
     private var contractCircuit: CircuitBreaker
 
-    public init(clock: any MonotonicClock, random: any Randomizing, symbols: [Symbol],
-                userIntervalSeconds: Double) {
+    public init(clock: any MonotonicClock, random: any Randomizing = SystemRandom(),
+                symbols: [Symbol], userIntervalSeconds: Double) {
         self.clock = clock
         self.symbols = symbols
         self.userIntervalSeconds = userIntervalSeconds
