@@ -73,7 +73,9 @@ Captured:
 - [ ] 401-body.json — RECONSTRUCTED, not captured
 
 Still owed (rate-limit-gated, NOT clock-gated — retry it on its own):
-- [ ] search-apple.json — `v1/finance/search?q=apple`. Six attempts across
+- [ ] search-apple.json — `v1/finance/search?q=apple`, hand-captured (`squigglectl probe --record`
+      only fetches `v8/finance/chart` — see "squigglectl probe --record"
+      below — so it cannot produce a search response). Six attempts across
       2026-09-08 returned 429 (see the retry log below); the endpoint
       remained rate-limited through Task 15's dispatch. Under ruling R66,
       Task 15 did **not** block on the missing capture: it proceeded against
@@ -131,18 +133,35 @@ captured set; each owed fixture gets its test when it lands.
 - `search-apple.json` stays on the owed list below, to be captured during the
   Task 19 trading day from the user's own network.
 
-## `squigglectl probe --record` supersedes ad hoc capture (Task 18)
+## `squigglectl probe --record` supersedes ad hoc capture for chart fixtures (Task 18)
 
 - 2026-09-08. Every fixture above was captured by hand, one request at a
-  time, outside the built tool. Task 18 adds `squigglectl probe <symbol>
-  --record`, which fetches once, refuses to overwrite a directory that
-  already holds a capture for the day, writes the body to
-  `Tests/Fixtures/yahoo-<date>/chart-<symbol>.json`, and appends a bullet
-  to this log itself — so this file no longer needs a human to remember to
-  update it after a capture.
-- Going forward, a fixture refresh (the recaptures still owed below, and any
-  future one) should go through `--record` rather than a hand-run script,
-  so the log entry and the file it describes are never out of sync.
+  time, outside the built tool. Task 18 adds
+  `squigglectl probe <symbol> --record <name>`, which fetches once from
+  `v8/finance/chart` — `probe` makes exactly one call, always that endpoint —
+  refuses to overwrite the fixture **file** if one already exists for that
+  name and day, writes the body to
+  `Tests/Fixtures/yahoo-<date>/<name>.json`, and appends a bullet to this log
+  itself — so this file no longer needs a human to remember to update it
+  after a capture. `--record` requires a name; `squigglectl probe <symbol>
+  --record` with nothing after the flag is a parse error, not an accepted
+  shorthand.
+- `<name>` is the **scenario**, not the symbol — that is the axis this corpus
+  is organised on (`regular-session`, `pre-market`, `post-market`, and so on),
+  which is why three same-day AAPL captures (pre, regular, post) land in
+  three different files instead of colliding. The refusal above is keyed on
+  the file that name and day resolve to, so a second scenario captured the
+  same day is a different file, not a collision — only recapturing the exact
+  same name on the exact same day is refused.
+- `--record` captures **chart** responses only. It is the right tool for
+  every owed *chart* recapture below: regular-session, pre-market,
+  post-market, weekend, crypto-while-equities-closed, newly-listed, delisted,
+  and halted.
+- `search-apple.json` is a **search** response (`v1/finance/search`), and
+  `--record` cannot produce it — there is no flag or code path that points
+  `probe` at that endpoint. It stays hand-captured and is marked as such on
+  the owed list above; a future recapture of it does not go through
+  `--record`.
 - Ruling R76 (Task 18): this task implemented and tested `--record` entirely
   against the recorded fixtures already in `Tests/Fixtures/` — no network
   request was made while building it, and no fixture in this repository was
