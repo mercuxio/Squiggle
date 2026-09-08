@@ -204,11 +204,22 @@ private let dailyBudget = RateConstants.dailyRequestBudget
     // spending would be one the equity day walks under while working
     // perfectly.
     //
-    // Measured after the budget floor landed: 505 on the equity calendar
-    // (900s x 20), 1,180 on the continuous one (60s x 1). The floors sit
-    // below those by roughly a session's worth of cycles, which is enough
-    // room for a boundary to shift and not enough for a whole session to stop
-    // being polled.
+    // Re-measured at this commit, across the whole grid: the worst equity day
+    // is 720 requests (60s, 180s and 300s all tie there at 20 symbols) and the
+    // worst continuous day is 1,200 — the budget exactly, reached at eleven of
+    // the twenty continuous configurations. That the eleven agree to the
+    // request is the budget floor being the binding term rather than the
+    // interval: once `budgetFloor` dominates, cost stops depending on what the
+    // user chose and lands on the budget itself.
+    //
+    // (These numbers replace a "505 / 1,180" that this comment recorded a few
+    // commits ago and that the sweep had since stopped producing. A comment
+    // holding a measurement is worth having only if it is re-taken when the
+    // model under it moves; F7 is the same lesson one file over.)
+    //
+    // The floors sit below those by roughly a session's worth of cycles, which
+    // is enough room for a boundary to shift and not enough for a whole
+    // session to stop being polled.
     let equity = worst[.equity]?.requests ?? 0
     let continuous = worst[.continuous]?.requests ?? 0
     let equityIdle = "the worst equity day was only \(equity) requests; the simulation is "
