@@ -90,6 +90,15 @@ private func load(_ row: [Int], _ widths: [Double]) -> Double {
     #expect(rows.flatMap { $0 }.sorted() == Array(0..<widths.count))
     #expect(!rows[0].isEmpty)
     #expect(!rows[1].isEmpty)
+
+    // Witness: the four genuinely-10.0-wide items (indices 0, 2, 4, 6) must
+    // land two to a row under correct sanitization. Without sanitization the
+    // NaN at index 1 poisons row 1's running total to NaN immediately after
+    // seeding it, so every later "is row 1 less loaded" comparison is false
+    // and all four 10.0-wide items pile into row 0 instead.
+    let tenWideIndices: Set<Int> = [0, 2, 4, 6]
+    let tenWideInRow0 = rows[0].filter { tenWideIndices.contains($0) }.count
+    #expect(tenWideInRow0 == 2)
 }
 
 @Test func theSplitScalesToTheWatchlistCap() {
