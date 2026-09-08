@@ -106,14 +106,12 @@ public struct FileWatchlistStore: WatchlistStore {
     }
 
     /// Renames the unreadable file out of the way and returns where it went.
-    private func setAside() throws -> URL {
-        // Colons are legal in HFS+ paths but Finder renders them as slashes,
-        // which makes the saved file confusing to find and to describe
-        // over email.
-        let stamp = ISO8601DateFormatter()
-            .string(from: Date())
-            .replacingOccurrences(of: ":", with: "-")
-
+    ///
+    /// Takes the stamp as a parameter, defaulted to the real clock for
+    /// production callers, for the same reason `quarantineTarget` does: the
+    /// exhaustion arm below is otherwise reachable only by racing a real
+    /// second boundary with a thousand real files.
+    func setAside(stamp: String = Self.freshStamp()) throws -> URL {
         guard let target = Self.quarantineTarget(directory: url.deletingLastPathComponent(),
                                                  base: url.lastPathComponent,
                                                  stamp: stamp) else {
@@ -121,6 +119,15 @@ public struct FileWatchlistStore: WatchlistStore {
         }
         try FileManager.default.moveItem(at: url, to: target)
         return target
+    }
+
+    /// Colons are legal in HFS+ paths but Finder renders them as slashes,
+    /// which makes the saved file confusing to find and to describe over
+    /// email.
+    private static func freshStamp() -> String {
+        ISO8601DateFormatter()
+            .string(from: Date())
+            .replacingOccurrences(of: ":", with: "-")
     }
 
     /// A name in `directory` that no earlier casualty already owns, or `nil`

@@ -54,7 +54,15 @@ public enum TickerError: Error, Equatable, Sendable {
         case .emptyBody, .notJSON, .noResult, .missingField,
              .wrongType, .nonFiniteNumber, .negativeValue:
             return true
-        default:
+
+        // Everything else is not a contract fault: network/status cases
+        // (their own circuits, spec §4.3), `invalidSymbol` (rejected before
+        // a request is built), and the persistence cases (filesystem
+        // faults, not a disagreement about a 200's body). Enumerated rather
+        // than `default:`, so the compiler is the exhaustiveness checker.
+        case .invalidSymbol, .offline, .transport, .rateLimited, .serverError,
+             .unauthorized, .symbolNotFound, .storeSchemaUnsupported,
+             .storeVersionUnreadable, .storeCorrupt, .storeQuarantineFailed:
             return false
         }
     }

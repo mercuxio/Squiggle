@@ -498,6 +498,47 @@ private func write(_ json: String, to url: URL) throws {
     #expect(FileManager.default.fileExists(atPath: url.path))
 }
 
+@Test func exhaustingTheQuarantineNameSearchIsReportedAsQuarantineFailedNotAsCorrupt() throws {
+    // `setAside()`'s own mapping from `quarantineTarget == nil` to
+    // `storeQuarantineFailed(at: url)` (WatchlistStore.swift) was uncovered:
+    // `theQuarantineNameSearchGivesUpRatherThanReportingSomeoneElsesFile`
+    // exercises `quarantineTarget` in isolation, and
+    // `aSetAsideThatCannotHappenIsReportedAsATickerErrorNotAsAnNSError` reaches
+    // `setAside()`'s failure path only through a `moveItem` failure (chmod).
+    // Neither drives the exhaustion branch through the real `setAside()`. A
+    // mutation that reported `.storeCorrupt(quarantinedAt: url)` here instead
+    // — naming the still-present original file as its own quarantine, the
+    // same lie F2 was raised about — passed the whole suite.
+    //
+    // `setAside(stamp:)` takes its stamp as a parameter for the same reason
+    // `quarantineTarget` does, so the exhaustion set only has to be built
+    // once, at a fixed stamp, rather than raced across real seconds.
+    let url = tempURL()
+    try write("{ bad", to: url)
+    let directory = url.deletingLastPathComponent()
+    let stamp = "2026-09-08T13-00-00Z"
+
+    try Data().write(to: directory.appendingPathComponent("squiggle.json.bad-\(stamp)"))
+    for suffix in 2...1_000 {
+        try Data().write(to: directory.appendingPathComponent("squiggle.json.bad-\(stamp)-\(suffix)"))
+    }
+
+    var caught: TickerError?
+    do {
+        _ = try FileWatchlistStore(url: url).setAside(stamp: stamp)
+        Issue.record("setAside() succeeded despite an exhausted quarantine name search")
+    } catch let error as TickerError {
+        caught = error
+    } catch {
+        Issue.record("setAside() threw a non-TickerError: \(error)")
+    }
+    let error = try #require(caught)
+    #expect(error == .storeQuarantineFailed(at: url))
+    // Nothing was moved, so the original file has to still be exactly where
+    // it was — the caller must be able to tell this from `storeCorrupt`.
+    #expect(FileManager.default.fileExists(atPath: url.path))
+}
+
 // MARK: - Leniency: a typo in a cosmetic setting must not cost the watchlist
 
 @Test func aWrongTypeInAnySettingCostsThatSettingAndNothingElse() throws {
