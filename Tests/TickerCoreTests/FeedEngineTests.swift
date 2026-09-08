@@ -608,26 +608,49 @@ struct FeedEngineTests {
     /// 20) — which covers both regimes, e.g. interval 900 / count 4 is
     /// interval-dominated (floor is only 120) while interval 60 / count 10 is
     /// floor-dominated — the measured drift between `FeedEngine` and the
-    /// `DaySimulation` oracle equals the watchlist count itself at every
-    /// interval except the largest (900), where it falls to 15 at count 20
-    /// because the interval, not the spacing floor, is what is binding
-    /// there. The worst case seen anywhere in that sweep is 20 requests, at
-    /// count 20 — not a number picked to make one lucky configuration pass
-    /// with room to spare, but the ceiling the evidence actually supports.
-    /// A per-cycle off-by-one that drops or double-serves one symbol costs
-    /// roughly 78 requests across a day — four times this bound — so a flat
-    /// 20 stays tight enough to catch it.
+    /// `DaySimulation` oracle is **`count` itself**, at every one of the
+    /// twenty configurations. So that is the bound, rather than the flat 20
+    /// that used to stand here.
+    ///
+    /// F7. The comment above already said "equals the watchlist count itself"
+    /// and then asserted a constant: at `count: 1` the drift is 1 and the test
+    /// tolerated 20, so twenty spurious requests a day passed a test whose own
+    /// prose said the answer was one. A bound calibrated to the worst case is
+    /// blind at the cheapest case, which is exactly where a proportional defect
+    /// is smallest and easiest to ship.
+    ///
+    /// Re-measured after F1 changed the day model, drift by interval x count:
+    ///
+    ///        count:    1    2    4   10   20
+    ///        60        1    2    4   10    0
+    ///        180       1    2    4   10    0
+    ///        300       1    2    4   10    0
+    ///        900       1    2    4   10   15
+    ///
+    /// The three zeroes at count 20 are F1(a)'s budget floor doing its job:
+    /// 60, 180 and 300 all clamp to the same 720-request day, so the engine
+    /// and the oracle agree exactly. 900/20 is the only point with any slack
+    /// (15 of a permitted 20), because there the interval and not the floor is
+    /// what binds.
+    ///
+    /// The tightness earns its keep. Shortening the cycle deadline by one
+    /// spacing interval — a plausible off-by-one — leaves **nine** of these
+    /// twenty configurations under a flat 20, including 900/1 at drift 2 and
+    /// 900/2 at drift 4. Against `count`, five of those nine fail.
     @Test func theCycleGateKeepsFeedEngineUnderBudgetAndInStepWithTheDaySimulation() throws {
-        let tolerance = 20
-
         for interval in RateConstants.refreshIntervalChoices {
             for count in [1, 2, 4, 10, 20] {
                 let actual = try driveFeedEngine(userInterval: interval, watchlistCount: count).fetches
                 let predicted = DaySimulation.run(userInterval: interval,
                                                    watchlistCount: count).requests
 
-                #expect(actual < 1_200,
-                        "interval \(interval) x \(count): \(actual) exceeds the 1,200/day budget")
+                // The constant, not a literal 1_200: F1(a) moved this number
+                // into `RateConstants` precisely so the figure the tests check
+                // and the figure `RefreshPolicy.budgetFloor` obeys cannot drift
+                // apart.
+                let over = "interval \(interval) x \(count): \(actual) exceeds the "
+                    + "\(RateConstants.dailyRequestBudget)/day budget"
+                #expect(actual < RateConstants.dailyRequestBudget, "\(over)")
 
                 // Not an exact match: `DaySimulation` paces individual
                 // within-cycle fetches by an explicit per-symbol
@@ -637,7 +660,7 @@ struct FeedEngineTests {
                 let drift = abs(actual - predicted)
                 let message = "interval \(interval) x \(count): engine fetched \(actual); "
                     + "the cycleDeadline model predicts \(predicted) (drift \(drift))"
-                #expect(drift <= tolerance, "\(message)")
+                #expect(drift <= count, "\(message)")
             }
         }
     }
