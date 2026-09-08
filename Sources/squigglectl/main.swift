@@ -20,7 +20,7 @@ func run() async -> Int32 {
     case .help:
         print(Rendering.usage)
         return 0
-    case .quote(let symbolText, let printRaw, _):
+    case .quote(let symbolText, let printRaw):
         guard let symbol = Symbol(symbolText) else {
             FileHandle.standardError.write(Data("not a usable symbol: \(symbolText)\n".utf8))
             return 2
@@ -34,6 +34,19 @@ func run() async -> Int32 {
                 print("\(body.count) bytes")
             }
             return 0
+        } catch {
+            FileHandle.standardError.write(Data("\(error)\n".utf8))
+            return 1
+        }
+
+    case .search(let query, let limit):
+        do {
+            let results = try await YahooClient().searchResults(query: query, limit: limit)
+            print(Rendering.render(results))
+            return 0
+        } catch let error as TickerError {
+            FileHandle.standardError.write(Data((Rendering.diagnosis(error) + "\n").utf8))
+            return 1
         } catch {
             FileHandle.standardError.write(Data("\(error)\n".utf8))
             return 1

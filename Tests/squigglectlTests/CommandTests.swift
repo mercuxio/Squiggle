@@ -4,10 +4,10 @@ import TickerCore
 
 @Test func quoteTakesASymbolAndOptionalRawFlag() throws {
     let parsed = try Command.parse(["quote", "AAPL"])
-    #expect(parsed == .quote(symbol: "AAPL", raw: false, json: false))
+    #expect(parsed == .quote(symbol: "AAPL", raw: false))
 
     let rawForm = try Command.parse(["quote", "^GSPC", "--raw"])
-    #expect(rawForm == .quote(symbol: "^GSPC", raw: true, json: false))
+    #expect(rawForm == .quote(symbol: "^GSPC", raw: true))
 }
 
 @Test func quoteWithoutASymbolIsAParseError() {
@@ -81,4 +81,40 @@ import TickerCore
     // A "/" cannot appear in a symbol (Symbol.init rejects it — it's a URL
     // path separator), so this is deliberately not a mistyped ticker.
     #expect(throws: ParseError.self) { try Command.parse(["watch", "AA/PL"]) }
+}
+
+@Test func searchTakesAMultiWordQueryWithoutQuoting() throws {
+    let parsed = try Command.parse(["search", "berkshire", "hathaway"])
+    #expect(parsed == .search(query: "berkshire hathaway", limit: 10))
+}
+
+@Test func searchAcceptsALimitAnywhereInTheArguments() throws {
+    let leading = try Command.parse(["search", "--limit", "3", "apple"])
+    #expect(leading == .search(query: "apple", limit: 3))
+
+    let trailing = try Command.parse(["search", "apple", "--limit", "3"])
+    #expect(trailing == .search(query: "apple", limit: 3))
+}
+
+@Test func theLimitIsCappedSoOneCommandCannotBecomeALargeRequest() throws {
+    let parsed = try Command.parse(["search", "apple", "--limit", "5000"])
+    #expect(parsed == .search(query: "apple", limit: 20))
+}
+
+@Test func aNonNumericOrZeroLimitIsRejectedWithAMessage() {
+    #expect(throws: ParseError.self) { try Command.parse(["search", "apple", "--limit", "lots"]) }
+    #expect(throws: ParseError.self) { try Command.parse(["search", "apple", "--limit", "0"]) }
+    #expect(throws: ParseError.self) { try Command.parse(["search", "apple", "--limit"]) }
+}
+
+@Test func searchWithNothingToSearchForIsRejected() {
+    #expect(throws: ParseError.self) { try Command.parse(["search"]) }
+    #expect(throws: ParseError.self) { try Command.parse(["search", "--limit", "5"]) }
+}
+
+@Test func usageMentionsEveryVerbTheToolAccepts() {
+    // A verb that works but is undocumented is a verb nobody uses.
+    for verb in ["quote", "watch", "search"] {
+        #expect(Rendering.usage.contains("squigglectl \(verb)"))
+    }
 }

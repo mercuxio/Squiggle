@@ -10,12 +10,16 @@ public struct ParseError: Error, Equatable {
 /// could itself be the problem.
 public enum Command: Equatable {
     case help
-    case quote(symbol: String, raw: Bool, json: Bool)
+    case quote(symbol: String, raw: Bool)
     /// `symbols` empty means none were given on the command line; the caller
     /// (`main.swift`) falls back to the watchlist on disk. `parse` itself
     /// touches no filesystem — see the type's own doc comment — so that
     /// fallback cannot live here.
     case watch(symbols: [Symbol], intervalSeconds: Double, maxCycles: Int?)
+    /// `limit` is already clamped to `1...20` by the time this case exists —
+    /// `parse` is the only place that enforces the cap, so nothing downstream
+    /// has to re-check it.
+    case search(query: String, limit: Int)
 
     public static func parse(_ arguments: [String]) throws -> Command {
         guard let subcommand = arguments.first else { return .help }
@@ -46,11 +50,10 @@ public enum Command: Equatable {
 
         case "quote":
             let raw = takeFlag("--raw")
-            let json = takeFlag("--json")
             guard let symbol = rest.first else {
                 throw ParseError("quote needs a symbol, e.g. `squigglectl quote AAPL`")
             }
-            return .quote(symbol: symbol, raw: raw, json: json)
+            return .quote(symbol: symbol, raw: raw)
 
         case "watch":
             var intervalSeconds = RateConstants.defaultRefreshInterval
@@ -83,6 +86,28 @@ public enum Command: Equatable {
             }
 
             return .watch(symbols: symbols, intervalSeconds: intervalSeconds, maxCycles: maxCycles)
+
+        case "search":
+            var limit = 10
+            if let limitText = try takeValue("--limit") {
+                guard let parsed = Int(limitText), parsed > 0 else {
+                    throw ParseError("--limit needs a positive whole number, got \(limitText)")
+                }
+                // Capped, not rejected: a request for thousands of rows
+                // becomes a request for the cap instead of failing outright —
+                // one command must not turn into a large request against the
+                // same daily budget as everything else.
+                limit = min(parsed, 20)
+            }
+
+            // Multi-word queries are the normal case ("berkshire hathaway"),
+            // so join the leftovers rather than demanding the user quote them.
+            let query = rest.joined(separator: " ")
+            guard !query.isEmpty else {
+                throw ParseError("search needs something to search for, e.g. `squigglectl search apple`")
+            }
+
+            return .search(query: query, limit: limit)
 
         default:
             throw ParseError("unknown command: \(subcommand)")

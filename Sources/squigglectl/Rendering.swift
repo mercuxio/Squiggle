@@ -9,16 +9,21 @@ public enum Rendering {
         squigglectl — diagnostics for Squiggle
 
         USAGE
-          squigglectl quote <symbol> [--raw] [--json]
+          squigglectl quote <symbol> [--raw]
           squigglectl watch [SYMBOL...] [--interval N] [--cycles N]
+          squigglectl search <QUERY...> [--limit N]
 
         EXAMPLES
           squigglectl quote AAPL --raw
           squigglectl watch AAPL MSFT --cycles 4
+          squigglectl search berkshire hathaway --limit 5
 
         OPTIONS
-          --interval N at least 30 seconds between refresh cycles (default 180)
+          --raw        print the response body exactly as received
+          --interval N between 60 and 900 seconds between refresh cycles (default 180);
+                       out-of-range values are clamped to the nearest bound, not refused
           --cycles N   stop after N fetches instead of running until interrupted
+          --limit N    at most N search results (default 10, max 20)
         """
 
     /// One line per quote, for `squigglectl watch`'s running log.
@@ -33,6 +38,19 @@ public enum Rendering {
             text += "  \(glyph) \(sign)\(String(format: "%.2f", changePercent))%"
         }
         return text
+    }
+
+    /// One line per search result, for `squigglectl search`'s output.
+    public static func render(_ results: [SearchResult]) -> String {
+        guard !results.isEmpty else { return "no matches" }
+        // Pad to the widest symbol so the names line up. The picker in plan 2
+        // uses a real table; this is the terminal's version of the same idea.
+        let width = results.map(\.symbol.raw.count).max() ?? 0
+        return results.map { result in
+            let padded = result.symbol.raw.padding(toLength: width, withPad: " ", startingAt: 0)
+            let suffix = result.exchange.isEmpty ? "" : "  (\(result.exchange))"
+            return "\(padded)  \(result.name)\(suffix)"
+        }.joined(separator: "\n")
     }
 
     /// Turns a failure into a line a person reads. `TickerError` itself
