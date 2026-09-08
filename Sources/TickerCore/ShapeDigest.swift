@@ -41,9 +41,12 @@ public enum ShapeChange: Equatable, Sendable {
 public struct ShapeDigest: Equatable, Sendable {
     public let paths: [String: ValueType]
 
-    /// Every key path Squiggle's decoders actually read. Task 6's mutation
-    /// suite walks this same list, so the two can never disagree about what
-    /// "a field we depend on" means.
+    /// Every key path the chart response's decoder actually reads. Task 6's
+    /// mutation suite walks this same list, so the two can never disagree
+    /// about what "a field we depend on" means. `YahooSearchDecoding` reads
+    /// its own paths from a different endpoint's response and is not
+    /// represented here — `probe` only ever fetches the chart endpoint (see
+    /// `ProbeRun.swift`), so this list needs nothing beyond it.
     public static let readPaths: [String] = [
         "chart.result[].meta.shortName",
         "chart.result[].meta.currency",
@@ -108,8 +111,14 @@ public struct ShapeDigest: Equatable, Sendable {
             for child in array {
                 walk(child, prefix: "\(prefix)[]", into: &paths)
             }
-        case let leaf:
-            if !prefix.isEmpty { paths[prefix] = leaf }
+        case .number:
+            if !prefix.isEmpty { paths[prefix] = .number }
+        case .string:
+            if !prefix.isEmpty { paths[prefix] = .string }
+        case .bool:
+            if !prefix.isEmpty { paths[prefix] = .bool }
+        case .null:
+            if !prefix.isEmpty { paths[prefix] = .null }
         }
     }
 
