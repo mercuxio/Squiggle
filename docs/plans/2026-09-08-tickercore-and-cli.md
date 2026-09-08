@@ -1655,6 +1655,16 @@ The market-hours oracle is the payload, not a calendar. Holidays, half-days, two
   - `TradingPeriod.nextRegularOpenEpoch(after: Double) -> Double?`
   - `YahooQuoteDecoding.tradingPeriod(from: Data) throws -> TradingPeriod`
 
+**Ordering note (controller ruling R9).** `state(atEpoch:)` checks `regular`
+first, so that an overlap Yahoo emits for some venues resolves to the busier
+session. That rule is load-bearing and easy to lose: the other tests here use
+*contiguous* windows (pre 100-200, regular 200-300, post 300-400), and under
+half-open `contains` no epoch is ever inside two of them — so reordering the
+checks passes every one of them. `regularWinsWhenYahooEmitsOverlappingWindows`
+is the only test that can see the difference, and it must keep genuinely
+overlapping windows on **both** sides. Verified by mutation, not by reading:
+checking `pre` first fails it at epoch 220, checking `post` first at 320.
+
 - [ ] **Step 1: Write the failing tests**
 
 ```swift
@@ -1713,6 +1723,16 @@ private func period(
 
     let inverted = period(pre: nil, regular: (300, 200), post: nil)
     #expect(inverted.state(atEpoch: 250) == .closed)
+}
+
+@Test func regularWinsWhenYahooEmitsOverlappingWindows() {
+    // Some venues arrive with real overlap, not just shared boundaries.
+    // pre 100-250 and regular 200-350 share [200, 250); regular and
+    // post 300-450 share [300, 350). Either overlap must resolve to
+    // .regular, not to whichever window happens to be checked first.
+    let p = period(pre: (100, 250), regular: (200, 350), post: (300, 450))
+    #expect(p.state(atEpoch: 220) == .regular)
+    #expect(p.state(atEpoch: 320) == .regular)
 }
 
 @Test func theNextOpenIsOnlyReportedWhenItIsStillAhead() {
