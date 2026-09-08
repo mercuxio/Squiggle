@@ -113,3 +113,17 @@ captured set; each owed fixture gets its test when it lands.
 - Ruling R54: Task 16 runs before Task 15 rather than the queue stalling.
   Task 16 depends on nothing Task 15 produces. The next retry is taken
   immediately before Task 15, buying one task's elapsed time.
+
+## Search-endpoint retry #6 (controller, before Task 15)
+
+- 2026-09-08, taken under ruling R13. Same request the app builds:
+  `query1.finance.yahoo.com`, `/v1/finance/search`, the single `q` item,
+  `YahooClient.defaultUserAgent`, `Accept: application/json`. **HTTP 429**,
+  19 bytes, identical in length to every prior 429 from both endpoints.
+  `search-apple.json` remains UNCAPTURED after six attempts.
+- Ruling R66: Task 15 proceeds against a clearly-labelled synthetic fixture in
+  `Tests/Fixtures/synthetic/` rather than stalling the queue. R7's instruction
+  to report BLOCKED rested on the claim that the task's tests assert on real
+  Yahoo relevance ordering; an audit of all twelve found that none does.
+- `search-apple.json` stays on the owed list below, to be captured during the
+  Task 19 trading day from the user's own network.
