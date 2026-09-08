@@ -246,17 +246,30 @@ private let neverBlindLongerThan: Double = 3600
     #expect(extreme == capped)
 }
 
-@Test func theSpacingFloorNeverShortensAUsersChosenInterval() {
-    // The floor is a floor. A user who asked for 15 minutes with one symbol
-    // gets 15 minutes, not 30 seconds.
+@Test func theCycleIsExactlyTheLargestFloorAndNeverShortensAUsersInterval() {
+    // The floors are floors: a user who asked for 15 minutes with one symbol
+    // gets 15 minutes, not 30 seconds. But `>=` alone was never that claim.
+    // `return 86_400` satisfies every `>=` below, at all twenty grid points, so
+    // as a pair of lower bounds this test also passed for a policy that fetched
+    // once a day — the two `>=` lines are kept for what they say, and the
+    // equality is what makes them mean it.
+    //
+    // So the law is asserted as an equality: the cycle is the largest of the
+    // three terms and is not one second more. `max(interval, n x 30s, budget
+    // floor)`, with the budget floor as the third term F1(a) added.
     for count in [1, 2, 4, 10, 20] {
         for interval in RateConstants.refreshIntervalChoices {
             let cycle = RefreshPolicy.cycleInterval(userIntervalSeconds: interval,
                                                     watchlistCount: count,
                                                     marketState: .regular,
                                                     lowPowerMode: false)
-            #expect(cycle >= interval, "count \(count), interval \(interval) → \(cycle)")
-            #expect(cycle >= Double(count) * RateConstants.spacingSeconds)
+            let spacingFloor = Double(count) * RateConstants.spacingSeconds
+            let budgetFloor = RefreshPolicy.budgetFloor(watchlistCount: count)
+            let expected = max(interval, max(spacingFloor, budgetFloor))
+            #expect(cycle == expected,
+                    "count \(count), interval \(interval) → \(cycle), expected \(expected)")
+            #expect(cycle >= interval)
+            #expect(cycle >= spacingFloor)
         }
     }
 }
