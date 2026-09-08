@@ -24,6 +24,48 @@ struct FeedEngineTests {
                   userIntervalSeconds: interval)
     }
 
+    // MARK: - Offline
+
+    @Test func aWifiDropAdvancesNeitherCircuitNorTheLadder() throws {
+        // F4. `Failure.swift` documents `.offline` as "the path monitor says
+        // there is no network. Do not attempt, do not advance the ladder."
+        // `record` did the opposite twice over: `.offline` shared an arm with
+        // `.server` and `.unauthorized` calling `networkCircuit.recordFailure()`,
+        // and then fell through to `ladder.record(kind)`. Five of them reached
+        // the threshold, so a brief Wi-Fi drop silenced the app for thirty
+        // minutes *after the network came back* — using a circuit meant to
+        // protect Yahoo from us to punish the user for their own router.
+        //
+        // Ten, not five: the threshold is five, so ten is unambiguously past
+        // it and the assertion cannot pass by having merely not yet arrived.
+        let clock = FakeClock()
+        let one = try sym("AAPL")
+        var e = engine(clock, [one, try sym("MSFT")])
+        for _ in 0..<10 { e.record(.offline, for: one) }
+
+        let snapshot = e.diagnosticSnapshot
+        #expect(snapshot.networkCircuit == .closed)
+        #expect(snapshot.contractCircuit == .closed)
+        // Honest about what this one detects: the ladder half of F4 was never
+        // real. `BackoffLadder.record` has always had its own `.offline` arm
+        // returning 0, so this assertion passed before the fix too. It is kept
+        // because it is the only place the *composed* rule is stated, and it
+        // is falsifiable — measured, not assumed: removing the early return
+        // above *and* folding `.offline` into the ladder's `.server` arm gives
+        // 900.0 here. A single-site regression at either end still leaves it
+        // green, which is exactly why the circuit assertion above is the one
+        // that carries F4.
+        #expect(snapshot.cooldownRemainingSeconds == 0,
+                "the ladder advanced to \(snapshot.cooldownRemainingSeconds)s on a network we never touched")
+
+        // And the point of all three: the very next cycle is allowed. There is
+        // no path-monitor edge to resume on — `TickerCore` takes no `Network`
+        // dependency and the app layer that would own `NWPathMonitor` does not
+        // exist — so retrying on the next cycle is the whole recovery story.
+        let action = e.next(openMarket())
+        #expect(action == .fetch(one))
+    }
+
     // MARK: - Fetch order and pacing
 
     @Test func theFirstActionOnAnOpenMarketIsToFetchTheFirstSymbol() throws {

@@ -201,7 +201,28 @@ public struct FeedEngine {
         case .rateLimited:
             networkCircuit.trip()
             pacer.halveCapacity()
-        case .offline, .server, .unauthorized:
+        case .offline:
+            // `Failure.swift` documents this kind as "do not attempt, do not
+            // advance the ladder". Sharing an arm with `.server` did the
+            // opposite: five Wi-Fi drops tripped a breaker for thirty minutes,
+            // and it kept running *after the network came back*, because a
+            // circuit meant to protect Yahoo from us has no way to learn that
+            // the fault was on our side of the router.
+            //
+            // Returning early rather than leaning on `BackoffLadder`'s own
+            // `.offline` arm (which already returns 0): the rule belongs where
+            // the circuits are, next to `.deadSymbol`'s identical one, so a
+            // future kind added to the arm below cannot inherit this
+            // behaviour by accident.
+            //
+            // There is no path-monitor edge to resume on. `TickerCore` takes
+            // no `Network` dependency and the app layer that would own
+            // `NWPathMonitor` does not exist yet — this is a plain statement
+            // of fact, not a seam waiting for a call. Retrying on the next
+            // cycle is the whole recovery story, and it is the right one:
+            // asking again costs one token and finds out immediately.
+            return
+        case .server, .unauthorized:
             networkCircuit.recordFailure()
         }
         ladder.record(kind)
