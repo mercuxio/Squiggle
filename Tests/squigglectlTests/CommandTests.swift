@@ -129,7 +129,7 @@ import TickerCore
 
 @Test func usageMentionsEveryVerbTheToolAccepts() {
     // A verb that works but is undocumented is a verb nobody uses.
-    for verb in ["quote", "watch", "search", "doctor"] {
+    for verb in ["quote", "watch", "search", "doctor", "probe"] {
         #expect(Rendering.usage.contains("squigglectl \(verb)"))
     }
 }
@@ -162,4 +162,31 @@ import TickerCore
         #expect(error.message.contains("AAPL"))
         #expect(!error.message.contains("flag"))
     }
+}
+
+// MARK: - probe (Task 18)
+
+@Test func probeTakesASymbolAndOptionalRecordFlag() throws {
+    let parsed = try Command.parse(["probe", "AAPL"])
+    #expect(parsed == .probe(symbol: "AAPL", record: false))
+
+    let recordForm = try Command.parse(["probe", "^GSPC", "--record"])
+    #expect(recordForm == .probe(symbol: "^GSPC", record: true))
+
+    // The flag's position relative to the symbol must not matter, same as
+    // `quote`'s `--raw`.
+    let flagFirst = try Command.parse(["probe", "--record", "AAPL"])
+    #expect(flagFirst == .probe(symbol: "AAPL", record: true))
+}
+
+@Test func probeWithoutASymbolIsAParseError() {
+    #expect(throws: ParseError.self) { try Command.parse(["probe"]) }
+    #expect(throws: ParseError.self) { try Command.parse(["probe", "--record"]) }
+}
+
+/// Same rule as `quote`, `search` and `doctor`: an unrecognised `--flag`
+/// must be reported, not silently treated as (or joined into) the symbol.
+@Test func probeRejectsAnUnknownFlag() {
+    #expect(throws: ParseError.self) { try Command.parse(["probe", "--bogus", "AAPL"]) }
+    #expect(throws: ParseError.self) { try Command.parse(["probe", "AAPL", "--bogus"]) }
 }

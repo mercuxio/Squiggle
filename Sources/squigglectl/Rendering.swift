@@ -13,12 +13,14 @@ public enum Rendering {
           squigglectl watch [SYMBOL...] [--interval N] [--cycles N]
           squigglectl search <QUERY...> [--limit N]
           squigglectl doctor
+          squigglectl probe <symbol> [--record]
 
         EXAMPLES
           squigglectl quote AAPL --raw
           squigglectl watch AAPL MSFT --cycles 4
           squigglectl search berkshire hathaway --limit 5
           squigglectl doctor
+          squigglectl probe AAPL
 
         OPTIONS
           --raw        print the response body exactly as received
@@ -26,6 +28,9 @@ public enum Rendering {
                        out-of-range values are clamped to the nearest bound, not refused
           --cycles N   stop after N fetches instead of running until interrupted
           --limit N    at most N search results (default 10, max 20)
+          --record     (probe only) capture a fresh fixture instead of diffing
+                       against the recorded one; refuses if today's fixture
+                       directory already exists
         """
 
     /// One line per quote, for `squigglectl watch`'s running log.
@@ -250,5 +255,70 @@ public enum Rendering {
         case .open:     return "open"
         case .halfOpen: return "half-open"
         }
+    }
+
+    /// `squigglectl probe`'s diff report. Breaking changes
+    /// (`ShapeChange.breaksSquiggle`) are what would actually stop Squiggle
+    /// working, so they print first and are marked; everything else follows
+    /// under a heading that says plainly it is informational, so a reader
+    /// never has to guess which lines demand action.
+    ///
+    /// Every line here is a JSON key path and a type name — never a value —
+    /// so this stays safe to paste into a support email (R44), the same
+    /// promise `checkLine(_:detail:)` makes for `doctor`.
+    public static func probeReport(breaking: [ShapeChange], informational: [ShapeChange]) -> String {
+        guard !breaking.isEmpty || !informational.isEmpty else {
+            return "no shape change detected"
+        }
+
+        var lines: [String] = []
+        if !breaking.isEmpty {
+            lines.append("BREAKING — Squiggle depends on these:")
+            lines.append(contentsOf: breaking.map { "  [BREAKING] \(describe($0))" })
+        }
+        if !informational.isEmpty {
+            if !lines.isEmpty { lines.append("") }
+            lines.append("informational — Squiggle does not read these:")
+            lines.append(contentsOf: informational.map { "  \(describe($0))" })
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    /// One line per `ShapeChange`. Path and type names only — see
+    /// `probeReport(breaking:informational:)`'s own note on R44.
+    private static func describe(_ change: ShapeChange) -> String {
+        switch change {
+        case .missing(let path, let wasType):
+            return "missing: \(path) (was \(wasType.rawValue))"
+        case .added(let path, let type):
+            return "added: \(path) (\(type.rawValue))"
+        case .typeChanged(let path, let from, let to):
+            return "type changed: \(path) (\(from.rawValue) → \(to.rawValue))"
+        }
+    }
+
+    /// `probe --record`'s refusal when today's fixture directory already
+    /// exists. `directory` is repository-relative (`Tests/Fixtures/yahoo-
+    /// <date>`), never an absolute filesystem path, to keep this safe under
+    /// R44.
+    public static func probeRefusesExistingFixtureDirectory(_ directory: String) -> String {
+        "refusing to overwrite \(directory) — a fixture is already recorded there; " +
+            "a captured fixture is evidence and is never replaced in place"
+    }
+
+    /// `probe --record`'s success line. `fileWritten` is repository-relative,
+    /// same rule as the refusal above.
+    public static func probeRecordedFixture(_ fileWritten: String) -> String {
+        "recorded \(fileWritten)"
+    }
+
+    /// `probe --record`'s one line appended to `docs/fixture-capture-log.md`.
+    /// `fileWritten` is repository-relative and `marketState` is already
+    /// `describe(_ state: MarketState)`'s wording — no price, no body
+    /// excerpt, no URL, no absolute path, per R44.
+    public static func captureLogLine(date: String, symbol: String, marketState: String,
+                                      fileWritten: String) -> String {
+        "- \(date): `squigglectl probe \(symbol) --record` — market state at capture: " +
+            "\(marketState); wrote \(fileWritten)"
     }
 }

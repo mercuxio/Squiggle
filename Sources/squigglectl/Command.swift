@@ -23,6 +23,10 @@ public enum Command: Equatable {
     /// One pass, at most two network requests, no flags. See
     /// `Sources/squigglectl/DoctorRun.swift`.
     case doctor
+    /// One request either way. Without `--record`, diffs the response
+    /// against the recorded shape and reports what moved. With it, captures
+    /// a fresh fixture instead — see `Sources/squigglectl/ProbeRun.swift`.
+    case probe(symbol: String, record: Bool)
 
     public static func parse(_ arguments: [String]) throws -> Command {
         guard let subcommand = arguments.first else { return .help }
@@ -149,6 +153,19 @@ public enum Command: Equatable {
                 throw ParseError("doctor takes no arguments, got: \(leftover)")
             }
             return .doctor
+
+        case "probe":
+            let record = takeFlag("--record")
+            // Same rule as `quote`, `search` and `doctor`: a stray `--flag`
+            // this verb doesn't know must not be silently swallowed or
+            // mistaken for the symbol.
+            if let unknownFlag = rest.first(where: { $0.hasPrefix("--") }) {
+                throw ParseError("unknown flag: \(unknownFlag)")
+            }
+            guard let symbol = rest.first else {
+                throw ParseError("probe needs a symbol, e.g. `squigglectl probe AAPL`")
+            }
+            return .probe(symbol: symbol, record: record)
 
         default:
             throw ParseError("unknown command: \(subcommand)")

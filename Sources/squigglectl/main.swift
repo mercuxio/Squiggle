@@ -75,6 +75,13 @@ func run() async -> Int32 {
 
     case .doctor:
         return await DoctorRun().run()
+
+    case .probe(let symbolText, let record):
+        guard let symbol = Symbol(symbolText) else {
+            FileHandle.standardError.write(Data("not a usable symbol: \(symbolText)\n".utf8))
+            return 2
+        }
+        return await ProbeRun(symbol: symbol, record: record).run()
     }
 }
 

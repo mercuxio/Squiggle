@@ -130,3 +130,21 @@ captured set; each owed fixture gets its test when it lands.
   Yahoo relevance ordering; an audit of all twelve found that none does.
 - `search-apple.json` stays on the owed list below, to be captured during the
   Task 19 trading day from the user's own network.
+
+## `squigglectl probe --record` supersedes ad hoc capture (Task 18)
+
+- 2026-09-08. Every fixture above was captured by hand, one request at a
+  time, outside the built tool. Task 18 adds `squigglectl probe <symbol>
+  --record`, which fetches once, refuses to overwrite a directory that
+  already holds a capture for the day, writes the body to
+  `Tests/Fixtures/yahoo-<date>/chart-<symbol>.json`, and appends a bullet
+  to this log itself — so this file no longer needs a human to remember to
+  update it after a capture.
+- Going forward, a fixture refresh (the recaptures still owed below, and any
+  future one) should go through `--record` rather than a hand-run script,
+  so the log entry and the file it describes are never out of sync.
+- Ruling R76 (Task 18): this task implemented and tested `--record` entirely
+  against the recorded fixtures already in `Tests/Fixtures/` — no network
+  request was made while building it, and no fixture in this repository was
+  captured, replaced, or otherwise touched. The first live use of
+  `--record` is Task 19's human-run session.

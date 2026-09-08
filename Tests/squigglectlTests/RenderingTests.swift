@@ -121,3 +121,99 @@ import TickerCore
     #expect(Set(marks).count == 4)
 }
 
+// MARK: - probe (Task 18)
+
+@Test func probeReportWithNoChangesSaysSo() {
+    #expect(Rendering.probeReport(breaking: [], informational: []) == "no shape change detected")
+}
+
+@Test func probeReportListsBreakingChangesUnderTheirOwnHeadingAndMarksEachLine() {
+    let breaking: [ShapeChange] = [
+        .missing(path: "chart.result[].meta.regularMarketPrice", wasType: .number),
+    ]
+    let text = Rendering.probeReport(breaking: breaking, informational: [])
+    #expect(text.contains("BREAKING"))
+    #expect(text.contains("[BREAKING]"))
+    #expect(text.contains("chart.result[].meta.regularMarketPrice"))
+    #expect(text.contains("(was number)"))
+    #expect(!text.contains("informational"))
+}
+
+@Test func probeReportListsInformationalChangesUnderTheirOwnHeading() {
+    let informational: [ShapeChange] = [
+        .added(path: "chart.result[].meta.gmtoffset", type: .number),
+    ]
+    let text = Rendering.probeReport(breaking: [], informational: informational)
+    #expect(text.contains("informational"))
+    #expect(text.contains("added: chart.result[].meta.gmtoffset (number)"))
+    #expect(!text.contains("BREAKING"))
+}
+
+/// Both sections appear together, breaking first, separated by a blank line
+/// — so a reader scanning top-down sees the changes that matter before the
+/// ones that don't.
+@Test func probeReportPutsBreakingChangesBeforeInformationalOnes() throws {
+    let breaking: [ShapeChange] = [
+        .missing(path: "chart.result[].meta.regularMarketPrice", wasType: .number),
+    ]
+    let informational: [ShapeChange] = [
+        .added(path: "chart.result[].meta.gmtoffset", type: .number),
+    ]
+    let text = Rendering.probeReport(breaking: breaking, informational: informational)
+    let breakingRange = try #require(text.range(of: "BREAKING"))
+    let informationalRange = try #require(text.range(of: "informational"))
+    #expect(breakingRange.lowerBound < informationalRange.lowerBound)
+}
+
+/// R44: every `ShapeChange` line is a JSON key path and a type name, never a
+/// value — so a report built from arbitrary paths must never contain a `/`,
+/// a `?`, or a `=`, the same witnesses `aTimedOutRequestReportsItsCodeAndNoURL`
+/// uses above for the transport path.
+@Test func probeReportLinesCarryNoPathsOrQueryStrings() {
+    let changes: [ShapeChange] = [
+        .missing(path: "chart.result[].meta.regularMarketPrice", wasType: .number),
+        .added(path: "chart.result[].meta.gmtoffset", type: .number),
+        .typeChanged(path: "chart.result[].meta.currency", from: .string, to: .number),
+    ]
+    let text = Rendering.probeReport(breaking: [changes[0]], informational: [changes[1], changes[2]])
+    #expect(!text.contains("/"), "leaked a path or URL: \(text)")
+    #expect(!text.contains("?"), "leaked a query string: \(text)")
+    #expect(!text.contains("="), "leaked a query string: \(text)")
+}
+
+@Test func probeRefusesExistingFixtureDirectoryNamesTheDirectoryAndExplainsWhy() {
+    let text = Rendering.probeRefusesExistingFixtureDirectory("Tests/Fixtures/yahoo-2026-09-08")
+    #expect(text.contains("Tests/Fixtures/yahoo-2026-09-08"))
+    #expect(text.contains("already recorded"))
+}
+
+@Test func probeRecordedFixtureNamesTheFileWritten() {
+    let text = Rendering.probeRecordedFixture("Tests/Fixtures/yahoo-2026-09-09/chart-AAPL.json")
+    #expect(text.contains("Tests/Fixtures/yahoo-2026-09-09/chart-AAPL.json"))
+}
+
+@Test func captureLogLineIsAMarkdownBulletCarryingDateSymbolStateAndFile() {
+    let text = Rendering.captureLogLine(date: "2026-09-09", symbol: "AAPL",
+                                        marketState: "regular session",
+                                        fileWritten: "Tests/Fixtures/yahoo-2026-09-09/chart-AAPL.json")
+    #expect(text.hasPrefix("- 2026-09-09:"))
+    #expect(text.contains("AAPL"))
+    #expect(text.contains("regular session"))
+    #expect(text.contains("Tests/Fixtures/yahoo-2026-09-09/chart-AAPL.json"))
+}
+
+/// R44 also governs the line `probe --record` appends to
+/// `docs/fixture-capture-log.md` — ruling for this task is explicit that this
+/// log line is covered by the same rule as every other `squigglectl` output.
+/// `fileWritten` here stands in for what could be an absolute path if a
+/// caller ever passed one by mistake; the rendering itself adds nothing that
+/// could turn a clean repository-relative path into an unsafe line, so this
+/// only needs to confirm no extra `?`/`=` machinery sneaks in.
+@Test func captureLogLineAddsNoQueryStringOrExtraPunctuation() {
+    let text = Rendering.captureLogLine(date: "2026-09-09", symbol: "AAPL",
+                                        marketState: "closed",
+                                        fileWritten: "Tests/Fixtures/yahoo-2026-09-09/chart-AAPL.json")
+    #expect(!text.contains("?"))
+    #expect(!text.contains("="))
+}
+
