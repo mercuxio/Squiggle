@@ -113,7 +113,20 @@ public struct BackoffLadder {
         // a real RNG draw from [base, ∞) and land on the cap almost surely —
         // a jitter distribution collapsed to a constant, which is precisely
         // the thundering herd this type exists to break up.
-        let upper = min(cap, max(base, previous * RateConstants.jitterGrowthFactor))
+        //
+        // `previous == 0` is the initial state, not a signal to skip the draw.
+        // It used to be read as one: `max(base, 0 * growth)` is `base`, so the
+        // guard below returned `base` and the randomizer was never called at
+        // all. The first delay after a 429 was exactly 60.0 seconds in every
+        // copy of Squiggle ever shipped — and the first retry is the one
+        // moment jitter matters most, because it is precisely when the whole
+        // installed base has just been synchronised by the same upstream
+        // event. Seeding from `base` gives the first draw the same
+        // `base...base x growth` range every later one gets.
+        let seed = previous > 0 ? previous : base
+        let upper = min(cap, max(base, seed * RateConstants.jitterGrowthFactor))
+        // Still reachable, and still right: a cap at or below the base leaves
+        // no range to draw from. Degenerate constants, not a first failure.
         guard upper > base else { return base }
         return random.double(in: base...upper)
     }

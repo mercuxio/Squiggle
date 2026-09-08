@@ -14,6 +14,24 @@ private func ladder(_ clock: FakeClock, _ random: FakeRandom = FakeRandom()) -> 
     BackoffLadder(clock: clock, random: random)
 }
 
+/// The first delay of a ladder, as drawn at `FakeRandom(position: 1.0)`.
+///
+/// F3: the first draw is a real draw. `previous == 0` used to make
+/// `jittered` return `base` without calling the randomizer at all, so every
+/// test below could say "starts at its base" and mean it literally. It now
+/// starts *in* its base range — `base...base x growth` — and at position 1.0
+/// that is the top of it.
+///
+/// Derived from the constants rather than written as `180` and `90` because
+/// what these tests are about is ladder *independence* and *reset*, not the
+/// value of the growth factor; the range itself is pinned directly, by
+/// literal, in `jitterIsDrawnFromTheFullRangeAndNotJustItsEndpoints`. A ladder
+/// that had wrongly advanced still fails these: one rung up from 30 draws to
+/// 270, not 90.
+private func firstDrawAtTop(_ base: Double) -> Double {
+    base * RateConstants.jitterGrowthFactor
+}
+
 @Test func everyTickerErrorClassifiesIntoExactlyOneFailureKind() throws {
     let symbol = try #require(Symbol("AAPL"))
     #expect(FailureKind(.offline) == .offline)
@@ -70,10 +88,10 @@ private func ladder(_ clock: FakeClock, _ random: FakeRandom = FakeRandom()) -> 
     // failure of each class must still arrive at that class's base, not one
     // rung up. `position: 1.0` means any advance at all would show.
     let firstServer = l.record(.server)
-    #expect(firstServer == RateConstants.serverBackoffBase)
+    #expect(firstServer == firstDrawAtTop(RateConstants.serverBackoffBase))
     clock.advance(firstServer)
     let firstRateLimit = l.record(.rateLimited(retryAfterSeconds: nil))
-    #expect(firstRateLimit == RateConstants.rateLimitBackoffBase)
+    #expect(firstRateLimit == firstDrawAtTop(RateConstants.rateLimitBackoffBase))
 }
 
 @Test func aDeadSymbolDoesNotAdvanceTheLadderEither() {
@@ -85,10 +103,10 @@ private func ladder(_ clock: FakeClock, _ random: FakeRandom = FakeRandom()) -> 
     #expect(l.cooldownUntilMonotonic == nil)
 
     let firstServer = l.record(.server)
-    #expect(firstServer == RateConstants.serverBackoffBase)
+    #expect(firstServer == firstDrawAtTop(RateConstants.serverBackoffBase))
     clock.advance(firstServer)
     let firstRateLimit = l.record(.rateLimited(retryAfterSeconds: nil))
-    #expect(firstRateLimit == RateConstants.rateLimitBackoffBase)
+    #expect(firstRateLimit == firstDrawAtTop(RateConstants.rateLimitBackoffBase))
 }
 
 @Test func eachFailureClassClimbsItsOwnLadder() {
@@ -102,12 +120,12 @@ private func ladder(_ clock: FakeClock, _ random: FakeRandom = FakeRandom()) -> 
     var l = ladder(clock, FakeRandom(position: 1.0))
 
     let rate1 = l.record(.rateLimited(retryAfterSeconds: nil))
-    #expect(rate1 == RateConstants.rateLimitBackoffBase)          // 60
+    #expect(rate1 == firstDrawAtTop(RateConstants.rateLimitBackoffBase))   // 180
     clock.advance(rate1)
 
     // A rate limit must not push the server ladder off its own base.
     let server1 = l.record(.server)
-    #expect(server1 == RateConstants.serverBackoffBase)           // 30
+    #expect(server1 == firstDrawAtTop(RateConstants.serverBackoffBase))    // 90
     clock.advance(server1)
 
     // Interleaved, each class resumes from where *it* left off.
@@ -140,7 +158,7 @@ private func ladder(_ clock: FakeClock, _ random: FakeRandom = FakeRandom()) -> 
     var l = ladder(clock, random)
 
     let first = l.record(.rateLimited(retryAfterSeconds: nil))
-    #expect(first == RateConstants.rateLimitBackoffBase)
+    #expect(first == firstDrawAtTop(RateConstants.rateLimitBackoffBase))
 
     clock.advance(first)
     let second = l.record(.rateLimited(retryAfterSeconds: nil))
@@ -178,18 +196,36 @@ private func ladder(_ clock: FakeClock, _ random: FakeRandom = FakeRandom()) -> 
     let random = FakeRandom(position: 0.5)
     var l = ladder(clock, random)
     let first = l.record(.rateLimited(retryAfterSeconds: nil))
-    #expect(first == RateConstants.rateLimitBackoffBase)
+
+    // Count the draws, do not just look at the delays. The *first* delay after
+    // a 429 is the one that matters most — it is the moment the whole
+    // installed base has just been synchronised by one upstream event — and it
+    // was the one delay that was never drawn at all: `previous == 0` made
+    // `max(base, 0 x growth)` equal `base`, the `upper > base` guard returned
+    // early, and the randomizer was never called. Every assertion phrased
+    // against the returned value passed anyway, because 60.0 is a legal member
+    // of 60...180. Only the call count can tell a draw that landed on the
+    // lower bound apart from a draw that never happened.
+    #expect(random.calls.count == 1, "the first delay did not draw at all")
+    let firstRange = try #require(random.calls.first)
+    #expect(firstRange.lowerBound == RateConstants.rateLimitBackoffBase)   // 60
+    #expect(firstRange.upperBound
+        == RateConstants.rateLimitBackoffBase * RateConstants.jitterGrowthFactor)  // 180
+    // Mid-range of 60...180 is 120: neither endpoint, and nowhere near the cap.
+    #expect(first == 120)
+
     clock.advance(1000)
     let second = l.record(.rateLimited(retryAfterSeconds: nil))
+    #expect(random.calls.count == 2)
 
     let range = try #require(random.calls.last)
     #expect(range.lowerBound == RateConstants.rateLimitBackoffBase)
     #expect(range.upperBound == first * RateConstants.jitterGrowthFactor)
 
-    // A draw from the middle of 60...180 lands at 120: neither endpoint, and
-    // nowhere near the cap. Asserting only the endpoints of the range would
-    // let a collapsed distribution through.
-    #expect(second == 120)
+    // 60...360 now, because the range grows from the previous *draw*. A draw
+    // from its middle lands at 210 — again neither endpoint. Asserting only
+    // the endpoints of the range would let a collapsed distribution through.
+    #expect(second == 210)
     #expect(second > range.lowerBound)
     #expect(second < range.upperBound)
 }
@@ -244,7 +280,7 @@ private func ladder(_ clock: FakeClock, _ random: FakeRandom = FakeRandom()) -> 
     let clock = FakeClock()
     var l = ladder(clock, FakeRandom(position: 1.0))
     let first = l.record(.server)
-    #expect(first == RateConstants.serverBackoffBase)
+    #expect(first == firstDrawAtTop(RateConstants.serverBackoffBase))
     var last: Double = 0
     for _ in 0..<20 { last = l.record(.server); clock.advance(last) }
     #expect(last == RateConstants.serverBackoffCap)
@@ -281,10 +317,10 @@ private func ladder(_ clock: FakeClock, _ random: FakeRandom = FakeRandom()) -> 
     // Both ladders, not just the one the loop happened to end on. One
     // `recordSuccess()` has to have cleared both growth fields.
     let afterReset = l.record(.rateLimited(retryAfterSeconds: nil))
-    #expect(afterReset == RateConstants.rateLimitBackoffBase)
+    #expect(afterReset == firstDrawAtTop(RateConstants.rateLimitBackoffBase))
     clock.advance(afterReset)
     let serverAfterReset = l.record(.server)
-    #expect(serverAfterReset == RateConstants.serverBackoffBase)
+    #expect(serverAfterReset == firstDrawAtTop(RateConstants.serverBackoffBase))
 }
 
 @Test func aSuccessClearsACooldownThatIsStillInForce() {
