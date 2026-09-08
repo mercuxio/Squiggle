@@ -78,7 +78,7 @@ public enum Rendering {
         case .storeCorrupt(let quarantinedAt):
             return "store file was corrupt; moved aside to \(quarantinedAt.lastPathComponent)"
         case .storeQuarantineFailed(let url):
-            return "store file at \(url.path) is corrupt and could not be moved aside"
+            return "store file at \(url.lastPathComponent) is corrupt and could not be moved aside"
         }
     }
 }
