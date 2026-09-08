@@ -65,6 +65,24 @@ public enum YahooQuoteDecoding {
             asOfEpoch: meta.regularMarketTime?.value)
     }
 
+    public static func tradingPeriod(from data: Data) throws -> TradingPeriod {
+        let meta = try self.meta(from: data)
+        guard let payload = meta.currentTradingPeriod else {
+            throw TickerError.missingField(
+                path: "chart.result[0].meta.currentTradingPeriod")
+        }
+
+        func window(_ raw: TradingPeriodPayload.Window?) -> TradingPeriod.Window? {
+            guard let start = raw?.start?.value, let end = raw?.end?.value else { return nil }
+            return TradingPeriod.Window(startEpoch: start, endEpoch: end)
+        }
+
+        return TradingPeriod(
+            pre: window(payload.pre),
+            regular: window(payload.regular),
+            post: window(payload.post))
+    }
+
     private static func meta(from data: Data) throws -> Envelope.Meta {
         guard !data.isEmpty else { throw TickerError.emptyBody }
 
