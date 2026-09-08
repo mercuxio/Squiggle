@@ -49,6 +49,12 @@ public enum RateConstants {
     public static let circuitFailureThreshold: Int = 5
     public static let circuitOpenSeconds: Double = 30 * 60
 
+    /// How long a half-open probe may stay unresolved before it is presumed
+    /// lost and reissued. Four times `YahooClient`'s 15-second request
+    /// timeout: a probe still outstanding after a minute cannot be in flight,
+    /// and a probe that is never reissued wedges the breaker permanently.
+    public static let probeTimeoutSeconds: Double = 60
+
     public static let maxWatchlistCount: Int = 20
 
     /// The refresh intervals offered in Settings (spec §4.1). A fixed menu,
