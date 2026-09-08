@@ -20,6 +20,9 @@ public enum Command: Equatable {
     /// `parse` is the only place that enforces the cap, so nothing downstream
     /// has to re-check it.
     case search(query: String, limit: Int)
+    /// One pass, at most two network requests, no flags. See
+    /// `Sources/squigglectl/DoctorRun.swift`.
+    case doctor
 
     public static func parse(_ arguments: [String]) throws -> Command {
         guard let subcommand = arguments.first else { return .help }
@@ -126,6 +129,14 @@ public enum Command: Equatable {
             }
 
             return .search(query: query, limit: limit)
+
+        case "doctor":
+            // No flags of its own yet — any `--flag` here is a mistake, not a
+            // token to silently ignore. Same rule as `quote` and `search`.
+            if let unknownFlag = rest.first(where: { $0.hasPrefix("--") }) {
+                throw ParseError("unknown flag: \(unknownFlag)")
+            }
+            return .doctor
 
         default:
             throw ParseError("unknown command: \(subcommand)")

@@ -261,4 +261,27 @@ public struct FeedEngine {
     public mutating func adoptPersistedCooldown(untilEpoch: Double, nowEpoch: Double) {
         ladder.adoptPersistedCooldown(secondsRemaining: untilEpoch - nowEpoch)
     }
+
+    /// The live state spec §7 asks a diagnostic to show, that only a running
+    /// engine can answer: token bucket level, both circuit breakers, and the
+    /// backoff ladder's remaining cooldown. Values only — `TickerCore` vends
+    /// no user-facing strings, so `squigglectl` (`Rendering.stateLine`)
+    /// supplies the wording.
+    ///
+    /// Not persisted anywhere: this state lives only in this process's
+    /// memory. Writing it to the store file would turn `squiggle.json` into a
+    /// request log, which is exactly what the "safe to email" rule forbids.
+    public struct DiagnosticSnapshot: Equatable, Sendable {
+        public let tokensAvailable: Double
+        public let networkCircuit: CircuitState
+        public let contractCircuit: CircuitState
+        public let cooldownRemainingSeconds: Double
+    }
+
+    public var diagnosticSnapshot: DiagnosticSnapshot {
+        DiagnosticSnapshot(tokensAvailable: pacer.availableTokens,
+                           networkCircuit: networkCircuit.state(),
+                           contractCircuit: contractCircuit.state(),
+                           cooldownRemainingSeconds: ladder.secondsRemaining())
+    }
 }

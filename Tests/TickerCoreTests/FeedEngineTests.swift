@@ -618,4 +618,31 @@ struct FeedEngineTests {
         #expect(seconds > 800,
                 "the new cycle should be paced ~900s out, not ~60s: got \(seconds)")
     }
+
+    // MARK: - Diagnostic snapshot (Task 17's `squigglectl doctor`/`watch` state line)
+
+    @Test func aFreshEngineReportsAFullBucketAndBothCircuitsClosed() throws {
+        let clock = FakeClock()
+        let e = engine(clock, [try sym("AAPL")])
+        let snapshot = e.diagnosticSnapshot
+        #expect(snapshot.tokensAvailable == RateConstants.bucketCapacity)
+        #expect(snapshot.networkCircuit == .closed)
+        #expect(snapshot.contractCircuit == .closed)
+        #expect(snapshot.cooldownRemainingSeconds == 0)
+    }
+
+    @Test func theSnapshotReportsAnOpenNetworkCircuitWithoutTrippingTheContractOne() throws {
+        let clock = FakeClock()
+        let s = try sym("AAPL")
+        var e = engine(clock, [s])
+        for _ in 0..<RateConstants.circuitFailureThreshold {
+            e.record(.transport("boom"), for: s)
+        }
+        let snapshot = e.diagnosticSnapshot
+        let isOpen: Bool
+        if case .open = snapshot.networkCircuit { isOpen = true } else { isOpen = false }
+        #expect(isOpen, "five consecutive transport failures should open the network circuit")
+        #expect(snapshot.contractCircuit == .closed,
+                "a network-only failure must not trip the independent contract circuit")
+    }
 }

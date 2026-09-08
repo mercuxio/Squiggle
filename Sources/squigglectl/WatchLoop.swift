@@ -101,6 +101,12 @@ struct WatchLoop {
                     log("\(symbol.raw): \(Rendering.diagnosis(wrapped))")
                 }
             }
+
+            // Spec §7's live diagnosis: tokens available, both circuit
+            // states, and the ladder's remaining cooldown. Free — the loop
+            // already holds the engine that knows these, and this makes no
+            // request of its own.
+            log(Rendering.stateLine(engine.diagnosticSnapshot))
         }
         return 0
     }

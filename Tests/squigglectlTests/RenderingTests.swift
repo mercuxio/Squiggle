@@ -55,3 +55,16 @@ import TickerCore
     // separator, so the names line up in a monospaced terminal.
     #expect(Rendering.render(results) == "V     Vee Corp\nAAPL  Apple Inc.  (NASDAQ)")
 }
+
+@Test func everyCheckHasWordingAndNoneIsBlank() {
+    // A check that prints an empty label looks like a rendering bug to the
+    // one person least able to diagnose it.
+    for id in CheckID.allCases {
+        #expect(!Rendering.describe(id).isEmpty)
+    }
+}
+
+@Test func theFourStatusesReadDifferently() {
+    let marks = [CheckStatus.ok, .degraded, .broken, .skipped].map(Rendering.mark)
+    #expect(Set(marks).count == 4)
+}

@@ -72,6 +72,9 @@ func run() async -> Int32 {
         let loop = WatchLoop(client: YahooClient(), store: store, symbols: symbols,
                              intervalSeconds: intervalSeconds, maxCycles: maxCycles)
         return await loop.run()
+
+    case .doctor:
+        return await DoctorRun().run()
     }
 }
 

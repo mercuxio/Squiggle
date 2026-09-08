@@ -129,7 +129,18 @@ import TickerCore
 
 @Test func usageMentionsEveryVerbTheToolAccepts() {
     // A verb that works but is undocumented is a verb nobody uses.
-    for verb in ["quote", "watch", "search"] {
+    for verb in ["quote", "watch", "search", "doctor"] {
         #expect(Rendering.usage.contains("squigglectl \(verb)"))
     }
+}
+
+@Test func doctorTakesNoArguments() throws {
+    let parsed = try Command.parse(["doctor"])
+    #expect(parsed == .doctor)
+}
+
+/// Same rule as `quote` and `search`: `doctor` has no flags of its own yet,
+/// so a stray `--flag` is a mistake to report, not a token to ignore.
+@Test func doctorRejectsAnUnknownFlag() {
+    #expect(throws: ParseError.self) { try Command.parse(["doctor", "--bogus"]) }
 }
