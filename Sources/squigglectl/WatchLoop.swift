@@ -96,7 +96,7 @@ struct WatchLoop {
                     // enforces that promise across an `async throws`
                     // boundary, so this still needs a home rather than a
                     // silently-dropped catch.
-                    let wrapped = TickerError.transport(String(describing: error))
+                    let wrapped = TickerError.transport(Rendering.transportFault(for: error))
                     engine.record(wrapped, for: symbol)
                     log("\(symbol.raw): \(Rendering.diagnosis(wrapped))")
                 }

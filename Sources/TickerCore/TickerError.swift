@@ -1,5 +1,39 @@
 import Foundation
 
+/// Why a request never produced a usable response, as data rather than prose.
+///
+/// A closed vocabulary, and deliberately incapable of carrying free text.
+/// `URLSession` hands its caller a `URLError` whose `userInfo` holds the
+/// failing URL — query string and all, under both `NSErrorFailingURLKey` and
+/// `NSErrorFailingURLStringKey` — and `URLError`'s own description prints that
+/// dictionary. So `transport(String(describing: error))`, which is what four
+/// call sites across two modules used to write, is a URL leak wearing a
+/// diagnostic's clothes; `squigglectl doctor` prints this payload, and its
+/// whole promise is that its output is safe to paste into a support email
+/// (R44).
+///
+/// A `String` payload leaves that promise resting on every present and future
+/// caller remembering not to stringify, which is the arrangement that produced
+/// the leak. A payload with nowhere to put a URL cannot forget. The wording
+/// still lives in the caller — `TickerCore` vends no user-facing strings —
+/// and `squigglectl`'s `Rendering.diagnosis(_:)` is where each case below
+/// becomes a sentence.
+public enum TransportFault: Equatable, Sendable {
+    /// The request URL could not be assembled from its components.
+    case malformedRequestURL
+    /// Something answered, but not over HTTP.
+    case nonHTTPResponse
+    /// `URLSession` refused, timed out or abandoned the request. The payload
+    /// is `URLError.Code`'s raw value (-1001 timed out, -1003 cannot find
+    /// host, -1020 the connection was not allowed on this network) — a
+    /// number, so there is no room in it for the URL that produced it.
+    case urlSession(code: Int)
+    /// A throw from outside the vocabulary above. Carries nothing on purpose:
+    /// the defining property of this case is that nothing about the error is
+    /// known to be safe to show.
+    case unrecognized
+}
+
 /// Every way this package can fail, as data.
 ///
 /// No case carries a user-facing sentence. The payloads are diagnostics —
@@ -13,7 +47,7 @@ public enum TickerError: Error, Equatable, Sendable {
 
     // Transport and status, classified by how Squiggle must respond (spec §4.3).
     case offline
-    case transport(String)
+    case transport(TransportFault)
     case rateLimited(retryAfterSeconds: Double?)
     case serverError(status: Int)
     case unauthorized(status: Int)

@@ -69,6 +69,21 @@ public enum RefreshDecision: Equatable, Sendable {
 /// one call. A policy you cannot simulate is a policy you are guessing about.
 public enum RefreshPolicy {
 
+    /// The interval `cycleInterval` will actually honour for a stored setting.
+    ///
+    /// A hand-edited settings file can contain anything at all, and an interval
+    /// outside the menu Settings offers is corrupt in exactly the way `0`, `-1`
+    /// and NaN are — so it is replaced by the default rather than clamped. Its
+    /// own function because `Diagnosis.pacerThrottlesSettings` has to compare
+    /// against the same number: a second copy of this rule there would be free
+    /// to drift, and the whole point of that comparison is to say which of two
+    /// numbers is larger.
+    public static func honouredInterval(_ userIntervalSeconds: Double) -> Double {
+        RateConstants.offeredRefreshIntervals.contains(userIntervalSeconds)
+            ? userIntervalSeconds
+            : RateConstants.defaultRefreshInterval
+    }
+
     /// How long one full pass over the watchlist should take.
     ///
     /// `max(userInterval, n × spacing)` — the 30s floor between requests means
@@ -80,15 +95,12 @@ public enum RefreshPolicy {
                                      marketState: MarketState,
                                      lowPowerMode: Bool) -> Double {
         // A hand-edited settings file can contain anything at all, and this
-        // function has to be total over "anything". An interval outside the
-        // menu Settings offers is corrupt in exactly the way `0`, `-1` and NaN
-        // are, and gets the same answer. Rejected at the input rather than
-        // clamped at the output: `1e308 × quietMultiplier` is `inf`, and a
-        // clamped product would leave this function reporting a cadence while
-        // silently having rewritten the setting it claims to honour.
-        let requested = RateConstants.offeredRefreshIntervals.contains(userIntervalSeconds)
-            ? userIntervalSeconds
-            : RateConstants.defaultRefreshInterval
+        // function has to be total over "anything". Rejected at the input
+        // rather than clamped at the output: `1e308 × quietMultiplier` is
+        // `inf`, and a clamped product would leave this function reporting a
+        // cadence while silently having rewritten the setting it claims to
+        // honour. See `honouredInterval` above for the rule itself.
+        let requested = honouredInterval(userIntervalSeconds)
 
         let count = max(1, min(watchlistCount, RateConstants.maxWatchlistCount))
         let floor = Double(count) * RateConstants.spacingSeconds

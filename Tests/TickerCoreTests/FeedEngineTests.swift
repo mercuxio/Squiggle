@@ -266,7 +266,7 @@ struct FeedEngineTests {
         let s = try sym("AAPL")
         var e = engine(clock, [s])
         for _ in 0..<RateConstants.circuitFailureThreshold {
-            e.record(.transport("boom"), for: s)
+            e.record(.transport(.unrecognized), for: s)
         }
 
         guard case .sleep(let seconds) = e.next(openMarket()) else {
@@ -306,7 +306,7 @@ struct FeedEngineTests {
         let s = try sym("AAPL")
         var e = engine(clock, [s])
         for _ in 0..<3 {
-            e.record(.transport("boom"), for: s)
+            e.record(.transport(.unrecognized), for: s)
         }
 
         clock.advance(RateConstants.rateLimitBackoffCap)
@@ -521,7 +521,7 @@ struct FeedEngineTests {
 
         // Open the network circuit, then let it go half-open.
         for _ in 0..<RateConstants.circuitFailureThreshold {
-            e.record(.transport("boom"), for: s)
+            e.record(.transport(.unrecognized), for: s)
         }
         clock.advance(RateConstants.circuitOpenSeconds + 1)
 
@@ -636,7 +636,7 @@ struct FeedEngineTests {
         let s = try sym("AAPL")
         var e = engine(clock, [s])
         for _ in 0..<RateConstants.circuitFailureThreshold {
-            e.record(.transport("boom"), for: s)
+            e.record(.transport(.unrecognized), for: s)
         }
         let snapshot = e.diagnosticSnapshot
         let isOpen: Bool

@@ -26,60 +26,20 @@ struct DoctorRun {
     func run() async -> Int32 {
         var checks: [Check] = []
 
-        // 1. quoteEndpoint — one request, whatever else happens.
-        var snapshot: Snapshot?
-        var quoteError: TickerError?
-        if let aapl = Symbol("AAPL") {
-            do {
-                snapshot = try await client.snapshot(for: aapl)
-            } catch let error as TickerError {
-                quoteError = error
-            } catch {
-                quoteError = .transport(String(describing: error))
-            }
-        } else {
-            // Unreachable — "AAPL" always satisfies `Symbol`'s rules — but
-            // `Symbol.init` is failable, so this stays a guard rather than a
-            // force-unwrap.
-            quoteError = .transport("could not construct the probe symbol")
-        }
-        let quoteStatus = Diagnosis.status(for: quoteError)
-        checks.append(Check(id: .quoteEndpoint, status: quoteStatus))
-        print(Rendering.checkLine(Check(id: .quoteEndpoint, status: quoteStatus),
-                                  detail: quoteError.map(Rendering.diagnosis)))
-
-        // 2. searchEndpoint — skipped once the quote check is already broken;
-        // a second request cannot add information once the API's shape is
-        // known to have changed.
-        let searchStatus: CheckStatus
-        var searchError: TickerError?
-        if quoteStatus == .broken {
-            searchStatus = .skipped
-        } else {
-            do {
-                _ = try await client.searchResults(query: "apple", limit: 1)
-                searchStatus = .ok
-            } catch let error as TickerError {
-                searchError = error
-                searchStatus = Diagnosis.status(for: error)
-            } catch {
-                let wrapped = TickerError.transport(String(describing: error))
-                searchError = wrapped
-                searchStatus = Diagnosis.status(for: wrapped)
-            }
-        }
-        checks.append(Check(id: .searchEndpoint, status: searchStatus))
-        print(Rendering.checkLine(Check(id: .searchEndpoint, status: searchStatus),
-                                  detail: searchError.map(Rendering.diagnosis)))
-
-        // 3. tradingPeriods — free, from the snapshot check 1 already
-        // fetched. No second request either way.
-        let (tradingStatus, tradingDetail) = Self.evaluateTradingPeriods(snapshot?.tradingPeriod)
-        checks.append(Check(id: .tradingPeriods, status: tradingStatus))
-        print(Rendering.checkLine(Check(id: .tradingPeriods, status: tradingStatus),
-                                  detail: tradingDetail))
-
-        // 4/5. storeFile / storeSchema — one `load()` classifies both.
+        // The store is read first, before anything touches the network, and is
+        // still *reported* in its own position further down — the printed
+        // order of the eight checks is a contract with the user and does not
+        // change here (R80).
+        //
+        // What changes is that checks 1 and 2 can now see `cooldownUntilEpoch`
+        // before they spend a request. A user inside a 429 cooldown running
+        // `doctor` because their ticker stopped — the natural and correct
+        // thing to do — used to spend two more requests against the throttled
+        // IP on every run. Yahoo has rate-limited this project six times in one
+        // day; the verb whose job is to diagnose that condition must not deepen
+        // it. The cost when the cooldown is a red herring is two `skip` lines
+        // instead of two `FAIL` lines, and a wait to find out whether the
+        // endpoint is also broken. That is the cheaper mistake.
         var loadedStore: Store?
         var storeFileStatus: CheckStatus = .ok
         var storeFileDetail: String?
@@ -99,8 +59,91 @@ struct DoctorRun {
         } catch {
             storeFileStatus = .broken
             storeSchemaStatus = .skipped
-            storeFileDetail = Rendering.diagnosis(.transport(String(describing: error)))
+            storeFileDetail = Rendering.diagnosis(.transport(Rendering.transportFault(for: error)))
         }
+
+        // Read once, used twice: to gate the two network checks below and to
+        // report the cooldown as check 7. Two reads of `Date()` could straddle
+        // the deadline and have `doctor` skip a request it then reported no
+        // cooldown for.
+        let now = Date().timeIntervalSince1970
+        var cooldownRemaining: Double?
+        if let until = loadedStore?.cooldownUntilEpoch, until > now {
+            cooldownRemaining = until - now
+        }
+        let cooldownDetail = cooldownRemaining
+            .map { "active for another \(Int($0.rounded(.up)))s" }
+
+        // 1. quoteEndpoint — one request, unless a cooldown says not to.
+        var snapshot: Snapshot?
+        var quoteError: TickerError?
+        var quoteStatus: CheckStatus?
+        var quoteDetail: String?
+        if let cooldownDetail {
+            quoteStatus = .skipped
+            quoteDetail = "not asked — backoff \(cooldownDetail)"
+        } else if let aapl = Symbol("AAPL") {
+            do {
+                snapshot = try await client.snapshot(for: aapl)
+            } catch let error as TickerError {
+                quoteError = error
+            } catch {
+                quoteError = .transport(Rendering.transportFault(for: error))
+            }
+        } else {
+            // Unreachable — "AAPL" always satisfies `Symbol`'s rules — but
+            // `Symbol.init` is failable, so this stays a guard rather than a
+            // force-unwrap. Reported as what it is, a symbol that would not
+            // construct, rather than as a transport fault: `TransportFault`'s
+            // vocabulary is about the network, and widening it to carry a
+            // caller's one-off prose is how it stops being a vocabulary.
+            quoteError = .invalidSymbol("AAPL")
+        }
+        let quoteResult = quoteStatus ?? Diagnosis.status(for: quoteError)
+        checks.append(Check(id: .quoteEndpoint, status: quoteResult))
+        print(Rendering.checkLine(Check(id: .quoteEndpoint, status: quoteResult),
+                                  detail: quoteDetail ?? quoteError.map(Rendering.diagnosis)))
+
+        // 2. searchEndpoint — skipped once the quote check is already broken;
+        // a second request cannot add information once the API's shape is
+        // known to have changed. Skipped under a cooldown for the opposite
+        // reason: not because the answer would be uninformative, but because
+        // asking is the one thing that makes a throttled IP worse.
+        let searchStatus: CheckStatus
+        var searchError: TickerError?
+        var searchDetail: String?
+        if let cooldownDetail {
+            searchStatus = .skipped
+            searchDetail = "not asked — backoff \(cooldownDetail)"
+        } else if quoteResult == .broken {
+            searchStatus = .skipped
+        } else {
+            do {
+                _ = try await client.searchResults(query: "apple", limit: 1)
+                searchStatus = .ok
+            } catch let error as TickerError {
+                searchError = error
+                searchStatus = Diagnosis.status(for: error)
+            } catch {
+                let wrapped = TickerError.transport(Rendering.transportFault(for: error))
+                searchError = wrapped
+                searchStatus = Diagnosis.status(for: wrapped)
+            }
+        }
+        checks.append(Check(id: .searchEndpoint, status: searchStatus))
+        print(Rendering.checkLine(Check(id: .searchEndpoint, status: searchStatus),
+                                  detail: searchDetail ?? searchError.map(Rendering.diagnosis)))
+
+        // 3. tradingPeriods — free, from the snapshot check 1 already
+        // fetched. No second request either way.
+        let (tradingStatus, tradingDetail) = Self.evaluateTradingPeriods(snapshot?.tradingPeriod)
+        checks.append(Check(id: .tradingPeriods, status: tradingStatus))
+        print(Rendering.checkLine(Check(id: .tradingPeriods, status: tradingStatus),
+                                  detail: tradingDetail))
+
+        // 4/5. storeFile / storeSchema — one `load()` classified both, up at
+        // the top of this method where the two network checks could see its
+        // cooldown. Only the reporting happens here.
         checks.append(Check(id: .storeFile, status: storeFileStatus))
         print(Rendering.checkLine(Check(id: .storeFile, status: storeFileStatus),
                                   detail: storeFileDetail))
@@ -118,33 +161,41 @@ struct DoctorRun {
         print(Rendering.checkLine(Check(id: .setAsideFiles, status: setAsideStatus),
                                   detail: setAsideNames.isEmpty ? nil : setAsideNames.joined(separator: ", ")))
 
-        // 7. cooldown — is `cooldownUntilEpoch` in the future?
+        // 7. cooldown — the same deadline checks 1 and 2 were gated on, in the
+        // position the brief fixed for it.
         let cooldownStatus: CheckStatus
-        var cooldownDetail: String?
-        if let loadedStore {
-            if let until = loadedStore.cooldownUntilEpoch,
-               until > Date().timeIntervalSince1970 {
-                cooldownStatus = .degraded
-                let remaining = Int((until - Date().timeIntervalSince1970).rounded(.up))
-                cooldownDetail = "active for another \(remaining)s"
-            } else {
-                cooldownStatus = .ok
-            }
-        } else {
+        if loadedStore == nil {
             cooldownStatus = .skipped
+        } else {
+            cooldownStatus = cooldownRemaining == nil ? .ok : .degraded
         }
         checks.append(Check(id: .cooldown, status: cooldownStatus))
         print(Rendering.checkLine(Check(id: .cooldown, status: cooldownStatus), detail: cooldownDetail))
 
-        // 8. budget — the closed-form estimate for the stored settings.
+        // 8. budget — the closed-form estimate for the stored settings, and
+        // whether the pacer is quietly overriding them (R79).
+        //
+        // The warning used to read `estimate > 1_200`, which no input could
+        // ever satisfy: `Diagnosis.estimatedDailyRequests` ends in a clamp to
+        // `pacerDailyCeiling`, a constant 1,165. The condition that can
+        // actually occur — and that a support reader needs — is the opposite
+        // one: the user asked for a cadence the 30s floor will not deliver, so
+        // their ticker is staler than their settings describe.
         let budgetStatus: CheckStatus
         var budgetDetail: String?
         if let loadedStore {
-            let estimate = Diagnosis.estimatedDailyRequests(
-                userIntervalSeconds: loadedStore.settings.refreshIntervalSeconds,
-                watchlistCount: loadedStore.symbols.count)
-            budgetStatus = estimate > 1_200 ? .degraded : .ok
-            budgetDetail = "~\(estimate) requests/day"
+            let interval = loadedStore.settings.refreshIntervalSeconds
+            let count = loadedStore.symbols.count
+            let estimate = Diagnosis.estimatedDailyRequests(userIntervalSeconds: interval,
+                                                            watchlistCount: count)
+            let throttled = Diagnosis.pacerThrottlesSettings(userIntervalSeconds: interval,
+                                                             watchlistCount: count)
+            budgetStatus = throttled ? .degraded : .ok
+            // The number stays either way: it is what the user came to see.
+            // Neither branch names a symbol, a path or a URL.
+            budgetDetail = throttled
+                ? "~\(estimate) requests/day; the 30s spacing floor sets the pace here, not the refresh interval"
+                : "~\(estimate) requests/day"
         } else {
             budgetStatus = .skipped
         }
@@ -157,7 +208,7 @@ struct DoctorRun {
     /// `.degraded` if the periods are absent or do not bracket each other —
     /// each present window non-degenerate (`start < end`) and the present
     /// windows chronologically ordered pre, regular, post.
-    private static func evaluateTradingPeriods(
+    static func evaluateTradingPeriods(
         _ period: TradingPeriod?
     ) -> (CheckStatus, String?) {
         guard let period else {
@@ -182,7 +233,7 @@ struct DoctorRun {
     /// `storeFile`'s and `storeSchema`'s statuses. Written out in full rather
     /// than defaulted — like `Diagnosis.status(for:)` — so a new
     /// `TickerError` case fails the build here too, not only there.
-    private static func classifyStoreError(
+    static func classifyStoreError(
         _ error: TickerError
     ) -> (file: CheckStatus, schema: CheckStatus) {
         switch error {

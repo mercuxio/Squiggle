@@ -16,7 +16,7 @@ import Testing
 
 @Test func beingOfflineIsDegradedBecauseItIsAlmostNeverSquigglesFault() {
     #expect(Diagnosis.status(for: .offline) == .degraded)
-    #expect(Diagnosis.status(for: .transport("connection reset")) == .degraded)
+    #expect(Diagnosis.status(for: .transport(.urlSession(code: -1005))) == .degraded)
 }
 
 @Test func aServerErrorIsDegraded() {
@@ -54,7 +54,7 @@ import Testing
     // only one.
     let symbol = try #require(Symbol("AAPL"))
     let all: [TickerError] = [
-        .invalidSymbol("not a symbol"), .offline, .transport("connection reset"),
+        .invalidSymbol("not a symbol"), .offline, .transport(.urlSession(code: -1005)),
         .rateLimited(retryAfterSeconds: nil),
         .serverError(status: 500), .unauthorized(status: 401), .symbolNotFound(symbol),
         .emptyBody, .notJSON, .noResult, .missingField(path: "x"),
@@ -135,12 +135,56 @@ import Testing
             #expect(estimate <= sim.requests + acceptableOvershoot,
                     "\(label): estimate overshoots the sweep by more than \(acceptableOvershoot)")
 
-            // Spec §4.2's cap is a separate claim from the sweep comparison
-            // above and must not be lost just because the name now points at
-            // the sweep instead.
-            #expect(estimate <= 1_200, "\(label): estimate exceeds the daily budget")
+            // Spec §4.2's cap used to be checked here too, once per grid
+            // point, as `estimate <= 1_200`. It has moved to
+            // `thePacersOwnCeilingSitsUnderTheDailyBudget` below, because it
+            // was unfalsifiable where it stood: `estimatedDailyRequests` ends
+            // in `min(naive, pacerDailyCeiling)` and that ceiling is a
+            // constant 1,165 with no argument in it, so the assertion held for
+            // any implementation that kept the clamp — including one wrong by
+            // hundreds at every point on this grid. The claim is about the
+            // rate constants, so it is now asserted once, against them.
         }
     }
+}
+
+@Test func thePacersOwnCeilingSitsUnderTheDailyBudget() {
+    // Spec §4.2's 1,200/day budget, asserted where it is actually decided.
+    // This fails the day someone raises `bucketCapacity` or lowers
+    // `spacingSeconds` far enough to push the pacer over budget, which is
+    // exactly the change it exists to catch — and unlike the per-call check it
+    // replaced, it can fail.
+    #expect(Diagnosis.pacerDailyCeiling <= 1_200,
+            "the pacer can emit \(Diagnosis.pacerDailyCeiling) requests/day, over spec §4.2's budget")
+}
+
+@Test func theSpacingFloorIsReportedWhenItOverridesTheChosenInterval() {
+    // R79. 20 symbols at 30s apiece is a 600s cycle, so a user who asked for
+    // 60s is getting a tenth of the refresh rate they configured and nothing
+    // in the app told them. This is the condition `doctor`'s budget check
+    // reports, in place of a comparison against the daily budget that no input
+    // could ever satisfy.
+    #expect(Diagnosis.pacerThrottlesSettings(userIntervalSeconds: 60, watchlistCount: 20))
+    #expect(Diagnosis.pacerThrottlesSettings(userIntervalSeconds: 60, watchlistCount: 3))
+}
+
+@Test func aSettingTheSpacingFloorCanHonourIsNotReportedAsThrottled() {
+    // 2 symbols need 60s per pass, which is exactly what a 60s interval asks
+    // for: the floor binds without overriding anything, and warning here would
+    // spend the signal on a user with nothing to fix.
+    #expect(!Diagnosis.pacerThrottlesSettings(userIntervalSeconds: 60, watchlistCount: 2))
+    #expect(!Diagnosis.pacerThrottlesSettings(userIntervalSeconds: 900, watchlistCount: 20))
+    #expect(!Diagnosis.pacerThrottlesSettings(userIntervalSeconds: 60, watchlistCount: 0))
+}
+
+@Test func anIntervalThisBuildCannotHonourIsJudgedAgainstTheOneItSubstitutes() {
+    // A hand-edited `7200` is not a setting `cycleInterval` honours — it runs
+    // the 180s default instead — so the comparison has to be against 180 too.
+    // Judged against the raw 7200 this would report "not throttled" for a
+    // 20-symbol watchlist actually running a 600s cycle.
+    let throttled = Diagnosis.pacerThrottlesSettings(userIntervalSeconds: 7_200,
+                                                     watchlistCount: 20)
+    #expect(throttled)
 }
 
 @Test func theBudgetEstimateIsFlatAcrossWatchlistSizesAtTheSpacingFloor() {

@@ -20,7 +20,7 @@ private func ladder(_ clock: FakeClock, _ random: FakeRandom = FakeRandom()) -> 
     #expect(FailureKind(.rateLimited(retryAfterSeconds: nil)) == .rateLimited(retryAfterSeconds: nil))
     #expect(FailureKind(.rateLimited(retryAfterSeconds: 90)) == .rateLimited(retryAfterSeconds: 90))
     #expect(FailureKind(.serverError(status: 503)) == .server)
-    #expect(FailureKind(.transport("timeout")) == .server)
+    #expect(FailureKind(.transport(.urlSession(code: -1001))) == .server)
     #expect(FailureKind(.unauthorized(status: 401)) == .unauthorized)
     #expect(FailureKind(.symbolNotFound(symbol)) == .deadSymbol)
     // Every contract fault, one kind. Spec §4.3 gives them their own circuit.

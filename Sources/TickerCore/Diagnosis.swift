@@ -118,10 +118,6 @@ public enum Diagnosis {
                                               watchlistCount: Int) -> Int {
         guard watchlistCount > 0 else { return 0 }
 
-        let regularSeconds: Double = 6.5 * 3600
-        let preSeconds: Double = 5.5 * 3600
-        let postSeconds: Double = 4 * 3600
-
         func requests(_ sessionSeconds: Double, marketState: MarketState) -> Int {
             let cycle = RefreshPolicy.cycleInterval(
                 userIntervalSeconds: userIntervalSeconds,
@@ -137,16 +133,68 @@ public enum Diagnosis {
 
         // Even split by session, the naive sum can still overshoot once the
         // spacing floor binds tighter than a session's own arithmetic implies.
-        // The pacer's own ceiling — one request every `spacingSeconds` in the
-        // regular session, one every `spacingSeconds × quietMultiplier` in the
-        // quiet ones, full stop — is what actually bounds the day, so cap the
+        // The pacer's own ceiling is what actually bounds the day, so cap the
         // estimate there.
+        return min(naive, pacerDailyCeiling)
+    }
+
+    // The three sessions `BudgetSweepTests`' `Day` model sweeps against —
+    // 04:00 pre-open, 09:30-16:00 regular, 20:00 post-close. Hoisted out of
+    // `estimatedDailyRequests` so `pacerDailyCeiling` below is derived from
+    // the same numbers rather than from a second copy of them.
+    private static let regularSeconds: Double = 6.5 * 3600
+    private static let preSeconds: Double = 5.5 * 3600
+    private static let postSeconds: Double = 4 * 3600
+
+    /// The most requests the pacer can emit in one trading day, whatever the
+    /// user's settings say: one every `spacingSeconds` through the regular
+    /// session, one every `spacingSeconds × quietMultiplier` through each quiet
+    /// one, plus a full bucket's worth of burst.
+    ///
+    /// No argument appears in it — it is a constant of the rate table, 1,165
+    /// today — which is why spec §4.2's 1,200/day budget is a claim about
+    /// *this* and not about any one call's return value. It is asserted once,
+    /// in `thePacersOwnCeilingSitsUnderTheDailyBudget`, where raising
+    /// `bucketCapacity` or lowering `spacingSeconds` fails a test; asserted
+    /// per-call against an already-clamped estimate it held for any
+    /// implementation at all, which is how it came to be checked 20 times and
+    /// mean nothing.
+    static let pacerDailyCeiling: Int = {
         let quietSpacing = RateConstants.spacingSeconds * RateConstants.quietMultiplier
-        let pacerCeiling = Int(regularSeconds / RateConstants.spacingSeconds)
+        return Int(regularSeconds / RateConstants.spacingSeconds)
             + Int(preSeconds / quietSpacing)
             + Int(postSeconds / quietSpacing)
             + Int(RateConstants.bucketCapacity)
+    }()
 
-        return min(naive, pacerCeiling)
+    /// Whether the pacer, rather than the user's chosen interval, is what sets
+    /// how often Squiggle actually fetches (R79).
+    ///
+    /// `RefreshPolicy.cycleInterval` takes `max(honoured interval, n × 30s)`:
+    /// the floor between any two requests means a 20-symbol watchlist needs
+    /// ten minutes per pass whatever the user picked. When that floor is the
+    /// larger term the ticker is slower than its own settings claim — a 60s
+    /// interval across 20 symbols runs a 600s cycle — and nothing else in the
+    /// app says so.
+    ///
+    /// This is the condition worth reporting, and the reason it replaced a
+    /// comparison against the daily budget: `estimatedDailyRequests` ends in
+    /// `min(naive, pacerDailyCeiling)`, and that ceiling is a constant below
+    /// the budget, so "is the estimate over budget" was unreachable for every
+    /// possible input. It said `[ok]` to precisely the user it should have
+    /// warned.
+    ///
+    /// Compared against `.regular` with Low Power Mode off because the quiet
+    /// multiplier scales the cycle and not the setting: including it would
+    /// report every extended-hours user as throttled by the pacer when what is
+    /// slowing them down is a deliberate, documented cadence.
+    public static func pacerThrottlesSettings(userIntervalSeconds: Double,
+                                              watchlistCount: Int) -> Bool {
+        guard watchlistCount > 0 else { return false }
+        let cycle = RefreshPolicy.cycleInterval(userIntervalSeconds: userIntervalSeconds,
+                                                watchlistCount: watchlistCount,
+                                                marketState: .regular,
+                                                lowPowerMode: false)
+        return cycle > RefreshPolicy.honouredInterval(userIntervalSeconds)
     }
 }

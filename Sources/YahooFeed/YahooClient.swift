@@ -97,7 +97,7 @@ public struct YahooClient: QuoteFetching, SymbolSearching {
     }
 
     private func body(of components: URLComponents, symbol: Symbol?) async throws -> Data {
-        guard let url = components.url else { throw TickerError.transport("bad URL") }
+        guard let url = components.url else { throw TickerError.transport(.malformedRequestURL) }
         var request = URLRequest(url: url)
         request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
@@ -108,12 +108,21 @@ public struct YahooClient: QuoteFetching, SymbolSearching {
             (data, response) = try await session.data(for: request)
         } catch let error as URLError where error.code == .notConnectedToInternet {
             throw TickerError.offline
+        } catch let error as URLError {
+            // The code travels; the error does not. `String(describing:)` on a
+            // `URLError` prints its `userInfo`, and URLSession fills that with
+            // the failing URL — this one, query string included, under two
+            // separate keys — plus heap pointers and task UUIDs against a live
+            // endpoint. `squigglectl doctor` prints this payload, and a
+            // timeout is the single most common way this app fails, so it is
+            // the line a user is most likely to paste into a support email.
+            throw TickerError.transport(.urlSession(code: error.code.rawValue))
         } catch {
-            throw TickerError.transport(String(describing: error))
+            throw TickerError.transport(.unrecognized)
         }
 
         guard let http = response as? HTTPURLResponse else {
-            throw TickerError.transport("non-HTTP response")
+            throw TickerError.transport(.nonHTTPResponse)
         }
 
         switch http.statusCode {

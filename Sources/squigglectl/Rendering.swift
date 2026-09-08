@@ -64,8 +64,8 @@ public enum Rendering {
             return "not a usable symbol: \(raw)"
         case .offline:
             return "offline"
-        case .transport(let detail):
-            return "transport error: \(detail)"
+        case .transport(let fault):
+            return "transport error: \(describe(fault))"
         case .rateLimited(let retryAfterSeconds):
             if let retryAfterSeconds {
                 return "rate limited, retry after \(Int(retryAfterSeconds))s"
@@ -99,6 +99,87 @@ public enum Rendering {
             return "store file was corrupt; moved aside to \(quarantinedAt.lastPathComponent)"
         case .storeQuarantineFailed(let url):
             return "store file at \(url.lastPathComponent) is corrupt and could not be moved aside"
+        }
+    }
+
+    /// The only place `squigglectl` turns a caught `Error` into a
+    /// `TransportFault`, and so the only place it decides what a transport
+    /// failure is allowed to say about itself.
+    ///
+    /// A `URLError` contributes its code and nothing else. Everything else
+    /// contributes nothing at all: an error this program does not recognise is
+    /// an error whose description it cannot vouch for, and `doctor`'s output
+    /// has to be safe to paste into a support email (R44). Kept next to
+    /// `describe(_ fault:)` below so the two halves of that vocabulary — what
+    /// may enter it, and what it may print — cannot drift apart.
+    public static func transportFault(for error: any Error) -> TransportFault {
+        guard let urlError = error as? URLError else { return .unrecognized }
+        return .urlSession(code: urlError.code.rawValue)
+    }
+
+    /// The user-facing half of `TransportFault`, and the whole of R44's
+    /// guarantee for the transport path.
+    ///
+    /// The wording for a `URLError` is written here rather than taken from the
+    /// error, because neither of the two obvious sources is safe or useful:
+    ///
+    /// - `error.localizedDescription` reads `NSLocalizedDescription` out of the
+    ///   very `userInfo` dictionary that carries the failing URL. It is a
+    ///   string the transport layer composed, not one derived from the code,
+    ///   so nothing in this package bounds what it may contain — certificate
+    ///   failures, for one, name the server they were talking to.
+    /// - Rebuilding it from the code alone does not work: measured on this
+    ///   machine, `URLError(URLError.Code(rawValue: -1001)).localizedDescription`
+    ///   is "The operation couldn't be completed. (NSURLErrorDomain error
+    ///   -1001.)" — the generic `NSError` fallback, which says no more than
+    ///   printing the number does.
+    ///
+    /// So the table below is squigglectl's own, which is where every word a
+    /// human reads belongs anyway. It answers the question that actually
+    /// matters to a support reader — "timed out" versus "cannot find host" —
+    /// for the failures this client can produce, and an unlisted code still
+    /// arrives with its number. It is an allowlist of codes, not a filter over
+    /// a rendered string: a filter would be a blocklist, and a blocklist fails
+    /// open on the one shape nobody anticipated, which is the shape that
+    /// matters.
+    ///
+    /// `URLError.Code` is Foundation's, not one of this project's own enums,
+    /// so a `default:` is the right shape here — a new URLSession code must
+    /// not fail this build.
+    private static func describe(_ fault: TransportFault) -> String {
+        switch fault {
+        case .malformedRequestURL:
+            return "bad URL"
+        case .nonHTTPResponse:
+            return "non-HTTP response"
+        case .urlSession(let code):
+            return "\(wording(forURLErrorCode: code)) (URLError \(code))"
+        case .unrecognized:
+            return "an unrecognised failure"
+        }
+    }
+
+    private static func wording(forURLErrorCode code: Int) -> String {
+        switch URLError.Code(rawValue: code) {
+        case .timedOut:                     return "the request timed out"
+        case .cannotFindHost:               return "the host could not be found"
+        case .cannotConnectToHost:          return "the host refused the connection"
+        case .networkConnectionLost:        return "the network connection was lost"
+        case .dnsLookupFailed:              return "the DNS lookup failed"
+        case .notConnectedToInternet:       return "there is no internet connection"
+        // `YahooClient` turns off expensive and constrained network access, so
+        // this one is reachable on a tethered or metered connection and is not
+        // a fault at all — a price is not worth a roaming charge.
+        case .dataNotAllowed:               return "this network is not allowed for background data"
+        case .internationalRoamingOff:      return "data roaming is off"
+        case .secureConnectionFailed:       return "the secure connection failed"
+        case .serverCertificateUntrusted,
+             .serverCertificateHasBadDate,
+             .serverCertificateHasUnknownRoot,
+             .serverCertificateNotYetValid: return "the server's certificate was rejected"
+        case .badServerResponse:            return "the server's response could not be read"
+        case .cancelled:                    return "the request was cancelled"
+        default:                            return "the connection failed"
         }
     }
 

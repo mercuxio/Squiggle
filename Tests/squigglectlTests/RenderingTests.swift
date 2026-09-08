@@ -27,6 +27,58 @@ import TickerCore
     #expect(text.contains("watchlist.json"))
 }
 
+/// F-1 (fix round 2): `.transport` carried a `String`, and four call sites
+/// across two modules filled it with `String(describing: error)`. `URLError`'s
+/// description prints its `userInfo`, which is where URLSession puts the
+/// failing URL — query string and all, under both `NSErrorFailingURLKey` and
+/// `NSErrorFailingURLStringKey`. `doctor` printed that line verbatim, and a
+/// timeout is the single most common way this app fails, so it is the line a
+/// user is most likely to paste into a support email.
+///
+/// Asserted the way the two path cases above are: on characters the leak
+/// cannot avoid. `?` and `=` are better witnesses than the URL itself — they
+/// catch any query string, not only the one this test happens to build.
+@Test func aTimedOutRequestReportsItsCodeAndNoURL() throws {
+    let url = try #require(URL(string:
+        "https://query1.finance.yahoo.com/v1/finance/search?q=apple&quotesCount=20"))
+    let underlying = URLError(.timedOut, userInfo: [
+        NSURLErrorFailingURLErrorKey: url,
+        // Spelled out rather than via `NSURLErrorFailingURLStringErrorKey`,
+        // which is deprecated as of macOS 15.4 but is still the key URLSession
+        // populates and still the second copy of the URL in the dictionary.
+        "NSErrorFailingURLStringKey": url.absoluteString,
+        NSLocalizedDescriptionKey: "The request timed out.",
+    ])
+    let text = Rendering.diagnosis(.transport(Rendering.transportFault(for: underlying)))
+    #expect(!text.contains("?"), "leaked a query string: \(text)")
+    #expect(!text.contains("="), "leaked a query string: \(text)")
+    #expect(!text.contains("/"), "leaked a URL: \(text)")
+    #expect(!text.contains("yahoo"), "leaked a host: \(text)")
+    // Still worth reading: a support reader needs "timed out" rather than
+    // "cannot find host", and the number identifies the code exactly.
+    #expect(text.contains("timed out"))
+    #expect(text.contains("-1001"))
+}
+
+/// The companion to the case above: an error this program does not recognise
+/// contributes nothing but the fact that it happened. Nothing here is known to
+/// be safe to print, so nothing is.
+@Test func anUnrecognisedTransportFailureSaysSoAndNothingElse() {
+    struct Chatty: Error, CustomStringConvertible {
+        var description: String { "/Users/example/secret?token=abc123" }
+    }
+    let text = Rendering.diagnosis(.transport(Rendering.transportFault(for: Chatty())))
+    #expect(!text.contains("/"), "leaked a path: \(text)")
+    #expect(!text.contains("token"), "leaked a credential: \(text)")
+}
+
+/// An unlisted `URLError` code must still arrive with its number rather than
+/// being dropped: the wording table is an allowlist of codes, not of errors.
+@Test func anUnlistedURLErrorCodeStillReportsItsNumber() {
+    let text = Rendering.diagnosis(.transport(.urlSession(code: -1234)))
+    #expect(text.contains("-1234"))
+}
+
 /// F-6: `Rendering.render(_:)` for search results had no tests at all.
 @Test func renderingNoSearchResultsSaysSo() {
     #expect(Rendering.render([]) == "no matches")
@@ -68,3 +120,4 @@ import TickerCore
     let marks = [CheckStatus.ok, .degraded, .broken, .skipped].map(Rendering.mark)
     #expect(Set(marks).count == 4)
 }
+
