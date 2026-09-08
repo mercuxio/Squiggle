@@ -83,7 +83,16 @@ public struct YahooClient: QuoteFetching, SymbolSearching {
         components.scheme = "https"
         components.host = "query1.finance.yahoo.com"
         components.path = "/v1/finance/search"
-        components.queryItems = [URLQueryItem(name: "q", value: query)]
+        components.queryItems = [
+            URLQueryItem(name: "q", value: query),
+            // Ask for the most Squiggle will ever show. Trimming to the
+            // caller's limit happens in the decoder, so the transport method
+            // keeps the one-argument shape `SymbolSearching` requires.
+            URLQueryItem(name: "quotesCount", value: "20"),
+            // Squiggle shows prices, not headlines. Zero news items keeps the
+            // response small and the parse cheap.
+            URLQueryItem(name: "newsCount", value: "0"),
+        ]
         return try await body(of: components, symbol: nil)
     }
 
@@ -124,5 +133,18 @@ public struct YahooClient: QuoteFetching, SymbolSearching {
         default:
             throw TickerError.serverError(status: http.statusCode)
         }
+    }
+}
+
+extension YahooClient {
+    /// Search, decoded. Not a `SymbolSearching` requirement — that protocol is
+    /// the transport seam and deals only in `Data`. This is the method the CLI
+    /// and, later, the symbol picker actually call.
+    public func searchResults(query: String, limit: Int) async throws -> [SearchResult] {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        // An empty query is not a failure and is not worth a request.
+        guard !trimmed.isEmpty else { return [] }
+        let data = try await search(trimmed)
+        return try YahooSearchDecoding.results(from: data, limit: limit)
     }
 }

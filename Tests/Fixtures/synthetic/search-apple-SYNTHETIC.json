@@ -1,0 +1,35 @@
+{
+  "quotes": [
+    {
+      "symbol": "AAPL",
+      "shortname": "Apple Inc.",
+      "exchDisp": "NASDAQ",
+      "quoteType": "EQUITY"
+    },
+    {
+      "symbol": "APLE",
+      "shortname": "Apple Hospitality REIT, Inc.",
+      "exchDisp": "NYSE",
+      "quoteType": "EQUITY"
+    },
+    {
+      "symbol": "AAPL.MX",
+      "longname": "APPLE INC",
+      "exchDisp": "MEX",
+      "quoteType": "EQUITY"
+    },
+    {
+      "symbol": "APRU",
+      "shortname": "Aptorum Group Limited",
+      "exchDisp": "NASDAQ",
+      "quoteType": "EQUITY"
+    },
+    {
+      "symbol": "3007.HK",
+      "shortname": "Beijing Properties (Holdings)",
+      "exchDisp": "HKG",
+      "quoteType": "EQUITY"
+    }
+  ],
+  "news": []
+}
