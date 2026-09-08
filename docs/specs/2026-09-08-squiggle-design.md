@@ -10,7 +10,8 @@ Self-distributed, not App Store.
 ## 1. Guiding constraint
 
 Squiggle is a *view*, not a trading tool. It is explicitly not time-critical:
-three-minute-old prices are acceptable, second-level updates are not a goal.
+minute-scale staleness is acceptable (three minutes by default, user-
+adjustable per §4.1); second-level updates are not a goal.
 Every ambiguous decision resolves toward lower idle cost.
 
 This constraint is stated as an assertable budget, not a sentiment:
@@ -125,11 +126,15 @@ values.
 Fetch order is round-robin **in marquee order**, so the symbol about to scroll
 into view is the freshest. Fetch pacing and display pacing are one schedule.
 
-Two floors, whichever is larger:
+The refresh interval is a **user setting**, chosen from a fixed menu in
+Settings: **1, 3 (default), 5, or 15 minutes.** No free-text field and no
+slider — the value has a safety floor beneath it, and a control that silently
+declines to honour what you typed is worse than one that offers four honest
+choices.
 
 ```
-spacing        = 30s                       // between any two requests, ever
-cycleInterval  = max(180s, n × spacing)    // n = watchlist size
+spacing        = 30s                              // between any two requests, ever
+cycleInterval  = max(userInterval, n × spacing)   // n = watchlist size
 ```
 
 | Market state | Interval |
@@ -140,17 +145,35 @@ cycleInterval  = max(180s, n × spacing)    // n = watchlist size
 | Low Power Mode | `× 3` |
 | Menu bar occluded, screen locked, display asleep | **no polling** |
 
-Watchlist capped at 20 symbols. Taking a 6.5-hour regular session and 8 hours
-of combined pre/post:
+The 30-second spacing floor is a safety property of `RequestPacer`, not a
+preference: a 429 from Yahoo was observed on 2026-09-08 to persist for over an
+hour (§3.2), so exceeding the limit is far more costly than being slow. The
+setting can therefore only ever make Squiggle *quieter* than the floor, never
+louder. Settings displays the resulting effective interval live beside the
+choice — "Every 1 minute (10 min with 20 symbols)" — so the floor is never a
+silent override.
 
-| Watchlist | Regular | Extended | Day total |
-| --- | --- | --- | --- |
-| 4 symbols | 130 cycles × 4 = 520 | 53 cycles × 4 = 212 | ~730 |
-| 20 symbols | 39 cycles × 20 = 780 | 16 cycles × 20 = 320 | ~1,100 |
+### 4.2 The budget is invariant
 
-That is ~76 requests/hour at the ceiling — an order of magnitude below any
-plausible limit, and it arrives evenly spaced rather than in the bursts that
-actually trigger a 429.
+Watchlist capped at 20 symbols. Whenever the floor binds — every configuration
+except a very short watchlist on the 1-minute setting — the cycle is `30n`
+seconds and issues `n` requests, so the request *rate* is exactly one per 30
+seconds regardless of both watchlist size and the user's choice:
+
+| Setting | Watchlist | Effective cycle | Regular | Extended | Day total |
+| --- | --- | --- | --- | --- | --- |
+| 1 min | 1 symbol | 60s | 390 | 160 | ~550 |
+| 1 min | 4 symbols | 120s | 780 | 320 | ~1,100 |
+| 1 min | 20 symbols | 600s | 780 | 320 | ~1,100 |
+| 3 min | 4 symbols | 180s | 520 | 212 | ~730 |
+| 15 min | 20 symbols | 900s | 520 | 200 | ~720 |
+
+(6.5-hour regular session, 8 hours combined pre/post.)
+
+**No configuration can exceed ~1,100 requests/day**, or ~120/hour — an order
+of magnitude below any plausible limit, arriving evenly spaced rather than in
+the bursts that actually trigger a 429. This is what makes the §1 budget
+assertable as a single test rather than a per-configuration one.
 
 Market state is read from `currentTradingPeriod` in the payload, cached daily.
 **No local exchange calendar ships with Squiggle.** Holidays, half-days, two
@@ -166,7 +189,7 @@ the installed base does not synchronise on the minute.
 Sleep cancels the timer; wake triggers one immediate fetch. Unocclusion
 triggers one immediate fetch.
 
-### 4.2 Rate limiting and backoff
+### 4.3 Rate limiting and backoff
 
 A token bucket in `TickerCore` gates every request with no bypass — a safety
 property, so no bug anywhere can flood. Capacity 5, refill 1 per 30s.
@@ -381,7 +404,16 @@ clamping holds.
 
 A test runs 24 simulated hours — including a closed market, an occluded menu
 bar, and Low Power Mode — through the injected clock and asserts the total
-request count is **≤ 900**. The §1 budget is a test, not a paragraph.
+request count is **≤ 1,200**.
+
+Because the refresh interval is user-configurable, this runs as a **sweep over
+the whole configuration space**: every interval choice (1, 3, 5, 15 min) × a
+range of watchlist sizes (1, 2, 4, 10, 20). All twenty combinations must hold
+the budget, which is the executable form of the §4.2 invariant. A future
+setting that lets the user outrun the floor fails this test rather than
+reaching a user.
+
+The §1 budget is a test, not a paragraph.
 
 ### 8.5 Live verification, outside `swift test`
 
@@ -411,7 +443,8 @@ No UI until the feed has survived a real trading session.
    and the next open.
 5. Static status item — no animation, single row.
 6. The Core Animation strip, one and two rows, both motion modes.
-7. Width slider, speed slider, row count, colour schemes, launch at login.
+7. Width slider, speed slider, refresh interval, row count, colour schemes,
+   launch at login.
 8. Search-only symbol picker, falling back to trying the typed text as a
    literal symbol when search returns nothing.
 9. Packaging: `Info.plist`, icon, `scripts/package-app.sh`, notarised zip.
