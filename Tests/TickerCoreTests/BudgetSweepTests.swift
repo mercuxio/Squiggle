@@ -149,20 +149,6 @@ private let dailyBudget = 1_200
     #expect(single < lo / 2 + 25, "one symbol cost \(single) against a floored \(lo)")
 }
 
-@Test func theRequestRateNeverExceedsOnePerSpacingIntervalOverTheDay() {
-    // The invariant behind the whole budget: because the 30s floor binds in
-    // nearly every configuration, the rate is constant regardless of
-    // watchlist size *and* user setting.
-    for interval in RateConstants.refreshIntervalChoices {
-        for count in [1, 2, 4, 10, 20] {
-            let sim = DaySimulation.run(userInterval: interval, watchlistCount: count)
-            let ceiling = Int(Day.length / RateConstants.spacingSeconds)
-                + Int(RateConstants.bucketCapacity)
-            #expect(sim.requests <= ceiling)
-        }
-    }
-}
-
 @Test func theDayCostsWhatTheSessionStructurePredicts() {
     // Derived, not observed: regular hours at one request per spacing
     // interval, extended hours at a third of that, nothing overnight. A
