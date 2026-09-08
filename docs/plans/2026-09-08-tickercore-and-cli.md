@@ -1652,7 +1652,10 @@ The market-hours oracle is the payload, not a calendar. Holidays, half-days, two
   - `TickerCore.MarketState` — `enum { case pre, regular, post, closed }`, `Equatable, Sendable`.
   - `TickerCore.TradingPeriod` — `struct` with `pre`, `regular`, `post` of type `Window?`; `Window` has `startEpoch`/`endEpoch` `Double`.
   - `TradingPeriod.state(atEpoch: Double) -> MarketState`
-  - `TradingPeriod.nextRegularOpenEpoch(after: Double) -> Double?`
+  - `TradingPeriod.nextSessionOpenEpoch(after: Double) -> Double?` — the
+    earliest session start still ahead, across **all three** windows. Not the
+    regular open; see controller ruling R38 in the correction note at the end
+    of this plan.
   - `YahooQuoteDecoding.tradingPeriod(from: Data) throws -> TradingPeriod`
 
 **Ordering note (controller ruling R9).** `state(atEpoch:)` checks `regular`
@@ -1713,7 +1716,7 @@ private func period(
 @Test func aPeriodWithNoWindowsAtAllReadsClosedRatherThanCrashing() {
     let p = period(pre: nil, regular: nil, post: nil)
     #expect(p.state(atEpoch: 250) == .closed)
-    #expect(p.nextRegularOpenEpoch(after: 0) == nil)
+    #expect(p.nextSessionOpenEpoch(after: 0) == nil)
 }
 
 @Test func aZeroLengthOrInvertedWindowIsIgnored() {
@@ -1737,8 +1740,40 @@ private func period(
 
 @Test func theNextOpenIsOnlyReportedWhenItIsStillAhead() {
     let p = period()
-    #expect(p.nextRegularOpenEpoch(after: 100) == 200)
-    #expect(p.nextRegularOpenEpoch(after: 250) == nil)
+    // Mid-pre: regular is the next start still ahead. Mid-regular: post is.
+    #expect(p.nextSessionOpenEpoch(after: 150) == 200)
+    #expect(p.nextSessionOpenEpoch(after: 250) == 300)
+    // Past the last start there is nothing left to wake for.
+    #expect(p.nextSessionOpenEpoch(after: 350) == nil)
+}
+
+@Test func theNextOpenIsThePreOpenAndNotTheRegularOne() {
+    // The whole point of `nextSessionOpenEpoch`. Overnight, both pre and
+    // regular are ahead; the wake belongs at pre. Returning 200 here is the
+    // shipped defect — a Mac left on sleeps from midnight to 09:29 and never
+    // polls the 04:00-09:30 session at all, because the closed-market branch
+    // put it to sleep past the only chance it had.
+    let p = period()
+    #expect(p.nextSessionOpenEpoch(after: 50) == 100)
+}
+
+@Test func aMalformedSessionIsSkippedRatherThanWokenFor() {
+    // A holiday `start == end` pre window must not steal the wake from the
+    // real regular open behind it: a window that contains nothing is a window
+    // worth waking for nothing.
+    let holidayPre = period(pre: (100, 100), regular: (200, 300), post: nil)
+    #expect(holidayPre.nextSessionOpenEpoch(after: 50) == 200)
+
+    let invertedPre = period(pre: (150, 100), regular: (200, 300), post: nil)
+    #expect(invertedPre.nextSessionOpenEpoch(after: 50) == 200)
+}
+
+@Test func anOutOfOrderPayloadStillYieldsTheEarliestOpen() {
+    // Nothing guarantees Yahoo orders the windows, and `min` over the futures
+    // is the answer whatever order they arrive in — not "whichever field is
+    // checked first". Here `post` starts before `pre`.
+    let scrambled = period(pre: (900, 1000), regular: (500, 600), post: (300, 400))
+    #expect(scrambled.nextSessionOpenEpoch(after: 100) == 300)
 }
 
 @Test func theTradingPeriodParsesOutOfARealFixture() throws {
@@ -1823,12 +1858,25 @@ public struct TradingPeriod: Equatable, Sendable {
         return .closed
     }
 
-    /// When to set the single wake while the market is closed, or nil if this
-    /// payload does not describe a future open.
-    public func nextRegularOpenEpoch(after epoch: Double) -> Double? {
-        guard let regular, regular.startEpoch < regular.endEpoch,
-              regular.startEpoch > epoch else { return nil }
-        return regular.startEpoch
+    /// When to set the single wake while the market is closed: the earliest
+    /// session start still ahead of `epoch`, across **all three** sessions,
+    /// or nil if this payload does not describe a future open.
+    ///
+    /// Deliberately not "the next regular open". Pre-market runs 04:00-09:30,
+    /// and a wake set to 09:30 means a Mac left on overnight sleeps straight
+    /// through it: `.pre` would then be reachable only for a user who happened
+    /// to already be awake and polling when the session opened, which the
+    /// closed-market branch has just made impossible. Spec §4.2's cost table
+    /// has an explicit Extended column; polling extended hours is the design.
+    ///
+    /// A malformed window (`startEpoch >= endEpoch`, which Yahoo emits on some
+    /// holidays) contributes nothing, exactly as it contains nothing.
+    public func nextSessionOpenEpoch(after epoch: Double) -> Double? {
+        [pre, regular, post]
+            .compactMap { $0 }
+            .filter { $0.startEpoch < $0.endEpoch && $0.startEpoch > epoch }
+            .map(\.startEpoch)
+            .min()
     }
 }
 ```
@@ -3994,7 +4042,7 @@ Everything so far answers "may I?". This task answers "should I, and when next?"
 - Consumes: `MarketState`, `RateConstants`, `RequestPacer`, `BackoffLadder`, `CircuitBreaker`.
 - Produces:
   - `TickerCore.Visibility` — `enum { case visible, occluded }`, `Sendable`.
-  - `TickerCore.RefreshInput` — `struct` with `nowMonotonic: Double`, `nowEpoch: Double`, `marketState: MarketState`, `visibility: Visibility`, `lowPowerMode: Bool`, `userIntervalSeconds: Double`, `watchlistCount: Int`, `nextRegularOpenEpoch: Double?`, `isCoolingDown: Bool`, `cooldownRemaining: Double`, `circuitAllows: Bool`, `circuitOpenRemaining: Double`.
+  - `TickerCore.RefreshInput` — `struct` with `nowMonotonic: Double`, `nowEpoch: Double`, `marketState: MarketState`, `visibility: Visibility`, `lowPowerMode: Bool`, `userIntervalSeconds: Double`, `watchlistCount: Int`, `nextSessionOpenEpoch: Double?`, `isCoolingDown: Bool`, `cooldownRemaining: Double`, `circuitAllows: Bool`, `circuitOpenRemaining: Double`.
   - `TickerCore.RefreshDecision` — `enum { case fetch, wait(seconds: Double) }`, `Equatable, Sendable`; `var waitSeconds: Double?`.
   - `TickerCore.RefreshPolicy` — `enum` with `static func decide(_ input: RefreshInput) -> RefreshDecision` , `static func cycleInterval(userIntervalSeconds:watchlistCount:marketState:lowPowerMode:) -> Double` and `static func isStale(lastSuccessEpoch:nowEpoch:userIntervalSeconds:watchlistCount:marketState:lowPowerMode:) -> Bool`.
 
@@ -4023,7 +4071,7 @@ private func input(
                  lowPowerMode: lowPower,
                  userIntervalSeconds: interval,
                  watchlistCount: count,
-                 nextRegularOpenEpoch: nextOpen,
+                 nextSessionOpenEpoch: nextOpen,
                  isCoolingDown: cooling,
                  cooldownRemaining: cooldownRemaining,
                  circuitAllows: circuitAllows,
@@ -4498,7 +4546,7 @@ public struct RefreshInput: Sendable {
     public var lowPowerMode: Bool
     public var userIntervalSeconds: Double
     public var watchlistCount: Int
-    public var nextRegularOpenEpoch: Double?
+    public var nextSessionOpenEpoch: Double?
     public var isCoolingDown: Bool
     public var cooldownRemaining: Double
     public var circuitAllows: Bool
@@ -4506,7 +4554,7 @@ public struct RefreshInput: Sendable {
 
     public init(nowMonotonic: Double, nowEpoch: Double, marketState: MarketState,
                 visibility: Visibility, lowPowerMode: Bool, userIntervalSeconds: Double,
-                watchlistCount: Int, nextRegularOpenEpoch: Double?, isCoolingDown: Bool,
+                watchlistCount: Int, nextSessionOpenEpoch: Double?, isCoolingDown: Bool,
                 cooldownRemaining: Double, circuitAllows: Bool, circuitOpenRemaining: Double) {
         self.nowMonotonic = nowMonotonic
         self.nowEpoch = nowEpoch
@@ -4515,7 +4563,7 @@ public struct RefreshInput: Sendable {
         self.lowPowerMode = lowPowerMode
         self.userIntervalSeconds = userIntervalSeconds
         self.watchlistCount = watchlistCount
-        self.nextRegularOpenEpoch = nextRegularOpenEpoch
+        self.nextSessionOpenEpoch = nextSessionOpenEpoch
         self.isCoolingDown = isCoolingDown
         self.cooldownRemaining = cooldownRemaining
         self.circuitAllows = circuitAllows
@@ -4635,7 +4683,7 @@ public enum RefreshPolicy {
         }
 
         if input.marketState == .closed {
-            guard let open = input.nextRegularOpenEpoch else {
+            guard let open = input.nextSessionOpenEpoch else {
                 // No payload has told us when the market opens — a cold launch
                 // into a weekend. Fall back to a slow poll rather than sleeping
                 // indefinitely; a nil must never become a hang.
@@ -4741,9 +4789,15 @@ private enum Day {
         }
     }
 
-    /// The next 09:30, as a second-of-day offset that may exceed a day.
-    static func nextRegularOpen(afterSecondOfDay t: Double) -> Double {
-        t < regularOpen ? regularOpen : regularOpen + length
+    /// The next *session* open — pre included — as a second-of-day offset
+    /// that may exceed a day. Mirrors
+    /// `TradingPeriod.nextSessionOpenEpoch(after:)`: overnight the wake
+    /// belongs at 04:00, not at 09:30, or the simulated Mac sleeps through
+    /// pre-market exactly as the real one did.
+    static func nextSessionOpen(afterSecondOfDay t: Double) -> Double {
+        if t < preOpen { return preOpen }
+        if t < regularOpen { return regularOpen }
+        return preOpen + length
     }
 }
 
@@ -4798,7 +4852,7 @@ private struct DaySimulation {
                     lowPowerMode: lowPowerMode,
                     userIntervalSeconds: userInterval,
                     watchlistCount: watchlistCount,
-                    nextRegularOpenEpoch: Day.nextRegularOpen(afterSecondOfDay: t),
+                    nextSessionOpenEpoch: Day.nextSessionOpen(afterSecondOfDay: t),
                     isCoolingDown: false,
                     cooldownRemaining: 0,
                     circuitAllows: true,
@@ -6075,7 +6129,7 @@ Everything from Tasks 8–13 exists in isolation. This task wires it into the si
 **Interfaces:**
 - Consumes: `MonotonicClock`, `Randomizing`, `RequestPacer`, `BackoffLadder`, `CircuitBreaker`, `RefreshPolicy`, `RefreshInput`, `RefreshDecision`, `Visibility`, `MarketState`, `Symbol`, `Quote`, `TickerError`, `FailureKind`, `RateConstants`, `Settings`, `FakeClock`, `FakeRandom`.
 - Produces:
-  - `TickerCore.EngineContext` — `struct`, `Sendable`: `nowEpoch: Double`, `marketState: MarketState`, `visibility: Visibility`, `lowPowerMode: Bool`, `nextRegularOpenEpoch: Double?`.
+  - `TickerCore.EngineContext` — `struct`, `Sendable`: `nowEpoch: Double`, `marketState: MarketState`, `visibility: Visibility`, `lowPowerMode: Bool`, `nextSessionOpenEpoch: Double?`.
   - `TickerCore.EngineAction` — `enum`, `Equatable, Sendable`: `case fetch(Symbol)`, `case sleep(seconds: Double)`.
   - `TickerCore.FeedEngine` — `struct`:
     - `init(clock: any MonotonicClock, random: any Randomizing = SystemRandom(), symbols: [Symbol], userIntervalSeconds: Double)`
@@ -6103,7 +6157,7 @@ private func sym(_ raw: String) throws -> Symbol { try #require(Symbol(raw)) }
 
 private func openMarket(_ epoch: Double = 1_757_000_000) -> EngineContext {
     EngineContext(nowEpoch: epoch, marketState: .regular, visibility: .visible,
-                  lowPowerMode: false, nextRegularOpenEpoch: nil)
+                  lowPowerMode: false, nextSessionOpenEpoch: nil)
 }
 
 private func engine(_ clock: FakeClock,
@@ -6194,14 +6248,14 @@ private func engine(_ clock: FakeClock,
     var e = engine(clock, [try sym("AAPL")])
     let now: Double = 1_757_000_000
     var context = EngineContext(nowEpoch: now, marketState: .closed, visibility: .visible,
-                                lowPowerMode: false, nextRegularOpenEpoch: now + 7200)
+                                lowPowerMode: false, nextSessionOpenEpoch: now + 7200)
 
     guard case .sleep(let seconds) = e.next(context) else {
         Issue.record("the engine fetched into a closed market")
         return
     }
     #expect(seconds == 7200 - RateConstants.preOpenWakeLead)
-    context.nextRegularOpenEpoch = nil   // the oracle can be absent
+    context.nextSessionOpenEpoch = nil   // the oracle can be absent
     guard case .sleep(let fallback) = e.next(context) else { return }
     #expect(fallback > 0 && fallback <= 3600)
 }
@@ -6424,7 +6478,7 @@ private func engine(_ clock: FakeClock,
         for visibility in [Visibility.visible, .occluded] {
             let context = EngineContext(nowEpoch: 1_757_000_000, marketState: state,
                                         visibility: visibility, lowPowerMode: false,
-                                        nextRegularOpenEpoch: nil)
+                                        nextSessionOpenEpoch: nil)
             if case .sleep(let seconds) = e.next(context) {
                 #expect(seconds > 0, "\(state)/\(visibility) produced a zero sleep")
             }
@@ -6462,15 +6516,15 @@ public struct EngineContext: Sendable {
     public var marketState: MarketState
     public var visibility: Visibility
     public var lowPowerMode: Bool
-    public var nextRegularOpenEpoch: Double?
+    public var nextSessionOpenEpoch: Double?
 
     public init(nowEpoch: Double, marketState: MarketState, visibility: Visibility,
-                lowPowerMode: Bool, nextRegularOpenEpoch: Double?) {
+                lowPowerMode: Bool, nextSessionOpenEpoch: Double?) {
         self.nowEpoch = nowEpoch
         self.marketState = marketState
         self.visibility = visibility
         self.lowPowerMode = lowPowerMode
-        self.nextRegularOpenEpoch = nextRegularOpenEpoch
+        self.nextSessionOpenEpoch = nextSessionOpenEpoch
     }
 }
 
@@ -6549,7 +6603,7 @@ public struct FeedEngine {
             lowPowerMode: context.lowPowerMode,
             userIntervalSeconds: userIntervalSeconds,
             watchlistCount: live.count,
-            nextRegularOpenEpoch: context.nextRegularOpenEpoch,
+            nextSessionOpenEpoch: context.nextSessionOpenEpoch,
             isCoolingDown: ladder.isCoolingDown(),
             cooldownRemaining: ladder.secondsRemaining(),
             circuitAllows: networkCircuit.allowsRequest() && contractCircuit.allowsRequest(),
@@ -6711,7 +6765,7 @@ struct WatchLoop {
                 marketState: marketState ?? .regular,
                 visibility: .visible,
                 lowPowerMode: ProcessInfo.processInfo.isLowPowerModeEnabled,
-                nextRegularOpenEpoch: nextOpen)
+                nextSessionOpenEpoch: nextOpen)
 
             switch engine.next(context) {
             case .sleep(let seconds):
@@ -6729,7 +6783,7 @@ struct WatchLoop {
                     log(Rendering.line(snapshot.quote))
                     if let period = snapshot.tradingPeriod {
                         marketState = period.state(atEpoch: now)
-                        nextOpen = period.nextRegularOpenEpoch(after: now)
+                        nextOpen = period.nextSessionOpenEpoch(after: now)
                     }
                 } catch let error as TickerError {
                     engine.record(error, for: symbol)
@@ -7823,3 +7877,40 @@ Tasks 11–18 define them. If plan 2 finds itself wanting to change one of those
 signatures, that is a finding worth bringing back rather than a change to make
 quietly — the budget sweep's guarantees are only as good as the engine staying
 the thing that was measured.
+
+
+---
+
+## Correction note — controller ruling R38 (2026-09-08)
+
+Tasks 7, 11, 12 and 16 as originally written all named
+`nextRegularOpenEpoch`, and the Task 7 implementation returned the next
+**regular** open only. That shipped, and it was a real user-visible defect:
+the closed-market branch of `RefreshPolicy` sets exactly one wake, so a Mac
+left on overnight woke at 09:30 and never polled the 04:00-09:30 pre-market
+session at all. `MarketState.pre` was reachable only for a user who happened
+to already be awake and polling when the session opened — which the
+closed-market branch had just made impossible.
+
+Spec §4.2's cost table carries an explicit **Extended** column (160-320
+requests/day) folded into its "~1,100/day" claim, so polling extended hours is
+intended, not incidental. The defect was fixed in `e8791a7`; the plan text
+above has been corrected to match what shipped, and every occurrence of
+`nextRegularOpen` has been renamed to `nextSessionOpen`.
+
+**Task 16 must read this before it is dispatched.** The uncorrected plan text
+would have instructed `FeedEngine` — the component that decides when the app
+wakes — to call the old method, reintroducing this exact defect in the one
+place it does the most damage.
+
+Two consequences Task 16 inherits:
+
+- **Budget headroom is 3.3%, not 22%.** Measuring the day with pre-market
+  actually reachable gives a worst case of **1160 requests against the 1,200
+  spec budget**. The comfortable-looking 938/22% figure was an artifact of the
+  harness never reaching pre-market. No request path may bypass the pacer, and
+  no new periodic request may be added without a spec-level budget revision.
+- **Ruling R40:** `RateConstants.timerLeewayFraction` (0.25) has no consumer
+  anywhere in `Sources/` — `FeedEngine` will be its first reader. Task 16 must
+  add a test that the leeway actually applied to the `DispatchSourceTimer` is
+  `0.25 x interval`, derived from the timer rather than from the constant.
