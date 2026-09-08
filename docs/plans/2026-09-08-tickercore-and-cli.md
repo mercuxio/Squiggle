@@ -6955,7 +6955,11 @@ import Testing
 
 @Test func everyErrorCaseHasAStatusAndNoneFallThrough() {
     // A new TickerError case that nobody classified would silently report as
-    // whatever the default branch says. Enumerate them explicitly.
+    // whatever a `default:` branch says — so `status(for:)` has none, and the
+    // compiler refuses the build until the new case is classified. This list
+    // is the second line of defence, and it is hand-maintained: when it goes
+    // stale it under-tests silently, which is exactly why it may not be the
+    // only one.
     let all: [TickerError] = [
         .invalidSymbol, .offline, .transport, .rateLimited(retryAfterSeconds: nil),
         .serverError(status: 500), .unauthorized(status: 401), .symbolNotFound,
@@ -6963,7 +6967,9 @@ import Testing
         .wrongType(path: "x", expected: "number"), .nonFiniteNumber(path: "x"),
         .negativeValue(path: "x", value: -1),
         .storeSchemaUnsupported(version: 99),
+        .storeVersionUnreadable,
         .storeCorrupt(quarantinedAt: URL(fileURLWithPath: "/tmp/x")),
+        .storeQuarantineFailed(at: URL(fileURLWithPath: "/tmp/x")),
     ]
     for error in all {
         #expect(Diagnosis.status(for: error) != .skipped,
@@ -7094,11 +7100,19 @@ public enum Diagnosis {
         case .offline, .transport, .rateLimited, .serverError,
              .symbolNotFound, .invalidSymbol:
             return .degraded
-        case .storeSchemaUnsupported, .storeCorrupt:
+        case .storeSchemaUnsupported, .storeVersionUnreadable,
+             .storeCorrupt, .storeQuarantineFailed:
+            // Persistence faults. The watchlist is unreadable, but the feed
+            // itself is answering — degraded, not broken.
             return .degraded
-        default:
-            // Everything left is a contract fault caught above; this branch
-            // exists only for totality.
+        case .emptyBody, .notJSON, .noResult, .missingField, .wrongType,
+             .nonFiniteNumber, .negativeValue:
+            // Every one of these was already returned above by the
+            // `isContractFault` check, so this arm is unreachable by design.
+            // It is written out anyway, in place of a `default:`, so that the
+            // compiler is the exhaustiveness checker: the sweep test below
+            // can only fail *after* someone adds a case, whereas a build
+            // error arrives while they are still adding it.
             return .broken
         }
     }
@@ -7179,7 +7193,10 @@ touching the network as soon as it is pointless:
    Costs nothing: spec §3.2 puts the calendar in the same body as the quote.
    `.degraded` if the periods are absent or do not bracket each other.
 4. `storeFile` — can the store file be read? A missing file is `.ok`.
-5. `storeSchema` — `.degraded` on `storeSchemaUnsupported`.
+5. `storeSchema` — `.degraded` on `storeSchemaUnsupported`, and equally on
+   `storeVersionUnreadable` (a `schemaVersion` that is present but not an
+   integer). Both say the same thing to the user: this file was not written
+   by a version of Squiggle that this one understands.
 6. `setAsideFiles` — any `squiggle.json.bad-*` next to the store file; their
    presence is `.degraded` and their **names only** are printed.
 7. `cooldown` — is `cooldownUntilEpoch` in the future?
@@ -7240,8 +7257,9 @@ pasteable into an email, and the whole point of never persisting a credential
 is undone if the diagnostic prints one.
 
 The filesystem clause is a correction (ruling R44), and it is not hypothetical.
-`TickerError.storeCorrupt` carries a `URL` — the path the corrupt file was set
-aside to, something like
+`TickerError.storeCorrupt` and `TickerError.storeQuarantineFailed` each carry a
+`URL` — the path the corrupt file was set aside to, or the path it could not be
+set aside from, something like
 `/Users/<account>/Library/Application Support/Squiggle/squiggle.json.bad-2026-09-08`.
 That URL has no query string, so the original wording permitted printing it
 while appearing to forbid exactly this kind of leak. An absolute path discloses
@@ -7252,9 +7270,9 @@ Print the **last path component only** where a location must be named at all
 (`squiggle.json.bad-2026-09-08`), and prefer naming no path: the check's label
 already says which file it is about. The architecture makes this easy to hold
 rather than easy to forget — `TickerCore` vends no user-facing strings, so
-`squigglectl` is the only place a path could be interpolated, and the
-`.storeCorrupt` case in `Diagnosis.status(for:)` deliberately ignores its
-payload.
+`squigglectl` is the only place a path could be interpolated, and both
+URL-carrying cases in `Diagnosis.status(for:)` deliberately ignore their
+payloads.
 
 - [ ] **Step 6: Test the wording layer**
 
