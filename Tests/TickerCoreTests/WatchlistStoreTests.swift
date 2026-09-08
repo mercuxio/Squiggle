@@ -267,9 +267,17 @@ private func write(_ json: String, to url: URL) throws {
     #expect(try FileWatchlistStore(url: url).load().symbols.map(\.raw) == ["BRK-B", "btc-usd"])
 }
 
-@Test func nonsensicalSettingsValuesAreClampedOnDecode() throws {
+@Test func noNonsensicalSettingsValueSurvivesTheDecode() throws {
     // The file is user-editable by design. Every number read from it is
-    // hostile input until clamped.
+    // hostile input until it has been dealt with.
+    //
+    // F8, the rename: this was `nonsensicalSettingsValuesAreClampedOnDecode`,
+    // and three of its four fields are indeed clamped — but the refresh
+    // interval is not. `Settings.init(from:)` *rejects* an out-of-range
+    // interval and falls back to the default, and its own comment argues at
+    // length that clamping it would be wrong. A name covering both behaviours
+    // and naming only one is how the wrong assertion below went unnoticed, so
+    // the name now states the invariant and claims no mechanism.
     let url = tempURL()
     try write("""
     {"schemaVersion":1,"settings":{"refreshIntervalSeconds":-5,"rows":97,
@@ -277,7 +285,13 @@ private func write(_ json: String, to url: URL) throws {
     """, to: url)
 
     let s = try FileWatchlistStore(url: url).load().settings
-    #expect(s.refreshIntervalSeconds >= RateConstants.spacingSeconds)
+    // F8, the assertion: this read `>= RateConstants.spacingSeconds`, which is
+    // 30 — half the app's own minimum offered interval of 60, and not a value
+    // any code path here produces. An implementation that clamped a hostile
+    // `-5` to 30 would have satisfied it and then driven the whole app at
+    // twice its intended cadence. The actual post-condition is the default,
+    // exactly, because rejection falls back rather than clamping.
+    #expect(s.refreshIntervalSeconds == RateConstants.defaultRefreshInterval)
     #expect(s.rows == 1 || s.rows == 2)
     #expect(s.scrollPointsPerSecond > 0 && s.scrollPointsPerSecond <= 200)
     #expect(s.maxVisibleWidth > 0)
