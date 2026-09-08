@@ -73,13 +73,16 @@ Captured:
 - [ ] 401-body.json — RECONSTRUCTED, not captured
 
 Still owed (rate-limit-gated, NOT clock-gated — retry it on its own):
-- [ ] search-apple.json — `v1/finance/search?q=apple`. Four attempts on
-      2026-09-08 returned 429; see the note above. Controller ruling R13:
-      this retry is event-driven, taken immediately before Task 15 is
-      dispatched, so the longest possible time has elapsed since the last
-      429. Task 15 blocks rather than fabricates if the file is absent —
-      a hand-written search fixture would be a guess about a response shape
-      nobody has seen, which is the one thing the corpus exists to prevent.
+- [ ] search-apple.json — `v1/finance/search?q=apple`. Six attempts across
+      2026-09-08 returned 429 (see the retry log below); the endpoint
+      remained rate-limited through Task 15's dispatch. Under ruling R66,
+      Task 15 did **not** block on the missing capture: it proceeded against
+      a clearly-labelled synthetic fixture in `Tests/Fixtures/synthetic/`
+      (see that directory's README) rather than stalling the queue. That
+      fixture is not evidence of what Yahoo sent and does not retire this
+      line — `search-apple.json` stays owed until a real capture lands, at
+      which point `YahooSearchDecodingTests.swift`'s `fixture(_:)` helper
+      repoints at it and the synthetic file is deleted.
 
 Still owed (clock-gated; collect during the Task 19 trading day):
 - [ ] regular-session — RECAPTURE during a live session if the corpus was
