@@ -83,7 +83,7 @@ Sources/YahooFeed/
   NetworkReachability.swift  NWPathMonitor behind a protocol
 Sources/squigglectl/
   main.swift                 entry point + dispatch
-  ArgumentParsing.swift      hand-rolled parsing
+  Command.swift      the verb enum and hand-rolled parsing
   Commands.swift             quote / search / watch / doctor / probe
   Rendering.swift            every user-facing string in the CLI
 Tests/TickerCoreTests/
@@ -103,7 +103,7 @@ Tests/TickerCoreTests/
   RowSplitterTests.swift
   YahooSearchDecodingTests.swift
 Tests/squigglectlTests/
-  ArgumentParsingTests.swift
+  CommandTests.swift
   RenderingTests.swift
 Tests/Fixtures/yahoo-2026-09-08/
   <captured bodies — see Task 3>
@@ -264,10 +264,10 @@ git commit -m "chore: package skeleton and the #expect landmine guard"
 - Create: `Sources/TickerCore/Fetching.swift`
 - Create: `Sources/YahooFeed/YahooClient.swift`
 - Modify: `Sources/squigglectl/main.swift`
-- Create: `Sources/squigglectl/ArgumentParsing.swift`
+- Create: `Sources/squigglectl/Command.swift`
 - Create: `Sources/squigglectl/Rendering.swift`
 - Test: `Tests/TickerCoreTests/SymbolTests.swift`
-- Test: `Tests/squigglectlTests/ArgumentParsingTests.swift`
+- Test: `Tests/squigglectlTests/CommandTests.swift`
 
 **Interfaces:**
 - Consumes: the targets from Task 1.
@@ -325,7 +325,7 @@ import Testing
 }
 ```
 
-`Tests/squigglectlTests/ArgumentParsingTests.swift`:
+`Tests/squigglectlTests/CommandTests.swift`:
 
 ```swift
 import Testing
@@ -577,7 +577,7 @@ public struct YahooClient: QuoteFetching, SymbolSearching {
 
 - [ ] **Step 7: Write the argument parser and dispatch**
 
-`Sources/squigglectl/ArgumentParsing.swift`:
+`Sources/squigglectl/Command.swift`:
 
 ```swift
 public struct ParseError: Error, Equatable {
@@ -1313,7 +1313,13 @@ public enum YahooQuoteDecoding {
         return first.meta
     }
 
-    private static func translate(_ error: DecodingError) -> TickerError {
+    /// Turns a `DecodingError` into a `TickerError` that names the JSON path.
+    ///
+    /// Not `private`: Task 15's `YahooSearchDecoding` calls this same
+    /// translator, which is what makes a malformed search body and a
+    /// malformed quote body fail with the identical case — the property
+    /// `doctor` relies on when it classifies the two endpoints alike.
+    static func translate(_ error: DecodingError) -> TickerError {
         switch error {
         case .dataCorrupted(let context) where context.codingPath.isEmpty:
             // Not JSON at all. The 429 body — `text/html`, 19 bytes — lands
@@ -4216,7 +4222,8 @@ Spec §5.3: the symbol picker is search-only. There is no browsable list of ever
 **Files:**
 - Create: `Sources/TickerCore/SearchResult.swift`
 - Create: `Sources/TickerCore/YahooSearchDecoding.swift`
-- Modify: `Sources/YahooFeed/YahooClient.swift` — implement `SymbolSearching`
+- Modify: `Sources/YahooFeed/YahooClient.swift` — add `searchResults(query:limit:)` and two query items to the existing `search(_:)`
+- Modify: `Sources/TickerCore/YahooQuoteDecoding.swift` — drop `private` from `translate(_:)`
 - Modify: `Sources/squigglectl/Command.swift` — add the `search` verb
 - Modify: `Sources/squigglectl/Rendering.swift` — extend `usage`, add `render(_:)` for results
 - Modify: `Sources/squigglectl/main.swift` — dispatch `search`
@@ -4224,10 +4231,11 @@ Spec §5.3: the symbol picker is search-only. There is no browsable list of ever
 - Test: `Tests/squigglectlTests/CommandTests.swift` — extend with search parsing
 
 **Interfaces:**
-- Consumes: `Symbol`, `TickerError`, `TickerError.init(decoding:)`, `SymbolSearching`, `YahooClient.get(_:)`, `Command`, `Rendering`, and the `search-apple.json` fixture from Task 3.
+- Consumes: `Symbol`, `TickerError`, `YahooQuoteDecoding.translate(_:)`, `YahooClient.search(_:)`, `Command`, `Rendering`, and the `search-apple.json` fixture from Task 3.
 - Produces:
   - `TickerCore.SearchResult` — `struct`, `Equatable, Sendable`: `symbol: Symbol`, `name: String`, `exchange: String`, `kind: String`.
   - `TickerCore.YahooSearchDecoding` — `enum`; `public static func results(from data: Data, limit: Int) throws -> [SearchResult]`.
+  - `YahooFeed.YahooClient.searchResults(query: String, limit: Int) async throws -> [SearchResult]` — a plain method, **not** a protocol requirement.
   - `Command.search(query: String, limit: Int)` — a new case on the existing enum.
 
 - [ ] **Step 1: Write the failing decoding tests**
@@ -4403,7 +4411,7 @@ public enum YahooSearchDecoding {
         do {
             envelope = try JSONDecoder().decode(Envelope.self, from: data)
         } catch let error as DecodingError {
-            throw TickerError(decoding: error)
+            throw YahooQuoteDecoding.translate(error)
         }
 
         return (envelope.quotes ?? [])
@@ -4421,41 +4429,59 @@ public enum YahooSearchDecoding {
 }
 ```
 
-> `TickerError(decoding:)` is the translator written in Task 5. Reusing it is
+> `YahooQuoteDecoding.translate(_:)` is the translator written in Task 5. Reusing it is
 > what makes `searchDecodingRejectsNonJsonWithTheSameErrorAsQuoteDecoding`
 > pass, and what lets `doctor` classify a search failure and a quote failure
 > with the same code.
 
-- [ ] **Step 4: Implement `SymbolSearching` on `YahooClient`**
+- [ ] **Step 4: Decode search results on `YahooClient`**
 
-Append to `Sources/YahooFeed/YahooClient.swift`:
+`YahooClient` already conforms to `SymbolSearching` — Task 2 wrote
+`search(_ query: String) async throws -> Data` and pointed it at
+`/v1/finance/search`. Do **not** write `extension YahooClient: SymbolSearching`
+here: restating a conformance the type already has is a compile error
+(`redundant conformance`), and the protocol requirement returns `Data`, not
+`[SearchResult]`.
+
+Two edits, both in `Sources/YahooFeed/YahooClient.swift`.
+
+First, add two query items to the **existing** `search(_:)` — find the
+`components.queryItems` line Task 2 wrote and replace it with:
 
 ```swift
-extension YahooClient: SymbolSearching {
-    public func search(query: String, limit: Int) async throws -> [SearchResult] {
-        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return [] }
-
-        var components = URLComponents(
-            string: "https://query2.finance.yahoo.com/v1/finance/search")!
         components.queryItems = [
-            URLQueryItem(name: "q", value: trimmed),
-            URLQueryItem(name: "quotesCount", value: String(max(1, min(limit, 20)))),
-            // Squiggle shows prices, not headlines. Asking for zero news
-            // items keeps the response small and the parse cheap.
+            URLQueryItem(name: "q", value: query),
+            // Ask for the most Squiggle will ever show. Trimming to the
+            // caller's limit happens in the decoder, so the transport method
+            // keeps the one-argument shape `SymbolSearching` requires.
+            URLQueryItem(name: "quotesCount", value: "20"),
+            // Squiggle shows prices, not headlines. Zero news items keeps the
+            // response small and the parse cheap.
             URLQueryItem(name: "newsCount", value: "0"),
         ]
+```
 
-        let data = try await get(components.url!)
+Second, append the decoded convenience:
+
+```swift
+extension YahooClient {
+    /// Search, decoded. Not a `SymbolSearching` requirement — that protocol is
+    /// the transport seam and deals only in `Data`. This is the method the CLI
+    /// and, later, the symbol picker actually call.
+    public func searchResults(query: String, limit: Int) async throws -> [SearchResult] {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        // An empty query is not a failure and is not worth a request.
+        guard !trimmed.isEmpty else { return [] }
+        let data = try await search(trimmed)
         return try YahooSearchDecoding.results(from: data, limit: limit)
     }
 }
 ```
 
-> `get(_:)` is the single request helper written in Task 2 — the one that maps
-> HTTP status onto `TickerError` and is the only place `URLSession` is touched.
-> Search goes through it for the same reason quotes do: **no path may bypass
-> `RequestPacer`.**
+> Every byte still arrives through `body(of:symbol:)`, the one place `URLSession`
+> is touched and the one place HTTP status becomes a `TickerError`. **No path may
+> bypass `RequestPacer`**, and adding a second request helper here would have been
+> exactly that path.
 
 - [ ] **Step 5: Add the `search` verb**
 
@@ -5301,15 +5327,17 @@ struct WatchLoop {
 >
 > extension YahooClient {
 >     public func snapshot(for symbol: Symbol) async throws -> Snapshot {
->         let data = try await get(chartURL(for: symbol))
+>         let data = try await fetch(symbol)
 >         return Snapshot(quote: try YahooQuoteDecoding.quote(from: data, symbol: symbol),
 >                         tradingPeriod: try? YahooQuoteDecoding.tradingPeriod(from: data))
 >     }
 > }
 > ```
 >
-> `quote(for:)` from Task 2 stays as it is — `squigglectl quote` has no use
-> for the calendar. Both go through the same `get(_:)`, so both are paced.
+> `fetch(_:)` from Task 2 stays as it is — `squigglectl quote` has no use for
+> the calendar, and `snapshot(for:)` is a decode of the body `fetch(_:)` already
+> returns. One request, both facts, and only one place `URLSession` is touched,
+> so both are paced.
 
 Add the verb to `Command`:
 
@@ -5656,7 +5684,7 @@ Expected: PASS.
 touching the network as soon as it is pointless:
 
 1. `quoteEndpoint` — one `client.snapshot(for:)` for `AAPL`.
-2. `searchEndpoint` — one `client.search(query: "apple", limit: 1)`, **skipped**
+2. `searchEndpoint` — one `client.searchResults(query: "apple", limit: 1)`, **skipped**
    if the quote check came back `.broken`; a second request cannot add
    information once the API's shape is known to have changed.
 3. `tradingPeriods` — resolve `pre`/`regular`/`post` from the snapshot check 1
@@ -5787,8 +5815,8 @@ This is the tool that turns "it broke and I don't know why" into "`meta.regularM
   (`"chart.result[].meta.shortName"`), because a digest folds every element of
   an array onto one path. Neither can be derived from the other without losing
   what the other needs, so both stay and a test below asserts they describe the
-  same set. **In this task, change Task 6's `private let readFields` to
-  `let readFields`** so the cross-check can see it; it stays internal to the
+  same set. Task 6 already declares `readFields` without `private` for exactly
+  this reason — if you find a `private` there, drop it; it stays internal to the
   test target.
 - Produces:
   - `TickerCore.ValueType` — `enum: String, Equatable, Sendable`: `number`, `string`, `bool`, `null`, `object`, `array`.
