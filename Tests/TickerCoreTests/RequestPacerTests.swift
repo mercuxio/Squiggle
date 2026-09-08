@@ -25,7 +25,12 @@ import Testing
 @Test func theBucketRefillsAtExactlyOnePerSpacingInterval() {
     let clock = FakeClock()
     var pacer = RequestPacer(clock: clock)
-    while pacer.take() {}
+    var drained = 0
+    while pacer.take() {
+        drained += 1
+        if drained >= 100 { break }
+    }
+    #expect(drained < 100, "take() never returned false")
 
     clock.advance(RateConstants.spacingSeconds - 0.001)
     let tooEarly = pacer.take()
@@ -43,11 +48,20 @@ import Testing
     // is the invariant that makes the daily budget hold across a lid-open.
     let clock = FakeClock()
     var pacer = RequestPacer(clock: clock)
-    while pacer.take() {}
+    var initialDrain = 0
+    while pacer.take() {
+        initialDrain += 1
+        if initialDrain >= 100 { break }
+    }
+    #expect(initialDrain < 100, "take() never returned false")
 
     clock.advance(hours: 168)
     var granted = 0
-    while pacer.take() { granted += 1 }
+    while pacer.take() {
+        granted += 1
+        if granted >= 100 { break }
+    }
+    #expect(granted < 100, "take() never returned false")
     #expect(granted == Int(RateConstants.bucketCapacity))
 }
 
@@ -74,7 +88,11 @@ import Testing
     pacer.halveCapacity()
 
     var granted = 0
-    while pacer.take() { granted += 1 }
+    while pacer.take() {
+        granted += 1
+        if granted >= 100 { break }
+    }
+    #expect(granted < 100, "take() never returned false")
     #expect(granted == Int(RateConstants.bucketCapacity / 2))
 
     clock.advance(RateConstants.spacingSeconds * 2)
@@ -100,20 +118,71 @@ import Testing
     // process, or a future refactor to a wall clock could. Never trust it.
     let clock = FakeClock(1000)
     var pacer = RequestPacer(clock: clock)
-    while pacer.take() {}
+    var drained = 0
+    while pacer.take() {
+        drained += 1
+        if drained >= 100 { break }
+    }
+    #expect(drained < 100, "take() never returned false")
 
     let rewound = FakeClock(0)
     var rewoundPacer = RequestPacer(clock: rewound)
-    while rewoundPacer.take() {}
+    var rewoundDrained = 0
+    while rewoundPacer.take() {
+        rewoundDrained += 1
+        if rewoundDrained >= 100 { break }
+    }
+    #expect(rewoundDrained < 100, "take() never returned false")
     rewound.advance(-500)
     let mintedFromRewind = rewoundPacer.take()
     #expect(!mintedFromRewind)
 }
 
+@Test func anOscillatingClockDoesNotMintTokens() {
+    // A clock that jumps backward and then returns to (or through) a point
+    // it has already visited must not be credited twice for a span of time
+    // that never actually elapsed. Drain the bucket, then oscillate several
+    // times and confirm no tokens appeared.
+    let clock = FakeClock(0)
+    var pacer = RequestPacer(clock: clock)
+    var drained = 0
+    while pacer.take() {
+        drained += 1
+        if drained >= 100 { break }
+    }
+    #expect(drained < 100, "take() never returned false")
+    #expect(pacer.availableTokens == 0)
+
+    for _ in 0..<5 {
+        clock.advance(-100)
+        _ = pacer.secondsUntilNextToken() // forces a refill() without spending a token
+        clock.advance(100)
+        _ = pacer.secondsUntilNextToken()
+    }
+
+    #expect(
+        pacer.availableTokens == 0,
+        "oscillating the clock back to its starting point minted \(pacer.availableTokens) tokens"
+    )
+
+    // A genuine forward advance past the high-water mark must still credit
+    // correctly — exactly one token for one spacing interval, not more.
+    clock.advance(RateConstants.spacingSeconds)
+    let earned = pacer.take()
+    #expect(earned, "a real spacing interval should have earned a token")
+    let extra = pacer.take()
+    #expect(!extra, "the oscillation should not have earned a bonus token")
+}
+
 @Test func theWaitReportedMatchesTheWaitEnforced() {
     let clock = FakeClock()
     var pacer = RequestPacer(clock: clock)
-    while pacer.take() {}
+    var drained = 0
+    while pacer.take() {
+        drained += 1
+        if drained >= 100 { break }
+    }
+    #expect(drained < 100, "take() never returned false")
 
     let wait = pacer.secondsUntilNextToken()
     #expect(wait > 0)

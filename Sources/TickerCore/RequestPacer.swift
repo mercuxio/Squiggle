@@ -5,7 +5,9 @@
 /// future feature — can flood Yahoo, because nothing else holds the tokens.
 ///
 /// Capacity is a *burst* allowance; the long-run rate is one request per
-/// `spacingSeconds` regardless of how often `take()` is called.
+/// the current effective spacing — `spacingSeconds` at full capacity, longer
+/// once `halveCapacity()` has scaled it back — regardless of how often
+/// `take()` is called.
 public struct RequestPacer {
     private let clock: any MonotonicClock
     private var capacity: Double
@@ -56,10 +58,14 @@ public struct RequestPacer {
     private mutating func refill() {
         let now = clock.nowSeconds
         // Never trust time to move forward. A suspended process, a fake, or a
-        // future refactor could hand us a smaller number, and minting tokens
-        // from it would break the only guarantee this type makes.
+        // future refactor could hand us a smaller number. The real danger
+        // isn't the backward reading itself (that credits nothing — elapsed
+        // clamps to zero) but letting lastRefill regress to it: a clock that
+        // later returns to where it already was would then look like it
+        // travelled forward from the dip, minting tokens for time that never
+        // passed. Keeping lastRefill a high-water mark closes that path.
         let elapsed = max(0, now - lastRefill)
-        lastRefill = now
+        lastRefill = max(lastRefill, now)
         tokens = min(capacity, tokens + elapsed / effectiveSpacingSeconds)
     }
 }
