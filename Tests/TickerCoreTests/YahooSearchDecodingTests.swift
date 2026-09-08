@@ -160,13 +160,20 @@ private let appleFixtureName = "search-apple-SYNTHETIC.json"
 }
 
 @Test func searchDecodingSurvivesEveryTruncationOfTheFixture() throws {
-    // Same fuzz as Task 6: a connection cut mid-body must throw, never crash.
-    // Unlike Task 6's version (left alone — outside this task's diff), this
-    // one asserts what the comment claims: every truncation either throws a
-    // `TickerError` or succeeds, and never crashes or throws anything else.
-    // Every length is sampled, not one in seven — a stride would have hidden
-    // exactly the kind of divergence F-1 found. The fixture is under 1KB, so
-    // sweeping all of them is fast: well under a second.
+    // A connection cut mid-body must throw, never crash. Same shape as
+    // `everyTruncatedPrefixOfEveryFixtureThrowsRatherThanTraps` in
+    // `TruncationTests.swift`, which is the template this follows: every
+    // truncation either throws a `TickerError` or succeeds, and never crashes
+    // or throws anything else.
+    //
+    // Succeeding on a prefix is expected, not a failure to record. This
+    // decoder is deliberately lenient — a body cut before `quotes` decodes to
+    // an empty list rather than faulting — so a great many prefixes here
+    // legitimately return `[]`.
+    //
+    // Every length is sampled. Task 6 thins to every 17th byte past the first
+    // 512 because its fixtures are large; this one is under 1KB and the whole
+    // sweep runs in 0.007s, so there is nothing to thin.
     let data = try fixture(appleFixtureName)
     for length in 0..<data.count {
         do {
