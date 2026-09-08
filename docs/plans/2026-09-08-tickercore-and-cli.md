@@ -7790,16 +7790,25 @@ these spends from the same daily budget the watch loop is spending:
 | ~22:00 | `overnight-closed.json` — already discharged by Task 3; recapture only if stale |
 | any time Saturday | `weekend.json`, and `crypto-while-equities-closed.json` from BTC-USD |
 
-`probe --record` always writes `chart-<symbol>.json` and never overwrites, so
-capturing five session states into one dated directory would collide on the
-first repeat. Capture, then rename to the name in the table — these are the
-names Task 3's owed list uses and the only ones later tests look for:
+`--record` takes the name, so there is no rename step. Give it the name from
+the table's right-hand column — those are the names Task 3's owed list uses and
+the only ones later tests look for. The file lands at
+`Tests/Fixtures/yahoo-<today>/<name>.json`:
 
 ```bash
-swift run --build-system native squigglectl probe AAPL --record
-mv Tests/Fixtures/yahoo-$(date +%F)/chart-aapl.json \
-   Tests/Fixtures/yahoo-$(date +%F)/pre-market.json   # or the row's name
+swift run --build-system native squigglectl probe AAPL --record pre-market
 ```
+
+`--record` refuses only when that exact file already exists, so several
+scenarios captured on one day are several files, not a collision — which is
+what makes the 05:00, 10:30 and 17:00 AAPL captures possible at all. The name
+is the **scenario**, never the symbol.
+
+`probe` fetches the chart endpoint and nothing else, so `--record` can produce
+every fixture in the table above but **cannot** produce `search-apple.json`,
+which `docs/fixture-capture-log.md` also lists as owed. That one is a search
+response and must be hand-captured; `probe AAPL --record search-apple` would
+succeed and leave a chart body under a search response's name.
 
 - [ ] **Step 3: Exercise the conditions no test can fake**
 
