@@ -38,6 +38,11 @@ private enum Day {
 /// a time, each request passing through the pacer. Nothing here is
 /// hypothetical — if this simulation and the runner ever disagree, the runner
 /// is the bug.
+///
+/// One exception, and it is not a model of anything: `honourPacer: false`
+/// bypasses the bucket so a measurement can isolate what the policy alone
+/// asks for. No production path has that switch. A simulation run that way is
+/// answering a question about the policy, not predicting what Squiggle does.
 private struct DaySimulation {
     var requests = 0
     var cyclesStarted = 0
