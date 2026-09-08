@@ -3101,21 +3101,108 @@ Two independent circuits (spec §4.3). The **network circuit** trips after five 
 
 Keeping them separate matters: a flaky connection must not be able to silence the schema alarm, and a schema change must not be laundered into "the network is down".
 
+> **Corrected after review (rulings R18–R23).** The version of this task that
+> was first written shipped a breaker that could **wedge permanently**: its
+> half-open permit was a bare `probeInFlight: Bool` latch, so a probe that was
+> granted and never resolved — process suspended, app quit mid-request, caller
+> simply forgets — left the breaker refusing every request for the rest of the
+> process's life, while `secondsRemaining()` cheerfully answered `0`. A caller
+> told "ask now" and then refused spins. Seven of this task's original tests
+> passed against that code. The blocks below are the shipped source, not the
+> original draft. What changed, and why:
+>
+> - **R18** — `allowsRequest()` is a *command*, not a query: it issues the
+>   probe as a side effect. Its doc puts the matching obligation on the caller
+>   — report the outcome with `recordSuccess()`/`recordFailure()`.
+> - **R19** — the probe must expire. `probeInFlight: Bool` became
+>   `probeIssuedAt: Double?`, and a probe older than
+>   `RateConstants.probeTimeoutSeconds` (60s — four times `YahooClient`'s
+>   15-second request timeout) is presumed lost and reissued.
+> - **R20** — a stated invariant, tested across the reachable state space:
+>   **`secondsRemaining()` is never zero at a moment when `allowsRequest()`
+>   would refuse.** While a probe is outstanding the answer is the probe's
+>   remaining life, not zero.
+> - **R21** — `recordFailure()` while genuinely `.open` must **not** extend the
+>   deadline; a stream of stale reports would otherwise multiply the outage
+>   without bound. A failure while *half-open* — a failed probe — still reopens
+>   for the full duration. The state is therefore read *before* the failure is
+>   counted.
+> - **R22** — `trip()` no longer fabricates failure history
+>   (`failures = max(failures, threshold)` is gone). One 429 is one piece of
+>   bad news, not five. Because the reopen is now carried by the observed
+>   `.halfOpen` state rather than by the failure count, `state()` and
+>   `secondsRemaining()` are no longer `mutating`; only `allowsRequest()` is.
+> - **R23** — two clamps were **deleted rather than tested**, because both
+>   proved unreachable in the fixed implementation and a clamp that cannot
+>   fire advertises a hazard it does not guard. `max(1, threshold)` guarded
+>   nothing (`recordFailure()` compares only *after* incrementing, so a
+>   threshold of zero or less already behaves exactly as one), and
+>   `max(0, expiry - now)` guarded nothing once `secondsRemaining()` took a
+>   single clock read shared by the state decision and the arithmetic.
+
 **Files:**
 - Create: `Sources/TickerCore/CircuitBreaker.swift`
 - Test: `Tests/TickerCoreTests/CircuitBreakerTests.swift`
 
 **Interfaces:**
-- Consumes: `FailureKind`, `RateConstants`, `MonotonicClock`.
+- Consumes: `RateConstants`, `MonotonicClock`.
 - Produces:
   - `TickerCore.CircuitState` — `enum { case closed, open(untilMonotonic: Double), halfOpen }`, `Equatable, Sendable`.
-  - `TickerCore.CircuitBreaker` — `init(clock:threshold:openSeconds:)`, `mutating func recordFailure()`, `mutating func recordSuccess()`, `mutating func trip()`, `mutating func state() -> CircuitState`, `mutating func allowsRequest() -> Bool`, `mutating func secondsRemaining() -> Double`, `var consecutiveFailures: Int`.
+  - `TickerCore.CircuitBreaker` — `init(clock:threshold:openSeconds:)`, `mutating func recordFailure()`, `mutating func recordSuccess()`, `mutating func trip()`, `func state() -> CircuitState`, `mutating func allowsRequest() -> Bool`, `func secondsRemaining() -> Double`, `var consecutiveFailures: Int`.
+  - `RateConstants.probeTimeoutSeconds: Double` — 60.
 
-- [ ] **Step 1: Write the failing tests**
+**A landmine before you start.** `#expect` binds its operands immutably, so a
+`mutating` method cannot be called inside one: `#expect(b.allowsRequest())` is
+`cannot use mutating member on immutable value: '$0' is immutable`. Hoist every
+such call into its own `let` first — and hoist **call by call**, in the original
+order. `allowsRequest()` has a side effect (it consumes the probe), so binding
+once and asserting twice silently destroys the test that matters most:
+
+```swift
+// RIGHT — two calls, two bindings, the second observes the consumed probe.
+let firstProbe = b.allowsRequest()
+#expect(firstProbe)
+let secondProbe = b.allowsRequest()
+#expect(!secondProbe, "half-open handed out a second concurrent probe")
+
+// WRONG — one call, asserted twice. Always passes. Tests nothing.
+let probe = b.allowsRequest()
+#expect(probe)
+#expect(!probe)   // ← this is now just `!probe`, not a second request
+```
+
+- [ ] **Step 1: Add the constant**
+
+In `Sources/TickerCore/RateConstants.swift`:
+
+```swift
+    /// How long a half-open probe may stay unresolved before it is presumed
+    /// lost and reissued. Four times `YahooClient`'s 15-second request
+    /// timeout: a probe still outstanding after a minute cannot be in flight,
+    /// and a probe that is never reissued wedges the breaker permanently.
+    public static let probeTimeoutSeconds: Double = 60
+```
+
+- [ ] **Step 2: Write the failing tests**
+
+`Tests/TickerCoreTests/CircuitBreakerTests.swift`:
 
 ```swift
 import Testing
 @testable import TickerCore
+
+// NOTE: as in BackoffLadderTests.swift, this suite's `#expect(...)` macro
+// mis-compiles whenever the checked expression is a direct call to a
+// `mutating` method on a `var` — its call-capturing expansion binds the
+// receiver as an immutable `$0`, producing "cannot use mutating member on
+// immutable value". `allowsRequest()` is the only such method on
+// `CircuitBreaker`, so it — and only it — is hoisted into its own `let`
+// before the `#expect` that checks it: one `let` per original call site, in
+// the original order, because issuing the half-open probe is a side effect
+// and collapsing two calls into one binding would silently change what is
+// being tested. `state()` and `secondsRemaining()` are non-mutating and are
+// written inline, which is also where a reader should be able to stop
+// thinking about it.
 
 private func networkBreaker(_ clock: FakeClock) -> CircuitBreaker {
     CircuitBreaker(clock: clock,
@@ -3123,10 +3210,18 @@ private func networkBreaker(_ clock: FakeClock) -> CircuitBreaker {
                    openSeconds: RateConstants.circuitOpenSeconds)
 }
 
+/// A breaker driven to `.open` by real failures, at the clock's current time.
+private func openedBreaker(_ clock: FakeClock) -> CircuitBreaker {
+    var b = networkBreaker(clock)
+    for _ in 0..<RateConstants.circuitFailureThreshold { b.recordFailure() }
+    return b
+}
+
 @Test func aFreshBreakerIsClosedAndAllowsRequests() {
     var b = networkBreaker(FakeClock())
     #expect(b.state() == .closed)
-    #expect(b.allowsRequest())
+    let allowed = b.allowsRequest()
+    #expect(allowed)
 }
 
 @Test func theBreakerTripsOnTheThresholdFailureAndNotBefore() {
@@ -3134,10 +3229,12 @@ private func networkBreaker(_ clock: FakeClock) -> CircuitBreaker {
     var b = networkBreaker(clock)
     for _ in 0..<(RateConstants.circuitFailureThreshold - 1) {
         b.recordFailure()
-        #expect(b.allowsRequest(), "tripped early at \(b.consecutiveFailures) failures")
+        let allowed = b.allowsRequest()
+        #expect(allowed, "tripped early at \(b.consecutiveFailures) failures")
     }
     b.recordFailure()
-    #expect(!b.allowsRequest())
+    let allowed = b.allowsRequest()
+    #expect(!allowed)
 }
 
 @Test func oneSuccessAnywhereInTheRunResetsTheCount() {
@@ -3150,21 +3247,83 @@ private func networkBreaker(_ clock: FakeClock) -> CircuitBreaker {
         b.recordSuccess()
     }
     #expect(b.consecutiveFailures == 0)
-    #expect(b.allowsRequest())
+    let allowed = b.allowsRequest()
+    #expect(allowed)
+}
+
+@Test func consecutiveFailuresReportsTheRunningCountAndNotAConstant() {
+    // The only assertion this member used to carry was `== 0`, which a
+    // hard-coded zero satisfies by construction: a required public accessor
+    // with no positive coverage at all. Pin it at every intermediate count,
+    // across a reset, and past the threshold.
+    let clock = FakeClock()
+    var b = networkBreaker(clock)
+    #expect(b.consecutiveFailures == 0)
+
+    for expected in 1..<RateConstants.circuitFailureThreshold {
+        b.recordFailure()
+        #expect(b.consecutiveFailures == expected)
+    }
+
+    b.recordSuccess()
+    #expect(b.consecutiveFailures == 0, "a success must clear the run, not decrement it")
+
+    // It keeps counting past the threshold — it is a count of failures
+    // recorded, not a latch that stops at the number that opened the circuit.
+    for expected in 1...(RateConstants.circuitFailureThreshold + 3) {
+        b.recordFailure()
+        #expect(b.consecutiveFailures == expected)
+    }
+
+    // And `trip()` invents none of them: one 429 is one piece of bad news.
+    var tripped = networkBreaker(FakeClock())
+    tripped.trip()
+    #expect(tripped.consecutiveFailures == 0,
+            "trip() reported failures that never happened")
+    tripped.recordSuccess()
+    #expect(tripped.consecutiveFailures == 0)
 }
 
 @Test func anOpenBreakerStaysOpenForItsFullDurationThenGoesHalfOpen() {
     let clock = FakeClock()
-    var b = networkBreaker(clock)
-    for _ in 0..<RateConstants.circuitFailureThreshold { b.recordFailure() }
+    var b = openedBreaker(clock)
 
     clock.advance(RateConstants.circuitOpenSeconds - 1)
-    #expect(!b.allowsRequest())
+    let stillBlocked = b.allowsRequest()
+    #expect(!stillBlocked)
     #expect(b.state() == .open(untilMonotonic: RateConstants.circuitOpenSeconds))
 
     clock.advance(2)
     #expect(b.state() == .halfOpen)
-    #expect(b.allowsRequest(), "half-open must permit the probe")
+    let probe = b.allowsRequest()
+    #expect(probe, "half-open must permit the probe")
+}
+
+@Test func theDeadlineInstantItselfIsAlreadyHalfOpen() {
+    // The `<` in `state()` carries a comment calling itself deliberate, and
+    // nothing pinned it: the countdown test lands on the deadline but reads
+    // only `secondsRemaining()`, which answers 0 under both `<` and `<=`.
+    // These two assertions are the ones that can tell them apart.
+    let atDeadline = FakeClock(0)
+    var b = networkBreaker(atDeadline)
+    b.trip()
+    atDeadline.advance(RateConstants.circuitOpenSeconds)
+    #expect(atDeadline.nowSeconds == RateConstants.circuitOpenSeconds)
+    #expect(b.state() == .halfOpen,
+            "the deadline instant is out of the open window, not in it")
+    let allowedAtDeadline = b.allowsRequest()
+    #expect(allowedAtDeadline, "the breaker refused a probe at its own deadline")
+
+    // One millisecond earlier, on a clock that has not been nudged twice, it
+    // is still shut — and still says how long for.
+    let justBefore = FakeClock(0)
+    var m = networkBreaker(justBefore)
+    m.trip()
+    justBefore.advance(RateConstants.circuitOpenSeconds - 0.001)
+    #expect(m.state() == .open(untilMonotonic: RateConstants.circuitOpenSeconds))
+    let refusedJustBefore = m.allowsRequest()
+    #expect(!refusedJustBefore)
+    #expect(m.secondsRemaining() > 0)
 }
 
 @Test func aHalfOpenBreakerPermitsExactlyOneProbe() {
@@ -3172,40 +3331,263 @@ private func networkBreaker(_ clock: FakeClock) -> CircuitBreaker {
     // watchlist through, a still-down upstream would get twenty requests as
     // its reward for the outage.
     let clock = FakeClock()
-    var b = networkBreaker(clock)
-    for _ in 0..<RateConstants.circuitFailureThreshold { b.recordFailure() }
+    var b = openedBreaker(clock)
     clock.advance(RateConstants.circuitOpenSeconds + 1)
 
-    #expect(b.allowsRequest())
-    #expect(!b.allowsRequest(), "half-open handed out a second concurrent probe")
+    let firstProbe = b.allowsRequest()
+    #expect(firstProbe)
+    let secondProbe = b.allowsRequest()
+    #expect(!secondProbe, "half-open handed out a second concurrent probe")
+}
+
+@Test func anUnresolvedProbeIsPresumedLostAndAFreshOneIsIssued() {
+    // The probe is taken and its outcome never reported — the process was
+    // suspended, the app was quit mid-request, the caller forgot. Without a
+    // lifetime on the probe the breaker is wedged for the rest of the
+    // process: half-open, refusing everything, and answering "wait zero
+    // seconds" to anyone who asks how long. That is a hot loop on a battery.
+    let clock = FakeClock()
+    var b = openedBreaker(clock)
+    clock.advance(RateConstants.circuitOpenSeconds + 1)
+    let probe = b.allowsRequest()
+    #expect(probe)
+
+    // Neither recordSuccess() nor recordFailure(). Ever.
+    clock.advance(RateConstants.probeTimeoutSeconds - 1)
+    let tooSoon = b.allowsRequest()
+    #expect(!tooSoon, "the probe was reissued before it could have timed out")
+    #expect(b.secondsRemaining() == 1,
+            "a refused breaker must name the interval it is refusing for")
+
+    clock.advance(1)   // exactly `probeTimeoutSeconds` after it was issued
+    let reissued = b.allowsRequest()
+    #expect(reissued, "an unresolved probe wedged the breaker")
+
+    // And the shape the wedge was first found in: leave the reissued probe
+    // unresolved too, then wait an absurdly long time.
+    clock.advance(1_000_000)
+    #expect(b.state() == .halfOpen)
+    #expect(b.secondsRemaining() == 0)
+    let afterAnAge = b.allowsRequest()
+    #expect(afterAnAge, "the breaker never recovered from a lost probe")
+}
+
+@Test func aRefusedRequestAlwaysComesWithAnIntervalToWait() {
+    // The invariant, walked across every reachable state. `secondsRemaining()`
+    // is a promise that a request would be let through once it elapses; a
+    // breaker that answers zero and then refuses leaves its caller nothing to
+    // sleep on, and it spins. This is stronger than any single boundary
+    // assertion, and it is the one that would have caught the wedge above.
+    func check(_ b: inout CircuitBreaker, _ at: String) {
+        let remaining = b.secondsRemaining()
+        let allowed = b.allowsRequest()
+        #expect(allowed || remaining > 0,
+                "\(at): refused a request while reporting a zero wait")
+    }
+
+    // Closed.
+    var fresh = networkBreaker(FakeClock())
+    check(&fresh, "closed")
+
+    // Open, well before the deadline.
+    let early = FakeClock()
+    var earlyBreaker = openedBreaker(early)
+    early.advance(1)
+    check(&earlyBreaker, "open, one second in")
+
+    // Open, one millisecond before the deadline.
+    let late = FakeClock()
+    var lateBreaker = openedBreaker(late)
+    late.advance(RateConstants.circuitOpenSeconds - 0.001)
+    check(&lateBreaker, "open, a millisecond from expiry")
+
+    // Exactly at the deadline: half-open, probe available.
+    let atExpiry = FakeClock()
+    var atExpiryBreaker = openedBreaker(atExpiry)
+    atExpiry.advance(RateConstants.circuitOpenSeconds)
+    check(&atExpiryBreaker, "the deadline instant")
+
+    // Half-open with the probe in flight — the state that used to answer
+    // zero while refusing.
+    let inFlight = FakeClock()
+    var inFlightBreaker = openedBreaker(inFlight)
+    inFlight.advance(RateConstants.circuitOpenSeconds + 1)
+    let taken = inFlightBreaker.allowsRequest()
+    #expect(taken)
+    check(&inFlightBreaker, "half-open, probe in flight")
+
+    // Half-open with the probe in flight, a millisecond from its timeout.
+    let nearlyLost = FakeClock()
+    var nearlyLostBreaker = openedBreaker(nearlyLost)
+    nearlyLost.advance(RateConstants.circuitOpenSeconds + 1)
+    let takenAgain = nearlyLostBreaker.allowsRequest()
+    #expect(takenAgain)
+    nearlyLost.advance(RateConstants.probeTimeoutSeconds - 0.001)
+    check(&nearlyLostBreaker, "half-open, probe about to time out")
+
+    // Half-open with an expired probe.
+    let lost = FakeClock()
+    var lostBreaker = openedBreaker(lost)
+    lost.advance(RateConstants.circuitOpenSeconds + 1)
+    let abandoned = lostBreaker.allowsRequest()
+    #expect(abandoned)
+    lost.advance(RateConstants.probeTimeoutSeconds)
+    check(&lostBreaker, "half-open, probe presumed lost")
+
+    // And an abandoned probe an age later, which is where the wedge lived.
+    let ancient = FakeClock()
+    var ancientBreaker = openedBreaker(ancient)
+    ancient.advance(RateConstants.circuitOpenSeconds + 1)
+    let ancientProbe = ancientBreaker.allowsRequest()
+    #expect(ancientProbe)
+    ancient.advance(1_000_000)
+    check(&ancientBreaker, "half-open, probe abandoned long ago")
 }
 
 @Test func aFailedProbeReopensTheBreakerForTheFullDuration() {
     let clock = FakeClock()
-    var b = networkBreaker(clock)
-    for _ in 0..<RateConstants.circuitFailureThreshold { b.recordFailure() }
+    var b = openedBreaker(clock)
     clock.advance(RateConstants.circuitOpenSeconds + 1)
-    #expect(b.allowsRequest())
+    let probe = b.allowsRequest()
+    #expect(probe)
 
     b.recordFailure()
-    #expect(!b.allowsRequest())
+    let afterFailedProbe = b.allowsRequest()
+    #expect(!afterFailedProbe)
     clock.advance(RateConstants.circuitOpenSeconds - 1)
-    #expect(!b.allowsRequest(), "the probe failure did not restart the full timer")
+    let stillOpen = b.allowsRequest()
+    #expect(!stillOpen, "the probe failure did not restart the full timer")
     clock.advance(2)
-    #expect(b.allowsRequest())
+    let reopened = b.allowsRequest()
+    #expect(reopened)
+}
+
+@Test func aProbeThatFailsAfterAnExplicitTripAlsoReopensForTheFullDuration() {
+    // `trip()` records no failures at all, so the reopen here cannot be
+    // carried by the failure count reaching the threshold — it rests entirely
+    // on the breaker noticing that it was half-open when the request went
+    // out. Nothing tested trip() together with a failing probe, and the two
+    // guards that used to hold this path up were each sufficient on their
+    // own, so neither was pinned: dropping both granted five consecutive
+    // probes with no time passing at all.
+    let clock = FakeClock()
+    var b = networkBreaker(clock)
+    b.trip()
+    #expect(b.consecutiveFailures == 0)
+    clock.advance(RateConstants.circuitOpenSeconds + 1)
+
+    let probe = b.allowsRequest()
+    #expect(probe)
+    b.recordFailure()
+    #expect(b.consecutiveFailures == 1, "one failed probe is one failure")
+
+    // No time has passed. A breaker that hands out a second probe here is
+    // handing the still-broken upstream its whole watchlist back.
+    var granted = 0
+    for _ in 0..<RateConstants.circuitFailureThreshold {
+        let allowed = b.allowsRequest()
+        if allowed { granted += 1 }
+    }
+    #expect(granted == 0, "a failed probe after trip() left the breaker open for business")
+
+    clock.advance(RateConstants.circuitOpenSeconds - 1)
+    let stillOpen = b.allowsRequest()
+    #expect(!stillOpen, "the failed probe did not restart the full timer")
+    clock.advance(2)
+    let reopened = b.allowsRequest()
+    #expect(reopened)
+}
+
+@Test func aFailureRecordedWhileOpenDoesNotExtendTheOutage() {
+    // `.open(untilMonotonic:)` publishes a deadline. A caller that reports
+    // failures for requests the breaker had already refused — or one that
+    // never consulted it — must not be able to push that deadline forward,
+    // or a thirty-minute outage silently becomes fifty. A failed *probe* is
+    // the opposite case and still reopens in full; the two are distinct.
+    let clock = FakeClock(0)
+    var b = networkBreaker(clock)
+    b.trip()
+    let deadline = RateConstants.circuitOpenSeconds
+    #expect(b.state() == .open(untilMonotonic: deadline))
+
+    for _ in 0..<10 {
+        clock.advance(60)
+        b.recordFailure()
+        #expect(b.state() == .open(untilMonotonic: deadline),
+                "a failure recorded while open moved the deadline")
+        #expect(b.secondsRemaining() == deadline - clock.nowSeconds)
+    }
+
+    clock.advance(deadline - clock.nowSeconds)
+    #expect(b.state() == .halfOpen)
+    let probe = b.allowsRequest()
+    #expect(probe, "ten stray failure reports extended a thirty-minute outage")
+}
+
+@Test func aNewOpenEpisodeStartsWithAProbeOfItsOwn() {
+    // A probe token that survives the cycle that issued it refuses the *next*
+    // cycle's probe. The open window here is deliberately shorter than
+    // `probeTimeoutSeconds`, so the next half-open cycle arrives while a
+    // stale token would still be live: with a thirty-minute window the probe
+    // timeout would quietly rescue the bug and the test would assert nothing.
+    let shortWindow = RateConstants.probeTimeoutSeconds / 6   // 10s
+    #expect(shortWindow * 2 < RateConstants.probeTimeoutSeconds)
+
+    func breaker(_ clock: FakeClock) -> CircuitBreaker {
+        CircuitBreaker(clock: clock, threshold: 1, openSeconds: shortWindow)
+    }
+
+    // A cycle that ended in success, then a fresh one.
+    let successClock = FakeClock()
+    var afterSuccess = breaker(successClock)
+    afterSuccess.recordFailure()
+    successClock.advance(shortWindow + 1)
+    let firstProbe = afterSuccess.allowsRequest()
+    #expect(firstProbe)
+    afterSuccess.recordSuccess()
+    afterSuccess.recordFailure()
+    successClock.advance(shortWindow + 1)
+    let afterSuccessProbe = afterSuccess.allowsRequest()
+    #expect(afterSuccessProbe, "the episode after a success reused a stale probe token")
+
+    // A cycle reopened by a failed probe.
+    let failureClock = FakeClock()
+    var afterFailure = breaker(failureClock)
+    afterFailure.recordFailure()
+    failureClock.advance(shortWindow + 1)
+    let failureProbe = afterFailure.allowsRequest()
+    #expect(failureProbe)
+    afterFailure.recordFailure()
+    failureClock.advance(shortWindow + 1)
+    let afterFailureProbe = afterFailure.allowsRequest()
+    #expect(afterFailureProbe, "a failed probe left its token behind for the next episode")
+
+    // A cycle reopened by an explicit trip.
+    let tripClock = FakeClock()
+    var afterTrip = breaker(tripClock)
+    afterTrip.recordFailure()
+    tripClock.advance(shortWindow + 1)
+    let tripProbe = afterTrip.allowsRequest()
+    #expect(tripProbe)
+    afterTrip.trip()
+    tripClock.advance(shortWindow + 1)
+    let afterTripProbe = afterTrip.allowsRequest()
+    #expect(afterTripProbe, "trip() reused the previous episode's probe token")
 }
 
 @Test func aSuccessfulProbeClosesTheBreakerCompletely() {
     let clock = FakeClock()
-    var b = networkBreaker(clock)
-    for _ in 0..<RateConstants.circuitFailureThreshold { b.recordFailure() }
+    var b = openedBreaker(clock)
     clock.advance(RateConstants.circuitOpenSeconds + 1)
-    #expect(b.allowsRequest())
+    let probe = b.allowsRequest()
+    #expect(probe)
 
     b.recordSuccess()
     #expect(b.state() == .closed)
-    #expect(b.allowsRequest())
-    #expect(b.allowsRequest(), "a closed breaker must not ration requests")
+    let firstAfterClose = b.allowsRequest()
+    #expect(firstAfterClose)
+    let secondAfterClose = b.allowsRequest()
+    #expect(secondAfterClose, "a closed breaker must not ration requests")
 }
 
 @Test func theContractCircuitTripsOnASingleFaultAndHoldsForAnHour() {
@@ -3215,11 +3597,36 @@ private func networkBreaker(_ clock: FakeClock) -> CircuitBreaker {
     var b = CircuitBreaker(clock: clock, threshold: 1,
                            openSeconds: RateConstants.contractFaultCooldown)
     b.recordFailure()
-    #expect(!b.allowsRequest())
+    let blockedImmediately = b.allowsRequest()
+    #expect(!blockedImmediately)
     clock.advance(RateConstants.contractFaultCooldown - 1)
-    #expect(!b.allowsRequest())
+    let stillBlocked = b.allowsRequest()
+    #expect(!stillBlocked)
     clock.advance(2)
-    #expect(b.allowsRequest())
+    let allowedNow = b.allowsRequest()
+    #expect(allowedNow)
+}
+
+@Test func aThresholdBelowOneStillNeedsARealFailureToOpen() {
+    // A threshold of zero must not mean "zero failures is enough". Nothing
+    // constructed a degenerate breaker, so nothing said what one does; the
+    // answer is that the threshold is only ever compared after a failure has
+    // been counted, which is why the initializer needs no clamp to defend it.
+    for threshold in [0, -3] {
+        let clock = FakeClock()
+        var b = CircuitBreaker(clock: clock, threshold: threshold,
+                               openSeconds: RateConstants.circuitOpenSeconds)
+        #expect(b.state() == .closed, "a threshold of \(threshold) was born open")
+        #expect(b.consecutiveFailures == 0)
+        let beforeAnythingFailed = b.allowsRequest()
+        #expect(beforeAnythingFailed,
+                "a threshold of \(threshold) refused a request before anything failed")
+
+        b.recordFailure()
+        #expect(b.state() == .open(untilMonotonic: RateConstants.circuitOpenSeconds))
+        let afterOneFailure = b.allowsRequest()
+        #expect(!afterOneFailure)
+    }
 }
 
 @Test func theTwoCircuitsAreIndependent() {
@@ -3231,13 +3638,17 @@ private func networkBreaker(_ clock: FakeClock) -> CircuitBreaker {
                                   openSeconds: RateConstants.contractFaultCooldown)
 
     for _ in 0..<RateConstants.circuitFailureThreshold { network.recordFailure() }
-    #expect(!network.allowsRequest())
-    #expect(contract.allowsRequest(), "the network circuit tripped the contract circuit")
+    let networkBlocked = network.allowsRequest()
+    #expect(!networkBlocked)
+    let contractStillAllows = contract.allowsRequest()
+    #expect(contractStillAllows, "the network circuit tripped the contract circuit")
 
     network.recordSuccess()
     contract.recordFailure()
-    #expect(network.allowsRequest())
-    #expect(!contract.allowsRequest())
+    let networkAllowsAgain = network.allowsRequest()
+    #expect(networkAllowsAgain)
+    let contractBlocked = contract.allowsRequest()
+    #expect(!contractBlocked)
 }
 
 @Test func trippingExplicitlyIsEquivalentToReachingTheThreshold() {
@@ -3246,15 +3657,17 @@ private func networkBreaker(_ clock: FakeClock) -> CircuitBreaker {
     let clock = FakeClock()
     var b = networkBreaker(clock)
     b.trip()
-    #expect(!b.allowsRequest())
+    let blockedAfterTrip = b.allowsRequest()
+    #expect(!blockedAfterTrip)
     clock.advance(RateConstants.circuitOpenSeconds + 1)
-    #expect(b.allowsRequest())
+    let allowedAfterWait = b.allowsRequest()
+    #expect(allowedAfterWait)
 }
 
 @Test func aClosedBreakerHasNothingLeftToWaitFor() {
     // Callers take the maximum across two breakers. If a closed one reported
     // anything but zero, one healthy breaker could hold the other's work back.
-    var b = networkBreaker(FakeClock(0))
+    let b = networkBreaker(FakeClock(0))
     #expect(b.secondsRemaining() == 0)
 }
 
@@ -3266,8 +3679,9 @@ private func networkBreaker(_ clock: FakeClock) -> CircuitBreaker {
     clock.advance(RateConstants.circuitOpenSeconds / 2)
     #expect(b.secondsRemaining() == RateConstants.circuitOpenSeconds / 2)
     clock.advance(RateConstants.circuitOpenSeconds / 2)
-    // At expiry the breaker is half-open, not open, so there is nothing left
-    // to wait for — and the reported wait must never go negative.
+    // At expiry the breaker is half-open with its probe available, so there
+    // is genuinely nothing left to wait for — and the reported wait must
+    // never go negative.
     #expect(b.secondsRemaining() == 0)
     clock.advance(10_000)
     #expect(b.secondsRemaining() == 0)
@@ -3278,16 +3692,17 @@ private func networkBreaker(_ clock: FakeClock) -> CircuitBreaker {
     var b = networkBreaker(clock)
     b.trip()
     clock.advance(-100_000)
-    #expect(!b.allowsRequest())
+    let allowed = b.allowsRequest()
+    #expect(!allowed)
 }
 ```
 
-- [ ] **Step 2: Run to verify they fail**
+- [ ] **Step 3: Run to verify they fail**
 
 Run: `swift test --build-system native --filter CircuitBreaker`
 Expected: FAIL — `cannot find 'CircuitBreaker' in scope`.
 
-- [ ] **Step 3: Write the implementation**
+- [ ] **Step 4: Write the implementation**
 
 `Sources/TickerCore/CircuitBreaker.swift`:
 
@@ -3307,9 +3722,21 @@ public enum CircuitState: Equatable, Sendable {
 /// - the **network** circuit: five consecutive failed cycles, open 30 minutes;
 /// - the **contract** circuit: one parse failure, open one hour.
 ///
+/// Independence is structural, not a discipline to remember: each instance
+/// owns its own `failures` / `openedAt` / `probeIssuedAt`, so a flaky
+/// connection can never trip the schema alarm and a schema change can never
+/// be laundered into "the network is down".
+///
 /// The half-open state hands out exactly one permit. If it let the whole
 /// watchlist through, a still-broken upstream would receive twenty requests
 /// as its reward for having been down.
+///
+/// One invariant runs through the whole type: **`secondsRemaining()` is never
+/// zero at a moment when `allowsRequest()` would refuse.** Zero means "ask
+/// now"; a caller told to ask now and then refused has nothing left to sleep
+/// on, and spins. On a menu bar app that lives in a battery meter, a hot loop
+/// is the worst failure this type can produce — worse than staying open too
+/// long, and far worse than one extra request.
 public struct CircuitBreaker {
     private let clock: any MonotonicClock
     private let threshold: Int
@@ -3317,42 +3744,99 @@ public struct CircuitBreaker {
 
     private var failures: Int = 0
     private var openedAt: Double?
-    private var probeInFlight = false
+
+    /// When the outstanding half-open probe was issued, if one is out.
+    ///
+    /// An instant and not a flag: a bare `probeInFlight` is a latch with no
+    /// way out. A probe that is granted and never resolved — the process
+    /// suspended, the app quit mid-request, a caller that simply forgets to
+    /// report — leaves the breaker half-open, refusing every request, for
+    /// the rest of the process's life. With an instant the probe can be
+    /// presumed lost after `RateConstants.probeTimeoutSeconds` and reissued.
+    private var probeIssuedAt: Double?
 
     public init(clock: any MonotonicClock, threshold: Int, openSeconds: Double) {
         self.clock = clock
-        self.threshold = max(1, threshold)
+        // No clamp on `threshold`. `recordFailure()` compares it only after
+        // counting the failure, so the left-hand side is at least 1 at every
+        // comparison and a threshold of zero or less already behaves exactly
+        // as one. A `max(1, threshold)` here would guard against nothing
+        // while claiming in its own name to guard against something.
+        self.threshold = threshold
         self.openSeconds = openSeconds
     }
 
+    /// Failures actually recorded since the last success.
+    ///
+    /// `trip()` deliberately does not touch it: one 429 is one piece of bad
+    /// news, and reporting five failures that never happened would make this
+    /// a latch wearing a count's name.
     public var consecutiveFailures: Int { failures }
 
-    public mutating func state() -> CircuitState {
+    public func state() -> CircuitState {
+        state(at: clock.nowSeconds)
+    }
+
+    private func state(at now: Double) -> CircuitState {
         guard let openedAt else { return .closed }
         let expiry = openedAt + openSeconds
         // `<` and not `<=`: the breaker is open up to, but not including, its
         // expiry — the same half-open convention used for trading windows.
-        return clock.nowSeconds < expiry ? .open(untilMonotonic: expiry) : .halfOpen
+        return now < expiry ? .open(untilMonotonic: expiry) : .halfOpen
     }
 
-    /// How long until this breaker would let a probe through. Zero whenever
-    /// it is closed or half-open, so callers can take the maximum across
-    /// several breakers without special-casing which ones are shut.
-    public mutating func secondsRemaining() -> Double {
-        guard case .open(let expiry) = state() else { return 0 }
-        return max(0, expiry - clock.nowSeconds)
+    /// How long the caller should wait before asking again. Zero means "ask
+    /// now", and is only ever answered when asking now would in fact be
+    /// allowed — see the invariant on the type. While half-open with a probe
+    /// still outstanding the answer is the remaining life of that probe, not
+    /// zero: the breaker is refusing, and it owes the caller an interval.
+    public func secondsRemaining() -> Double {
+        // One read of the clock, shared by the state decision and the
+        // arithmetic below. Two separate reads of a real `SystemClock` can
+        // straddle a tick, which was the only thing that ever made a
+        // `max(0, …)` floor here defensible; with a single read every
+        // subtraction below is positive by construction, so there is no floor
+        // to keep.
+        let now = clock.nowSeconds
+        switch state(at: now) {
+        case .closed:
+            return 0
+        case .open(let expiry):
+            return expiry - now
+        case .halfOpen:
+            guard let age = probeAge(at: now),
+                  age < RateConstants.probeTimeoutSeconds else { return 0 }
+            return RateConstants.probeTimeoutSeconds - age
+        }
     }
 
-    /// Consumes a permit. Not idempotent — call it once per intended request.
+    /// Decides whether to let a request through, and — while half-open —
+    /// issues the single probe permit as a side effect.
+    ///
+    /// This is a command, not a query: call it **exactly once per request
+    /// decision**, and then **report the outcome** with `recordSuccess()` or
+    /// `recordFailure()`. Reporting is the load-bearing half of the contract.
+    /// The first call issues the probe; every later call within the same
+    /// half-open cycle merely observes that it is already out and returns
+    /// `false`, which is what stops a still-down upstream getting twenty
+    /// requests as its reward for the outage.
+    ///
+    /// A probe whose outcome is never reported is not fatal, but it is not
+    /// free either: the breaker refuses for `RateConstants.probeTimeoutSeconds`
+    /// from the moment the probe was issued, then presumes it lost and issues
+    /// a fresh one.
     public mutating func allowsRequest() -> Bool {
-        switch state() {
+        let now = clock.nowSeconds
+        switch state(at: now) {
         case .closed:
             return true
         case .open:
             return false
         case .halfOpen:
-            guard !probeInFlight else { return false }
-            probeInFlight = true
+            if let age = probeAge(at: now), age < RateConstants.probeTimeoutSeconds {
+                return false
+            }
+            probeIssuedAt = now
             return true
         }
     }
@@ -3360,42 +3844,78 @@ public struct CircuitBreaker {
     public mutating func recordSuccess() {
         failures = 0
         openedAt = nil
-        probeInFlight = false
+        // Deliberately no `probeIssuedAt = nil`. The token is released in
+        // `open(at:)`, where a new episode begins, which is the only moment
+        // it can be read: a closed breaker never consults it, and every route
+        // back to half-open passes through `open(at:)` first. One release in
+        // one place beats three assignments in three places to forget.
     }
 
     public mutating func recordFailure() {
+        // Read the state — and the clock — *before* recording, because what
+        // the breaker was when the request went out is what decides whether
+        // the deadline moves.
+        let now = clock.nowSeconds
+        let observed = state(at: now)
         failures += 1
-        probeInFlight = false
-        // A failure while half-open reopens for the full duration; the
-        // outage is not over just because the clock said so.
-        if failures >= threshold || openedAt != nil {
-            openedAt = clock.nowSeconds
+
+        switch observed {
+        case .halfOpen:
+            // A failed probe reopens for the full duration; the outage is not
+            // over just because the clock said so. This case, not the failure
+            // count, is what carries the reopen — after `trip()` the count can
+            // be as low as one.
+            open(at: now)
+        case .open:
+            // A failure recorded while open belongs to a request the breaker
+            // had already refused, or to a caller that never asked. Restarting
+            // the timer for it would let a stream of stale reports multiply
+            // the outage without bound and make `.open(untilMonotonic:)` a
+            // deadline the type does not keep.
+            break
+        case .closed:
+            if failures >= threshold { open(at: now) }
         }
     }
 
     /// Open immediately, without waiting for the threshold. A 429 is proof
-    /// enough on its own.
+    /// enough on its own. The failure count is left alone — this is one piece
+    /// of bad news, not five.
     public mutating func trip() {
-        failures = max(failures, threshold)
-        probeInFlight = false
-        openedAt = clock.nowSeconds
+        open(at: clock.nowSeconds)
+    }
+
+    /// Begins an open episode.
+    ///
+    /// The probe belongs to the episode that issued it, so a new episode
+    /// starts with the token released. A token carried across would refuse
+    /// the next cycle's probe for a whole `probeTimeoutSeconds` — a
+    /// self-inflicted outage on a breaker that was ready to test the water.
+    private mutating func open(at now: Double) {
+        openedAt = now
+        probeIssuedAt = nil
+    }
+
+    /// How long the outstanding probe has been out, or `nil` if none is.
+    private func probeAge(at now: Double) -> Double? {
+        probeIssuedAt.map { now - $0 }
     }
 }
 ```
 
-- [ ] **Step 4: Run to verify they pass**
+- [ ] **Step 5: Run to verify they pass**
 
 Run: `swift test --build-system native --filter CircuitBreaker`
 Expected: PASS.
 
-Note the `timeGoingBackwardsDoesNotCloseAnOpenBreaker` case: it passes because
-a rewound clock makes `now < expiry` *more* true, not less. That is the safe
-direction, and the test exists to pin it there.
+Note `timeGoingBackwardsDoesNotCloseAnOpenBreaker`: it passes because a rewound
+clock makes `now < expiry` *more* true, not less. That is the safe direction,
+and the test exists to pin it there.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-git add Sources/TickerCore/CircuitBreaker.swift Tests/TickerCoreTests/CircuitBreakerTests.swift
+git add Sources/TickerCore/CircuitBreaker.swift Sources/TickerCore/RateConstants.swift Tests/TickerCoreTests/CircuitBreakerTests.swift
 git commit -m "feat: independent network and contract circuit breakers"
 ```
 
