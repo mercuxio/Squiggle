@@ -88,7 +88,7 @@ public struct YahooClient: QuoteFetching, SymbolSearching {
             // Ask for the most Squiggle will ever show. Trimming to the
             // caller's limit happens in the decoder, so the transport method
             // keeps the one-argument shape `SymbolSearching` requires.
-            URLQueryItem(name: "quotesCount", value: "20"),
+            URLQueryItem(name: "quotesCount", value: String(RateConstants.maxSearchResultCount)),
             // Squiggle shows prices, not headlines. Zero news items keeps the
             // response small and the parse cheap.
             URLQueryItem(name: "newsCount", value: "0"),

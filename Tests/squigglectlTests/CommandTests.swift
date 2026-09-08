@@ -98,7 +98,7 @@ import TickerCore
 
 @Test func theLimitIsCappedSoOneCommandCannotBecomeALargeRequest() throws {
     let parsed = try Command.parse(["search", "apple", "--limit", "5000"])
-    #expect(parsed == .search(query: "apple", limit: 20))
+    #expect(parsed == .search(query: "apple", limit: RateConstants.maxSearchResultCount))
 }
 
 @Test func aNonNumericOrZeroLimitIsRejectedWithAMessage() {
@@ -110,6 +110,21 @@ import TickerCore
 @Test func searchWithNothingToSearchForIsRejected() {
     #expect(throws: ParseError.self) { try Command.parse(["search"]) }
     #expect(throws: ParseError.self) { try Command.parse(["search", "--limit", "5"]) }
+}
+
+/// F-5: `quote --json AAPL` used to silently treat `--json` as the symbol
+/// (R64 removed the flag from the parser but nothing rejected it). An
+/// unrecognised `--flag` is a user error, wherever it appears.
+@Test func quoteRejectsAnUnknownFlagRatherThanTreatingItAsTheSymbol() {
+    #expect(throws: ParseError.self) { try Command.parse(["quote", "--json", "AAPL"]) }
+    #expect(throws: ParseError.self) { try Command.parse(["quote", "AAPL", "--json"]) }
+}
+
+/// F-5: an unrecognised `--flag` used to silently join the search query
+/// instead of being reported as a mistake.
+@Test func searchRejectsAnUnknownFlagRatherThanJoiningItIntoTheQuery() {
+    #expect(throws: ParseError.self) { try Command.parse(["search", "--bogus", "apple"]) }
+    #expect(throws: ParseError.self) { try Command.parse(["search", "apple", "--bogus"]) }
 }
 
 @Test func usageMentionsEveryVerbTheToolAccepts() {

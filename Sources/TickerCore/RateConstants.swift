@@ -57,6 +57,16 @@ public enum RateConstants {
 
     public static let maxWatchlistCount: Int = 20
 
+    /// The largest `quotesCount` a search request ever asks Yahoo for, and
+    /// the cap `squigglectl search --limit` clamps to. Both happen to be 20
+    /// today, but this is deliberately its own constant rather than a reuse
+    /// of `maxWatchlistCount` above: one bounds how many rows a single search
+    /// request returns, the other how many symbols a user may watch, and
+    /// binding them together would make raising one silently move the other —
+    /// the same conflation already logged twice for
+    /// `spacingSeconds`-vs-interval-bound.
+    public static let maxSearchResultCount: Int = 20
+
     /// The refresh intervals offered in Settings (spec §4.1). A fixed menu,
     /// not a slider: the floor sits underneath, and a control that silently
     /// declines to honour what you typed is worse than four honest choices.

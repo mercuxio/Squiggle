@@ -50,6 +50,15 @@ public enum Command: Equatable {
 
         case "quote":
             let raw = takeFlag("--raw")
+            // Whatever is left after removing recognised flags is meant to be
+            // the symbol. A token still starting with `--` is not a symbol
+            // that slipped through — it's a flag this verb doesn't know, and
+            // reporting it as an unusable symbol would misdiagnose the
+            // mistake (R64 removed `--json` from this parser but nothing
+            // rejected it, so it silently became the symbol).
+            if let unknownFlag = rest.first(where: { $0.hasPrefix("--") }) {
+                throw ParseError("unknown flag: \(unknownFlag)")
+            }
             guard let symbol = rest.first else {
                 throw ParseError("quote needs a symbol, e.g. `squigglectl quote AAPL`")
             }
@@ -97,7 +106,16 @@ public enum Command: Equatable {
                 // becomes a request for the cap instead of failing outright —
                 // one command must not turn into a large request against the
                 // same daily budget as everything else.
-                limit = min(parsed, 20)
+                limit = min(parsed, RateConstants.maxSearchResultCount)
+            }
+
+            // Reject a stray `--flag` before it can join the query text below.
+            // Multi-word queries are the normal case, so anything left in
+            // `rest` is ordinarily meant to become part of the search text —
+            // but a token starting with `--` is a mistyped or unsupported
+            // flag, not a word to search for.
+            if let unknownFlag = rest.first(where: { $0.hasPrefix("--") }) {
+                throw ParseError("unknown flag: \(unknownFlag)")
             }
 
             // Multi-word queries are the normal case ("berkshire hathaway"),
