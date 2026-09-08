@@ -118,6 +118,25 @@ enum Fixture {
     #expect(error == .notJSON)
 }
 
+@Test func theLiveRateLimitBodyDecodesTheSameWayAsTheReconstruction() throws {
+    // Captured live 2026-09-08 on the fourth 429 of the day. The
+    // reconstruction in `429-body.html` strips the trailing CRLF; this file
+    // is the bytes Yahoo actually sent, terminator and all. Both must reach
+    // `.notJSON` — a decoder that trims whitespace before deciding "is this
+    // JSON?" would pass on one and could still surprise us on the other.
+    let symbol = try #require(Symbol("AAPL"))
+    let live = try Fixture.data("429-body-live.txt")
+    #expect(live.count == 19)
+    var caughtError: TickerError?
+    do {
+        try YahooQuoteDecoding.quote(from: live, symbol: symbol)
+    } catch let error as TickerError {
+        caughtError = error
+    }
+    let error = try #require(caughtError)
+    #expect(error == .notJSON)
+}
+
 @Test func anEmptyBodyIsItsOwnError() throws {
     let symbol = try #require(Symbol("AAPL"))
     #expect(throws: TickerError.emptyBody) {

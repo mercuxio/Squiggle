@@ -35,6 +35,29 @@
   from the shapes recorded in spec §3.2, not captured live; see
   `401-body.NOT-CAPTURED.md` for the latter's provenance note
 
+## Search-endpoint capture attempts
+
+- 2026-09-08, four attempts across the day (three during the Task 5 corpus
+  run, one after Task 8). Every one returned HTTP 429 from
+  `query1.finance.yahoo.com`. `search-apple.json` remains UNCAPTURED.
+- The 429 is IP-scoped and has outlasted the whole working day. Retries are
+  event-driven, not on a cadence: the next one happens before Task 15, which
+  is the first task that needs the fixture. Task 15 blocks rather than
+  fabricates it.
+
+## Rate-limit body: reconstruction confirmed against a live capture
+
+- Date: 2026-09-08, on the fourth search attempt above
+- Result: 429 with a 19-byte `text/html` body
+- The body is `Too Many Requests` followed by CRLF, byte for byte. The
+  hand-built `429-body.html` (17 bytes, CRLF stripped) was therefore an
+  accurate reconstruction of the content, and the plan's note that "the
+  observed 19 included CRLF" is confirmed.
+- The genuine bytes are now committed as `429-body-live.txt`. The
+  reconstruction is left untouched: a fixture is a record of what arrived,
+  and rewriting one in place destroys the record. Both files are decoded by
+  tests, so a decoder that trims before deciding "is this JSON?" fails one.
+
 ## Corpus status
 
 Captured:
@@ -45,6 +68,7 @@ Captured:
 - [x] crypto (BTC-USD)
 - [x] non-usd-listing (VOD.L)
 - [x] 429-body.html — hand-built from the shape recorded in spec §3.2
+- [x] 429-body-live.txt — captured live; confirms the reconstruction
 - [x] overnight-closed.json — only if the capture ran outside 09:30-16:00 ET
 - [ ] 401-body.json — RECONSTRUCTED, not captured
 
