@@ -26,9 +26,9 @@ private let appleFixtureName = "search-apple-SYNTHETIC.json"
 }
 
 @Test func theLimitIsHonouredExactly() throws {
-    // R68: the fixture carries five rows, strictly more than the limit, so
-    // `<= 3` (which also passes on zero results) would not have caught a
-    // decoder that dropped everything. Assert the exact count.
+    // R68: the fixture carries more rows than the limit, so `<= 3` (which
+    // also passes on zero results) would not have caught a decoder that
+    // dropped everything. Assert the exact count.
     let results = try YahooSearchDecoding.results(from: fixture(appleFixtureName), limit: 3)
     #expect(results.count == 3)
 }
@@ -38,15 +38,32 @@ private let appleFixtureName = "search-apple-SYNTHETIC.json"
     #expect(try YahooSearchDecoding.results(from: fixture(appleFixtureName), limit: -1).isEmpty)
 }
 
-@Test func resultOrderFromYahooIsPreservedExactly() throws {
-    // R69: the synthetic fixture's rows are ordered neither alphabetically by
-    // symbol (AAPL.MX and 3007.HK would sort elsewhere) nor by name (APPLE
-    // INC / Apple Hospitality / Apple Inc. would reorder under either
+@Test func resultOrderFromTheFixtureIsPreservedExactly() throws {
+    // F-6: renamed from `resultOrderFromYahooIsPreservedExactly` — this pins
+    // the hand-written synthetic fixture's row order, not anything Yahoo
+    // actually sent (see the file's own README), so the name should not
+    // claim otherwise.
+    //
+    // R69: the fixture's rows are ordered neither alphabetically by symbol
+    // (AAPL.MX and 3007.HK would sort elsewhere) nor by name (APPLE INC /
+    // Apple Hospitality / Apple Inc. would reorder under either
     // case-sensitive or case-insensitive comparison). A decoder that resorts
     // the rows in any of those ways fails this exact-sequence assertion,
     // which the original prefix-vs-prefix comparison could not have caught.
     let all = try YahooSearchDecoding.results(from: fixture(appleFixtureName), limit: 50)
-    #expect(all.map(\.symbol.raw) == ["AAPL", "APLE", "AAPL.MX", "APRU", "3007.HK"])
+    #expect(all.map(\.symbol.raw) == ["AAPL", "APLE", "AAPL.MX", "APRU", "3007.HK", "aAPL-wt"])
+}
+
+@Test func aSymbolWithSignificantCaseSurvivesDecodingByteForByte() throws {
+    // F-6: a witness for "never upper-case, trim or normalise a symbol" —
+    // the fixture's `aAPL-wt` row has mixed case that a `.uppercased()` (or
+    // any other normalisation) slipped into the decoder would silently
+    // rewrite. Assert survival, not just presence: finding a row named
+    // "case-significance witness" but reading its symbol as `AAPL-WT` would
+    // mean this test still passed by accident.
+    let all = try YahooSearchDecoding.results(from: fixture(appleFixtureName), limit: 50)
+    let witness = try #require(all.first { $0.name.contains("case-significance witness") })
+    #expect(witness.symbol.raw == "aAPL-wt")
 }
 
 @Test func aLowerLimitReturnsAPrefixOfTheUnlimitedResults() throws {
@@ -115,10 +132,49 @@ private let appleFixtureName = "search-apple-SYNTHETIC.json"
     }
 }
 
+/// F-1: the search and quote decoders must answer the *same* error case for
+/// zero bytes, not merely "search happens to throw `.emptyBody`" — a check
+/// that would still pass if the quote decoder's behaviour later drifted. So
+/// this pins the two against each other, not each against a hardcoded case.
+@Test func emptyBodyProducesTheSameErrorCaseAsTheQuoteDecoder() throws {
+    let aapl = try #require(Symbol("AAPL"))
+
+    var searchError: TickerError?
+    do {
+        _ = try YahooSearchDecoding.results(from: Data(), limit: 10)
+    } catch let error as TickerError {
+        searchError = error
+    }
+
+    var quoteError: TickerError?
+    do {
+        _ = try YahooQuoteDecoding.quote(from: Data(), symbol: aapl)
+    } catch let error as TickerError {
+        quoteError = error
+    }
+
+    let search = try #require(searchError)
+    let quote = try #require(quoteError)
+    #expect(search == quote)
+    #expect(search == TickerError.emptyBody)
+}
+
 @Test func searchDecodingSurvivesEveryTruncationOfTheFixture() throws {
     // Same fuzz as Task 6: a connection cut mid-body must throw, never crash.
+    // Unlike Task 6's version (left alone — outside this task's diff), this
+    // one asserts what the comment claims: every truncation either throws a
+    // `TickerError` or succeeds, and never crashes or throws anything else.
+    // Every length is sampled, not one in seven — a stride would have hidden
+    // exactly the kind of divergence F-1 found. The fixture is under 1KB, so
+    // sweeping all of them is fast: well under a second.
     let data = try fixture(appleFixtureName)
-    for length in stride(from: 0, to: data.count, by: 7) {
-        _ = try? YahooSearchDecoding.results(from: Data(data.prefix(length)), limit: 10)
+    for length in 0..<data.count {
+        do {
+            _ = try YahooSearchDecoding.results(from: Data(data.prefix(length)), limit: 10)
+        } catch is TickerError {
+            // Expected: a truncated body is a contract fault, not a crash.
+        } catch {
+            Issue.record("prefix length \(length) threw an untyped error: \(error)")
+        }
     }
 }

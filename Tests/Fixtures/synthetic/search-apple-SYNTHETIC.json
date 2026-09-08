@@ -29,6 +29,12 @@
       "shortname": "Beijing Properties (Holdings)",
       "exchDisp": "HKG",
       "quoteType": "EQUITY"
+    },
+    {
+      "symbol": "aAPL-wt",
+      "shortname": "Apple Test Warrant (case-significance witness — not a real Yahoo row)",
+      "exchDisp": "TEST",
+      "quoteType": "EQUITY"
     }
   ],
   "news": []

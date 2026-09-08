@@ -23,11 +23,31 @@ public enum YahooSearchDecoding {
     public static func results(from data: Data, limit: Int) throws -> [SearchResult] {
         guard limit > 0 else { return [] }
 
+        // Same shape and position as `YahooQuoteDecoding.meta(from:)`'s guard:
+        // zero bytes must fail as `.emptyBody`, not reach `JSONDecoder` and
+        // come back mis-classified as `.notJSON`. `doctor` (Task 17)
+        // classifies faults by error case, so the two decoders have to agree
+        // on which case an empty body produces.
+        guard !data.isEmpty else { throw TickerError.emptyBody }
+
         let envelope: Envelope
         do {
             envelope = try JSONDecoder().decode(Envelope.self, from: data)
         } catch let error as DecodingError {
             throw YahooQuoteDecoding.translate(error)
+        } catch {
+            // Not a `DecodingError` — for example an `NSError` from a
+            // malformed encoding `JSONDecoder` couldn't get far enough to
+            // raise its own typed error for. Unlike the quote decoder, there
+            // is no `LenientDouble` in this envelope to produce a `TickerError`
+            // here, so this catch-all only ever sees something untyped.
+            // `.notJSON` is the deliberate choice: it's the same case
+            // `.dataCorrupted` with an empty coding path already maps to
+            // above (via `translate`), so an untyped failure here still
+            // funnels into the case the quote decoder uses for "this was
+            // never JSON at all", rather than escaping raw and breaking the
+            // typed-error contract `doctor` depends on.
+            throw TickerError.notJSON
         }
 
         return (envelope.quotes ?? [])
