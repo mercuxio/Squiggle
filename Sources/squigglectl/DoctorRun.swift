@@ -215,11 +215,20 @@ struct DoctorRun {
         // whether the pacer is quietly overriding them (R79).
         //
         // The warning used to read `estimate > 1_200`, which no input could
-        // ever satisfy: `Diagnosis.estimatedDailyRequests` ends in a clamp to
-        // `pacerDailyCeiling`, a constant 1,165. The condition that can
-        // actually occur — and that a support reader needs — is the opposite
-        // one: the user asked for a cadence the 30s floor will not deliver, so
-        // their ticker is staler than their settings describe.
+        // ever satisfy. This comment used to explain that by pointing at a
+        // clamp at the end of `Diagnosis.estimatedDailyRequests`, and at the
+        // ceiling constant behind it — both of which were deleted in 2861d8e.
+        // The explanation outlived them, naming a symbol that no longer exists
+        // and describing an implementation that is no longer there, which is
+        // exactly the kind of stale cross-module claim that gets believed on
+        // the next read. The comparison is still unreachable, for the reason
+        // `estimatedDailyRequests` now gives itself: it prices a US equity
+        // day, and swept over every reachable input the largest figure it
+        // returns is 741 against a budget of 1,200
+        // (`theEstimatorCannotReachTheBudgetOnAnyInput` pins that). The
+        // condition that can actually occur — and that a support reader needs
+        // — is the other one: the user asked for a cadence the floors will not
+        // deliver, so their ticker is staler than their settings describe.
         let budgetStatus: CheckStatus
         var budgetDetail: String?
         if let loadedStore {
@@ -230,11 +239,37 @@ struct DoctorRun {
             let throttled = Diagnosis.pacerThrottlesSettings(userIntervalSeconds: interval,
                                                              watchlistCount: count)
             budgetStatus = throttled ? .degraded : .ok
+
             // The number stays either way: it is what the user came to see.
             // Neither branch names a symbol, a path or a URL.
+            //
+            // It is qualified, though, because the bare figure was a claim the
+            // estimator does not make. `estimatedDailyRequests` prices three
+            // fixed US equity sessions — 5.5h pre, 6.5h regular, 4h post, and
+            // eight hours shut — so "~720 requests/day" printed beside a
+            // watchlist of `BTC-USD` describes a day that symbol does not
+            // have. Saying which calendar the figure assumes is the whole fix:
+            // `doctor` reports on stored settings and cannot see what the
+            // symbols trade as, and detecting crypto here would be a second
+            // guess in the same place. The 24-hour case is held by mechanism
+            // instead — `RefreshPolicy.budgetFloor` and `RequestPacer`'s daily
+            // bucket — not by this line.
+            let headline = "~\(estimate) requests/day on a US market calendar"
+
+            // Named unconditionally, and named as the *budget* floor, because
+            // the spacing floor cannot be the answer here. `cycleInterval`
+            // takes `max(max(requested, n × 30), n × 72)`, and `n × 72 > n × 30`
+            // for every n ≥ 1, so whenever the floors bind at all the binding
+            // term is the budget floor and the cycle is exactly
+            // `budgetFloor(n)`. The old wording said "the 30s spacing floor
+            // sets the pace here" on every one of those lines — a fixed
+            // sentence about a branch that no watchlist size, and no interval,
+            // can reach. `theSpacingFloorCanNeverBeTheBindingTerm` sweeps that.
+            let floorSeconds = Int(RefreshPolicy.budgetFloor(watchlistCount: count).rounded())
             budgetDetail = throttled
-                ? "~\(estimate) requests/day; the 30s spacing floor sets the pace here, not the refresh interval"
-                : "~\(estimate) requests/day"
+                ? "\(headline); the daily-budget floor holds a full pass to " +
+                  "\(floorSeconds)s here, not the refresh interval"
+                : headline
         } else {
             budgetStatus = .skipped
         }

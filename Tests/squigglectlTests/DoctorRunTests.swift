@@ -408,3 +408,168 @@ private func tempStoreURL() -> URL {
     #expect(brokenOld == 2)
     #expect(brokenNew == brokenOld)
 }
+
+// MARK: - check 6: the set-aside listing
+
+/// Check 6's comment has always read "names only, never a path", and nothing
+/// executed it. The same rule is pinned one layer down by
+/// `aStoreFaultCarryingAPathPrintsTheNameAndNotTheLocation`, but that test
+/// exercises `Rendering.diagnosis`, and check 6 does not go through
+/// `Rendering.diagnosis` at all — it builds its detail itself out of
+/// `contentsOfDirectory`, which is exactly the API whose results become
+/// absolute paths the moment someone reaches for `URL.path` instead of the
+/// entry name. A rule stated in a comment beside code that does not execute
+/// it is the failure mode this whole review is about.
+///
+/// The casualties are set aside by hand rather than by corrupting a store,
+/// because what is under test is the *listing*, not the quarantine: two files
+/// with check 6's prefix are all it takes, and building them directly also
+/// pins that a second casualty in the same second is reported alongside the
+/// first rather than hiding it.
+@Test func theSetAsideListingNamesTheCasualtiesAndNotTheDirectoryTheyAreIn() async throws {
+    let url = tempStoreURL()
+    let directory = url.deletingLastPathComponent()
+    // An active cooldown keeps `run()` off the network, as at the top of this
+    // file. `save` creates the directory the casualties go into.
+    let now = Date().timeIntervalSince1970
+    try FileWatchlistStore(url: url).save(Store(cooldownUntilEpoch: now + 900))
+
+    let casualties = ["squiggle.json.bad-2026-09-08T12-00-00Z",
+                      "squiggle.json.bad-2026-09-08T12-00-00Z-2"]
+    for name in casualties {
+        try Data("{}".utf8).write(to: directory.appendingPathComponent(name))
+    }
+
+    let (output, _) = await captureStdout {
+        await DoctorRun(storeURL: url).run()
+    }
+
+    let lines = output.split(separator: "\n", omittingEmptySubsequences: true)
+    let line = try #require(lines.first { $0.contains("earlier unreadable settings files") })
+
+    // Both, not just the first: the earlier casualty is usually the more
+    // informative one, and a listing that stops at one hides it.
+    for name in casualties {
+        #expect(line.contains(name), "check 6 did not name \(name): \(line)")
+    }
+    #expect(line.contains("[warn]"))
+
+    // R44, asserted on the character a path cannot avoid rather than on this
+    // machine's temporary directory, which is what makes the assertion catch
+    // any path and not only the one this test happens to build.
+    #expect(!line.contains("/"), "check 6 leaked a path: \(line)")
+    #expect(!line.contains(directory.path))
+}
+
+// MARK: - check 8: the daily estimate and which floor sets the pace
+
+/// Check 8 printed `~720 requests/day` full stop, and the estimator behind it
+/// prices three fixed US equity sessions. Beside a watchlist of `BTC-USD` that
+/// is a statement about a day the symbol does not have.
+///
+/// The fix is the qualification, not a detection: `doctor` reports on stored
+/// settings and cannot see what the symbols trade as. So this asserts the
+/// printed line names its calendar, and then takes the two numbers that make
+/// the qualification necessary — what the estimator says a day costs, and what
+/// the same settings cost on a calendar with no closing bell.
+@Test func theDailyEstimateSaysWhichCalendarItPriced() async throws {
+    let url = tempStoreURL()
+    let now = Date().timeIntervalSince1970
+    let symbols = (1...RateConstants.maxWatchlistCount).map { index -> Symbol in
+        Symbol("SYM\(index)")!
+    }
+    try FileWatchlistStore(url: url).save(
+        Store(symbols: symbols,
+              settings: Settings(refreshIntervalSeconds: RateConstants.defaultRefreshInterval),
+              cooldownUntilEpoch: now + 900))
+
+    let (output, _) = await captureStdout {
+        await DoctorRun(storeURL: url).run()
+    }
+    let lines = output.split(separator: "\n", omittingEmptySubsequences: true)
+    let line = try #require(lines.first { $0.contains("daily request estimate") })
+    #expect(line.contains("US market calendar"), "the estimate named no calendar: \(line)")
+
+    // The two figures, re-taken rather than described. 720 is what the
+    // estimator reports for these exact settings — the number the line above
+    // prints — and 1,200 is what the same 20 symbols at the same cycle cost on
+    // an instrument that never closes. The gap is eight hours of shut market,
+    // and it is the whole reason the qualification is not cosmetic.
+    let estimate = Diagnosis.estimatedDailyRequests(
+        userIntervalSeconds: RateConstants.defaultRefreshInterval,
+        watchlistCount: RateConstants.maxWatchlistCount)
+    #expect(estimate == 720)
+    #expect(line.contains("~720 requests/day"))
+
+    let cycle = RefreshPolicy.budgetFloor(watchlistCount: RateConstants.maxWatchlistCount)
+    let neverClosing = RateConstants.secondsPerDay / cycle
+        * Double(RateConstants.maxWatchlistCount)
+    #expect(neverClosing == 1_200)
+    #expect(neverClosing == Double(RateConstants.dailyRequestBudget))
+}
+
+/// F19. Check 8's throttled branch carried the fixed sentence "the 30s spacing
+/// floor sets the pace here", and no watchlist size and no offered interval
+/// can make that true.
+///
+/// `cycleInterval` is `max(max(requested, n × spacingSeconds), budgetFloor(n))`,
+/// and `budgetFloor(n)` is `n × 86_400 / 1_200` — `n × 72` against `n × 30`.
+/// The budget floor is therefore strictly larger at every n ≥ 1, both scale
+/// linearly in n so no size crosses over, and whenever either floor binds at
+/// all the cycle is exactly `budgetFloor(n)`. The spacing floor cannot be the
+/// binding term on its own for any input this app can reach.
+///
+/// Swept rather than argued, over every watchlist size the app admits and
+/// every interval Settings offers, plus the two out-of-menu values a
+/// hand-edited file can produce.
+@Test func theSpacingFloorCanNeverBeTheBindingTermCheckEightReportsOn() {
+    for count in 1...RateConstants.maxWatchlistCount {
+        let spacingFloor = Double(count) * RateConstants.spacingSeconds
+        let budgetFloor = RefreshPolicy.budgetFloor(watchlistCount: count)
+        #expect(budgetFloor > spacingFloor,
+                "\(count) symbols: budget floor \(budgetFloor)s did not exceed spacing floor \(spacingFloor)s")
+
+        for interval in RateConstants.refreshIntervalChoices + [0.1, 7_200] {
+            let throttled = Diagnosis.pacerThrottlesSettings(userIntervalSeconds: interval,
+                                                             watchlistCount: count)
+            guard throttled else { continue }
+            let cycle = RefreshPolicy.cycleInterval(userIntervalSeconds: interval,
+                                                    watchlistCount: count,
+                                                    marketState: .regular,
+                                                    lowPowerMode: false)
+            // Not merely "at least the spacing floor" — exactly the budget
+            // floor. That equality is what makes naming the budget floor
+            // unconditionally an honest sentence rather than a better guess.
+            #expect(cycle == budgetFloor,
+                    "\(count) symbols at \(interval)s: cycle \(cycle)s is not the budget floor")
+            #expect(cycle > spacingFloor)
+        }
+    }
+}
+
+/// And the line itself, on the case check 8 actually prints for: 20 symbols at
+/// the default interval is throttled, and the detail names the floor that is
+/// doing it with the cycle it imposes.
+@Test func theThrottledEstimateNamesTheBudgetFloorAndTheCycleItImposes() async throws {
+    let url = tempStoreURL()
+    let now = Date().timeIntervalSince1970
+    let symbols = (1...RateConstants.maxWatchlistCount).map { index -> Symbol in
+        Symbol("SYM\(index)")!
+    }
+    try FileWatchlistStore(url: url).save(
+        Store(symbols: symbols,
+              settings: Settings(refreshIntervalSeconds: RateConstants.defaultRefreshInterval),
+              cooldownUntilEpoch: now + 900))
+
+    let (output, _) = await captureStdout {
+        await DoctorRun(storeURL: url).run()
+    }
+    let lines = output.split(separator: "\n", omittingEmptySubsequences: true)
+    let line = try #require(lines.first { $0.contains("daily request estimate") })
+
+    #expect(line.contains("daily-budget floor"))
+    #expect(line.contains("1440s"))
+    #expect(!line.contains("spacing floor"),
+            "check 8 named a floor that cannot bind here: \(line)")
+    #expect(line.contains("[warn]"))
+}
