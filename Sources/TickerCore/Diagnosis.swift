@@ -123,7 +123,9 @@ public enum Diagnosis {
     /// keeps this a genuine upper bound rather than a number the sweep can
     /// walk under. It never widens the estimate by more than one session's
     /// worth of one cycle, so the overshoot stays small — worst measured case
-    /// is 900s × 20, 40 requests over 760.
+    /// is 900s × 20, 40 requests over 580. `DiagnosisTests` re-takes both
+    /// endpoints; the gap of 40 survived F1's change to the day model and the
+    /// endpoints did not.
     public static func estimatedDailyRequests(userIntervalSeconds: Double,
                                               watchlistCount: Int) -> Int {
         guard watchlistCount > 0 else { return 0 }

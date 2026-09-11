@@ -491,9 +491,12 @@ private let dailyBudget = RateConstants.dailyRequestBudget
     // budget floor targets exactly the budget, so demanding 2x headroom would
     // be demanding that the policy spend at most half the allowance it is
     // designed to spend. On a market that never closes the two meet almost
-    // exactly: 1,200 asked against 1,220 supplied. The margin visible here is
-    // the US equity calendar's overnight, and it is a property of the calendar
-    // rather than of the pacer, so it is not what gets asserted.
+    // exactly — but that is not this test. `DaySimulation.run` defaults to
+    // `.equity`, and this sweep never passes a calendar, so what is measured
+    // here is 720 asked against 1,219 supplied. The 499 of slack is the US
+    // equity overnight, a property of the calendar rather than of the pacer,
+    // which is why the near-tie belongs to the `.continuous` sweep and this
+    // assertion is deliberately the loose one its name promises.
     #expect(worstDemand <= supply,
             "the worst day asks \(worstDemand); the pacer supplies \(supply) in the same day")
 

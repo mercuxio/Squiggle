@@ -194,10 +194,14 @@ import Testing
     }
 }
 
-@Test func theSpacingFloorIsReportedWhenItOverridesTheChosenInterval() {
-    // R79. 20 symbols at 30s apiece is a 600s cycle, so a user who asked for
-    // 60s is getting a tenth of the refresh rate they configured and nothing
-    // in the app told them. This is the condition `doctor`'s budget check
+@Test func aSettingTheFloorsCannotHonourIsReportedAsThrottled() {
+    // R79. 20 symbols sit on a 1,440s cycle — the budget floor's 72s a symbol,
+    // not the spacing floor's 30 — so a user who asked for 60s is getting a
+    // twenty-fourth of the refresh rate they configured and nothing in the app
+    // told them. The name and this arithmetic both used to say 600s and "a
+    // tenth", which was the spacing floor; F19 established that the spacing
+    // floor can never be the binding term on its own, and the sibling test
+    // below was renamed for that reason while this one was not. This is the condition `doctor`'s budget check
     // reports, in place of a comparison against the daily budget that no input
     // could ever satisfy.
     #expect(Diagnosis.pacerThrottlesSettings(userIntervalSeconds: 60, watchlistCount: 20))
@@ -224,7 +228,7 @@ import Testing
     // A hand-edited `7200` is not a setting `cycleInterval` honours — it runs
     // the 180s default instead — so the comparison has to be against 180 too.
     // Judged against the raw 7200 this would report "not throttled" for a
-    // 20-symbol watchlist actually running a 600s cycle.
+    // 20-symbol watchlist actually running a 1,440s cycle.
     let throttled = Diagnosis.pacerThrottlesSettings(userIntervalSeconds: 7_200,
                                                      watchlistCount: 20)
     #expect(throttled)

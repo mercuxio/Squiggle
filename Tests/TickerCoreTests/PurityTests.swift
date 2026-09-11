@@ -13,6 +13,15 @@ import Testing
 /// constrain — and a rule that lives only in prose is exactly the defect
 /// signature this review keeps finding. Nothing failed when the rule broke.
 ///
+/// One boundary this scanner does not try to cross, and does not need to: a
+/// block comment on the same line, as in `/* note */ import AppKit`, reads as a
+/// first word of `/*` and is skipped. That is deliberate. Stripping block
+/// comments to catch it would mean deciding whether `/* import AppKit */` is an
+/// import, and a scanner that answers that wrong reports a violation where
+/// there is none — a worse failure than missing a spelling nobody writes by
+/// accident. This is a guard against a forbidden import arriving unnoticed, not
+/// a defence against one being hidden on purpose.
+///
 /// The check is on `import` lines and nothing else, deliberately. A scanner
 /// that also went looking for `Date()` or `Timer` or `random` in the body text
 /// would be a grep with opinions: it would fire on the word inside a comment,
@@ -44,10 +53,18 @@ enum TickerCoreSource {
                 rest = rest.drop(while: { !$0.isWhitespace })
                     .drop(while: { $0.isWhitespace })
             }
-            guard rest.hasPrefix("import ") else { return nil }
-            var words = rest.dropFirst("import ".count)
-                .split(whereSeparator: { $0.isWhitespace })
+            var words = rest.split(whereSeparator: { $0.isWhitespace })
                 .map(String.init)
+            // Not `hasPrefix("import ")`. Swift separates the keyword from the
+            // module with any whitespace, so a literal space in the one gate
+            // that decides whether a line is an import at all made
+            // `import<TAB>AppKit` invisible to this scanner while `swiftc`
+            // compiled it happily. Splitting on whitespace first and comparing
+            // the whole first word costs nothing and cannot drift from what
+            // the compiler accepts. `importantThing` is not `import`, and a
+            // `//` line still yields `//` as its first word.
+            guard words.first == "import" else { return nil }
+            words.removeFirst()
             // `import struct Foundation.Data` — the kind, then the path.
             let kinds = ["typealias", "struct", "class", "enum", "protocol",
                          "var", "let", "func"]
@@ -142,6 +159,7 @@ private let permittedModules: Set<String> = ["Foundation"]
         @preconcurrency import Network
         import struct Foundation.Data
           import AppKit
+        import\tCoreGraphics
         // import SwiftUI
         let importantThing = 1
         """
@@ -150,7 +168,7 @@ private let permittedModules: Set<String> = ["Foundation"]
 
     let scanned = try TickerCoreSource.importsByFile(in: scratch)
     let modules = try #require(scanned.first).modules
-    #expect(modules == ["Network", "Foundation", "AppKit"])
+    #expect(modules == ["Network", "Foundation", "AppKit", "CoreGraphics"])
 
     // Both halves of the production assertion fire on this input.
     #expect(modules.contains(where: { forbiddenModules.contains($0) }))
@@ -160,7 +178,16 @@ private let permittedModules: Set<String> = ["Foundation"]
     // that merely begins with the word — the two ways a line-oriented scan
     // over-reports.
     #expect(!modules.contains("SwiftUI"))
-    #expect(modules.count == 3)
+    #expect(modules.count == 4)
+
+    // The tab is the case this test did not cover and the scanner did not see:
+    // `swiftc` compiles `import<TAB>CoreGraphics`, and a gate written as
+    // `hasPrefix("import ")` returned nothing for it, so the purity suite
+    // stayed green over a module that ends the purity rule. Verified by
+    // mutation before the fix landed, by pasting exactly this line into
+    // `Quote.swift` with an `NSColor` extension beneath it and watching the
+    // production scan pass.
+    #expect(modules.contains("CoreGraphics"))
 }
 
 /// F15. The clock and randomness rules name their sanctioned exceptions by

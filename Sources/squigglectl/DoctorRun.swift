@@ -264,7 +264,10 @@ struct DoctorRun {
             // `budgetFloor(n)`. The old wording said "the 30s spacing floor
             // sets the pace here" on every one of those lines — a fixed
             // sentence about a branch that no watchlist size, and no interval,
-            // can reach. `theSpacingFloorCanNeverBeTheBindingTerm` sweeps that.
+            // can reach. Swept in `DoctorRunTests` by
+            // theSpacingFloorCanNeverBeTheBindingTermCheckEightReportsOn
+            // — on its own line, unwrapped and unhyphenated, because a cited
+            // name that greps to nothing reads as a test that was deleted.
             let floorSeconds = Int(RefreshPolicy.budgetFloor(watchlistCount: count).rounded())
             budgetDetail = throttled
                 ? "\(headline); the daily-budget floor holds a full pass to " +
