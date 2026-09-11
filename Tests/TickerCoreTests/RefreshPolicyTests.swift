@@ -286,8 +286,14 @@ private let neverBlindLongerThan: Double = 3600
 
 @Test func stalenessIsThreeCyclesAndNotThreeUserIntervals() {
     // The cycle, not the setting, is the real cadence — a 20-symbol watchlist
-    // at 60s takes ten minutes per pass. Measuring against the setting would
-    // dim a perfectly healthy large watchlist permanently.
+    // at 60s takes 1,440s per pass, twenty-four minutes. Measuring against the
+    // setting would dim a perfectly healthy large watchlist permanently.
+    //
+    // This said "ten minutes" until the final review: 600s, the n x 30s spacing
+    // floor, which F19 established can never be the binding term on its own.
+    // The number below is read from `cycleInterval`, so the assertions were
+    // right while the sentence explaining them was wrong — and being spelled in
+    // words is what carried it past a numeric sweep looking for digits.
     let cycle = RefreshPolicy.cycleInterval(userIntervalSeconds: 60, watchlistCount: 20,
                                             marketState: .regular, lowPowerMode: false)
     func stale(after elapsed: Double) -> Bool {

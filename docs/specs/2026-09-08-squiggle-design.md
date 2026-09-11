@@ -342,8 +342,15 @@ Three visual states in the bar, and no error text:
 | State | Appearance |
 | --- | --- |
 | Fresh | Normal |
-| Stale (> 3 × interval) | Whole strip dims to `tertiaryLabelColor`; prices still shown, still moving |
+| Stale (> 3 × **cycle**, not 3 × interval) | Whole strip dims to `tertiaryLabelColor`; prices still shown, still moving |
 | Per-symbol dead | That symbol renders `——`, keeping its slot |
+
+The staleness threshold is three *cycles*, and the distinction is not
+pedantic: `RefreshPolicy.cycleInterval` floors a 20-symbol watchlist at 1,440s
+whatever the user asked for, so three cycles there is 72 minutes and three
+intervals would be 9. Measuring against the setting would dim a healthy large
+watchlist permanently. `RefreshPolicy.isStale` is the function that decides
+this; the UI must call it rather than compute an age itself.
 
 No warning badge. A glyph costs a column in a 10pt slot and reads as an alert
 that cannot be dismissed.

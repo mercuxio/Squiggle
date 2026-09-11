@@ -215,10 +215,20 @@ private let permittedModules: Set<String> = ["Foundation"]
         .sorted()
 
     // `Date()` is the wall clock, `systemUptime` the monotonic one,
-    // `Double.random` the randomness. Each is the exact spelling the rules
-    // quote, which is what keeps this a check on the rules rather than a
-    // second opinion about them.
-    let impureCalls = ["Date()", "systemUptime", "Double.random("]
+    // `Double.random` the randomness — the three spellings the rules quote,
+    // which is what keeps this a check on the rules rather than a second
+    // opinion about them.
+    //
+    // The rest are the near-synonyms the final review demonstrated would pass
+    // unseen: a fourth clock read spelled `Date.now` defeated the census while
+    // reading identically to a human. They quote no rule, so they are listed
+    // second and are expected to match nothing. That is the point — each one
+    // is inert until the day someone reaches for it, and on that day the
+    // census fails instead of shrugging.
+    let impureCalls = ["Date()", "systemUptime", "Double.random(",
+                       "Date.now", "Date.timeIntervalSinceNow",
+                       "Int.random(", "arc4random", "ContinuousClock(",
+                       "SuspendingClock(", "DispatchTime.now"]
 
     var offenders: [String: [String]] = [:]
     for name in names {
