@@ -32,6 +32,25 @@ import Testing
     #expect(Symbol("A A") == nil)
 }
 
+@Test func theBareTraversalNamesAreRejectedAndNoOtherDotIs() throws {
+    // The initialiser's comment claimed it screened for traversal; the
+    // forbidden set had no `.` in it, so `"."` and `".."` were valid symbols.
+    // A symbol is interpolated into a request path
+    // (`/v8/finance/chart/<symbol>`) and stored in the user's file, and
+    // `symbolsWithControlCharactersOrSlashesAreRejected` above only ever
+    // caught `"../../etc/passwd"` by its slashes.
+    #expect(Symbol(".") == nil)
+    #expect(Symbol("..") == nil)
+
+    // And nothing wider than that. A dot inside a symbol is part of the
+    // identifier — these are the exchange suffixes Yahoo actually spells —
+    // so the fix must not cost a single real instrument.
+    for raw in ["VOD.L", "BMW.DE", "0700.HK", "A.B.C", ".L", "X.", "...", "^GSPC",
+                "BRK-B", "BTC-USD", "EURUSD=X"] {
+        #expect(try #require(Symbol(raw)).raw == raw)
+    }
+}
+
 @Test func aSymbolRoundTripsThroughJSONAsAPlainString() throws {
     let symbol = try #require(Symbol("^GSPC"))
     let data = try JSONEncoder().encode([symbol])

@@ -49,10 +49,20 @@ public struct Quote: Equatable, Sendable {
         self.currency = currency
         self.asOfEpoch = asOfEpoch
 
-        // A previous close of zero is not a previous close. Guarding here
-        // rather than at each use site means no caller can reintroduce the
-        // division.
-        if let base = previousClose, base != 0 {
+        // A previous close that is not positive is not a previous close.
+        // Guarding here rather than at each use site means no caller can
+        // reintroduce the division.
+        //
+        // Zero is the obvious half: it divides. The sign matters just as much,
+        // and `base != 0` let it through. A negative base flips the percentage
+        // against the change it is derived from — price 10 against a previous
+        // close of -5 is a delta of +15, so `direction` is `.up`, while
+        // `delta / base * 100` is -300, and the ticker renders "▲ -300.00%".
+        // Neither number is wrong on its own; together they are a display that
+        // contradicts itself, and no instrument this app can quote has a
+        // negative previous close in the first place. `unknown` is the honest
+        // answer for a base that cannot be one.
+        if let base = previousClose, base > 0 {
             let delta = price - base
             self.change = delta
             self.changePercent = delta / base * 100

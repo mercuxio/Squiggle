@@ -13,6 +13,19 @@ public struct Symbol: Hashable, Sendable, Comparable {
         guard !raw.isEmpty, raw.count <= 32 else { return nil }
         // Anything that would need percent-encoding in a URL path segment, or
         // that could traverse it, is not a symbol.
+        //
+        // Traversal was the half of that sentence the code did not do. The
+        // forbidden set below has no `.`, so `Symbol(".")` and `Symbol("..")`
+        // were valid symbols, and a symbol is interpolated straight into a
+        // request path — `YahooClient` builds `/v8/finance/chart/\(symbol.raw)`
+        // — as well as being stored in the user's file. `"../../etc/passwd"` was
+        // only ever rejected for its slashes.
+        //
+        // Rejected as whole strings and nothing more: a `.` inside a symbol is
+        // part of the identifier for every exchange suffix Yahoo uses (`VOD.L`,
+        // `BMW.DE`), and screening the character in general would reject real
+        // instruments to fix a defect that only the two bare forms can cause.
+        guard raw != ".", raw != ".." else { return nil }
         let forbidden = CharacterSet.whitespacesAndNewlines
             .union(.controlCharacters)
             .union(CharacterSet(charactersIn: "/?#%&+ "))
