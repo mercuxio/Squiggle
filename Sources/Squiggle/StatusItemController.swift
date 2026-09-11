@@ -128,15 +128,21 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     /// Spec §5.2: pausing is `speed = 0` with the offset captured, never a
     /// removal — removing and re-adding makes the strip jump.
     ///
-    /// The refresh side needs nothing here. `visibility()` reads
-    /// `pauseConditions` on the next scheduled step, and forcing a step now
-    /// would turn every unlock into an unscheduled request.
+    /// Un-pausing also asks the refresh side one question (R151): has the
+    /// price on screen outlived the dim threshold? An *unconditional* step
+    /// here would turn every unlock into an unscheduled request, which is why
+    /// the step sits behind `isStale` rather than behind `isPaused` alone. A
+    /// lock and an unlock ten seconds apart find nothing stale and cost
+    /// nothing; only an unlock onto an already-dimmed strip spends a request,
+    /// and there the app is looking at a number it has itself marked as one
+    /// it cannot vouch for.
     private func applyPause(_ conditions: PauseConditions) {
         pauseConditions = conditions
         if conditions.isPaused {
             tickerView.pause()
         } else {
             tickerView.resume()
+            catchUpIfStale()
         }
     }
 
@@ -192,6 +198,25 @@ final class StatusItemController: NSObject, NSMenuDelegate {
             // about market hours inside one app is a bug.
             marketState: runner.marketState(atEpoch: epoch) ?? .regular,
             lowPowerMode: ProcessInfo.processInfo.isLowPowerModeEnabled)
+    }
+
+    /// R151. Anything that un-pauses the strip asks the same question: is what
+    /// is on screen older than the dim threshold? If it is, take one cycle
+    /// now rather than waiting out a deadline measured on a clock that stopped
+    /// while the machine was suspended.
+    ///
+    /// Deliberately the same predicate `colorResolver()` dims with. Two
+    /// predicates would let the app dim a price it is not replacing, or fetch
+    /// behind a strip that looks live — and the second of those is invisible,
+    /// because nobody notices a request that did not need making.
+    private func catchUpIfStale() {
+        // `isStale` answers `true` when nothing has ever succeeded. True, and
+        // useless: the ordinary schedule is already retrying at whatever pace
+        // the ladder permits, and a second request would only spend a token.
+        guard runner.lastSuccessEpoch != nil else { return }
+        guard isStale(atEpoch: Date().timeIntervalSince1970) else { return }
+        runner.requestImmediateCycle()
+        scheduleStep(after: 0)
     }
 
     /// The closure `TickerView` paints with (R136).
