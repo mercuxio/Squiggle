@@ -284,6 +284,13 @@ final class StatusItemController: NSObject, NSMenuDelegate {
                          visibleWidth: settings.maxVisibleWidth,
                          mode: mode,
                          pointsPerSecond: settings.scrollPointsPerSecond,
+                         // A rebuild starts from nothing, so the pause has to
+                         // be re-asserted here or the next refresh tick,
+                         // appearance change, settings edit, add or remove
+                         // restarts the marquee behind a locked screen —
+                         // `PauseMonitor` reports only *changes*, so no second
+                         // notification would ever arrive to stop it again.
+                         paused: pauseConditions.isPaused,
                          color: colorResolver())
     }
 

@@ -3,7 +3,13 @@ import QuartzCore
 
 /// The view the status item button hosts. It owns the row layers and the one
 /// animation, and nothing else: no timers, no data, no opinions about when to
-/// stop — Task 10 decides that and calls `pause()`.
+/// stop — Task 10 decides that and tells this view. It is told two ways, and
+/// both are needed: `pause()` / `resume()` for a genuine lock, screensaver,
+/// display-sleep or occlusion transition, and `apply(paused:)` for every
+/// re-render that happens *during* one. Without the second, a refresh tick or
+/// an appearance change behind a locked screen would rebuild the strip
+/// animating and nothing would arrive to stop it again — `PauseMonitor` only
+/// reports changes, and nothing changes until the user comes back.
 @MainActor
 final class TickerView: NSView {
     private var rowLayers: [CALayer] = []
@@ -31,11 +37,18 @@ final class TickerView: NSView {
     /// Replaces the strip wholesale. Called on every successful refresh and on
     /// every settings change, which at one refresh every few minutes is rare
     /// enough that rebuilding beats diffing.
+    ///
+    /// - Parameter paused: the state the rebuilt strip must end in. A rebuild
+    ///   starts from nothing, so the old layers' `speed = 0` goes with them —
+    ///   the caller passes the current pause state and each new row is frozen
+    ///   as it is built, rather than started and stopped a moment later.
+    ///   `isPaused` reports the state this argument asked for.
     func apply(layout: StripLayout,
                metrics: StripRenderer.Metrics,
                visibleWidth: Double,
                mode: MotionMode,
                pointsPerSecond: Double,
+               paused: Bool,
                color: (ColorRole) -> CGColor) {
         guard let host = layer else { return }
         // Backing scale, so text is drawn for this display rather than at 1x
@@ -46,7 +59,7 @@ final class TickerView: NSView {
 
         for existing in rowLayers { existing.removeFromSuperlayer() }
         rowLayers = []
-        isPaused = false
+        isPaused = paused
 
         for (index, row) in layout.rows.enumerated() {
             // Spec §5.2's first stopping condition, decided once here and
@@ -64,6 +77,11 @@ final class TickerView: NSView {
 
             animate(rowLayer, row: row, animated: animated, visibleWidth: visibleWidth,
                     mode: mode, pointsPerSecond: pointsPerSecond)
+            // Frozen here rather than after the loop, so a row is never live
+            // for even the remainder of this rebuild. The animation stays
+            // attached — spec §5.2 is `speed = 0`, never a removal — so the
+            // strip resumes from where it stands when the screen comes back.
+            if paused { freeze(rowLayer) }
         }
     }
 
@@ -147,11 +165,18 @@ final class TickerView: NSView {
     func pause() {
         guard isPaused == false else { return }
         isPaused = true
-        for rowLayer in rowLayers {
-            let stoppedAt = rowLayer.convertTime(CACurrentMediaTime(), from: nil)
-            rowLayer.speed = 0
-            rowLayer.timeOffset = stoppedAt
-        }
+        for rowLayer in rowLayers { freeze(rowLayer) }
+    }
+
+    /// One layer's half of the pause. Shared with `apply`, so a row built
+    /// during a pause is stopped by exactly the code that stops a row when
+    /// the pause arrives — two spellings of `speed = 0` would eventually
+    /// disagree about the offset, and the disagreement would show as a jump
+    /// on the next unlock.
+    private func freeze(_ rowLayer: CALayer) {
+        let stoppedAt = rowLayer.convertTime(CACurrentMediaTime(), from: nil)
+        rowLayer.speed = 0
+        rowLayer.timeOffset = stoppedAt
     }
 
     func resume() {
