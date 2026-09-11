@@ -307,6 +307,18 @@ public enum Rendering {
             "a captured fixture is evidence and is never replaced in place"
     }
 
+    /// `probe --record`'s refusal when the fixture corpus is not where the
+    /// capture would be written. Names the repository-relative directory it
+    /// looked for and nothing about this process's own location — an absolute
+    /// path here would be an R44 leak, and printing "I am standing in X" is
+    /// also the one thing that tempts a reader into treating a wrong X as a
+    /// place to create the tree.
+    public static func probeRefusesMissingFixturesRoot() -> String {
+        "refusing to record: Tests/Fixtures is not a directory here — " +
+            "`--record` writes a live response and must be run from the repository root, " +
+            "so that the capture joins the recorded corpus rather than starting a new one"
+    }
+
     /// `probe --record`'s success line. `fileWritten` is repository-relative,
     /// same rule as the refusal above.
     public static func probeRecordedFixture(_ fileWritten: String) -> String {

@@ -299,6 +299,77 @@ private let expectedDateFormatter: DateFormatter = {
     }
 }
 
+/// The three write locations `--record` uses default to CWD-relative literals
+/// (`Tests/Fixtures`, `docs/fixture-capture-log.md`), so running it from
+/// anywhere but the repository root used to create that tree wherever the
+/// operator was standing and write a live Yahoo response, prices and all, into
+/// it. Never persisting a quote is this project's most-repeated standing rule,
+/// and Task 19 asks a human to run `--record` during a live trading day.
+///
+/// All four halves of the refusal are asserted, because three of them would
+/// still hold if the fourth regressed: nothing is written, no directory is
+/// created, nothing is appended to any log, and the exit code is non-zero.
+@Test func recordRefusesAndWritesNothingAtAllWhenTheFixturesRootIsNotThere() async throws {
+    let root = tempDirectory()
+    let absentFixtures = root.appendingPathComponent("Tests/Fixtures")
+    let logURL = root.appendingPathComponent("capture-log.md")
+    let fixedNow = Date(timeIntervalSince1970: 1_800_000_000)
+
+    let run = ProbeRun(client: FakeFetcher(result: .success(Data(#"{"chart":{}}"#.utf8))),
+                       symbol: try #require(Symbol("AAPL")), record: "regular-session",
+                       fixturesRootURL: absentFixtures, captureLogURL: logURL, now: { fixedNow })
+    let exitCode = await run.run()
+
+    #expect(exitCode != 0)
+    // No directory was created — not the fixtures root, and not the dated
+    // directory that would have gone inside it.
+    #expect(!FileManager.default.fileExists(atPath: absentFixtures.path))
+    let dateText = expectedDateFormatter.string(from: fixedNow)
+    #expect(!FileManager.default.fileExists(
+        atPath: absentFixtures.appendingPathComponent("yahoo-\(dateText)").path))
+    // No fixture file anywhere under the temporary root, by enumeration rather
+    // than by guessing the one path the capture would have chosen.
+    let survivors = FileManager.default.enumerator(atPath: root.path)?
+        .compactMap { $0 as? String } ?? []
+    #expect(survivors.isEmpty, "record wrote \(survivors) despite refusing")
+    // Nothing appended to the capture log, which `append(_:to:)` would have
+    // created from scratch had it been reached.
+    #expect(!FileManager.default.fileExists(atPath: logURL.path))
+}
+
+/// The companion: a fixtures root that exists but is a *file* is not a corpus
+/// either, and must be refused for the same reason rather than producing an
+/// obscure write failure.
+@Test func recordRefusesWhenTheFixturesRootIsAFileRatherThanADirectory() async throws {
+    let root = tempDirectory()
+    let notADirectory = root.appendingPathComponent("Fixtures")
+    try Data("not a corpus".utf8).write(to: notADirectory)
+    let logURL = root.appendingPathComponent("capture-log.md")
+
+    let run = ProbeRun(client: FakeFetcher(result: .success(Data(#"{"chart":{}}"#.utf8))),
+                       symbol: try #require(Symbol("AAPL")), record: "regular-session",
+                       fixturesRootURL: notADirectory, captureLogURL: logURL,
+                       now: { Date(timeIntervalSince1970: 1_800_000_000) })
+    #expect(await run.run() != 0)
+
+    #expect(try Data(contentsOf: notADirectory) == Data("not a corpus".utf8))
+    #expect(!FileManager.default.fileExists(atPath: logURL.path))
+}
+
+/// R44: the refusal explains the mistake without printing where this process
+/// happens to be standing. A message carrying an absolute path would be the
+/// leak `doctor`'s support policy exists to prevent, arriving through `probe`.
+@Test func theMissingFixturesRootRefusalNamesNoAbsolutePath() {
+    let message = Rendering.probeRefusesMissingFixturesRoot()
+    #expect(message.contains("Tests/Fixtures"))
+    #expect(message.contains("repository root"))
+    #expect(!message.contains(FileManager.default.currentDirectoryPath))
+    #expect(!message.contains(FileManager.default.temporaryDirectory.path))
+    // No absolute path of any shape: nothing here begins a path at the root.
+    #expect(!message.contains(" /"))
+    #expect(!message.hasPrefix("/"))
+}
+
 /// F-1, measurement 4: `--record` given with nothing after it is a parse
 /// error, using the same `takeValue(_:)` helper `--interval` and `--limit`
 /// already rely on for this — not a flag that silently does nothing.

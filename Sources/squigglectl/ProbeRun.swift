@@ -121,6 +121,29 @@ struct ProbeRun {
     }
 
     private func recordFixture(_ data: Data, name: String) -> Int32 {
+        // The three write locations below default to CWD-relative literals, so
+        // `--record` run from anywhere but the repository root used to *create*
+        // a `Tests/Fixtures/yahoo-<date>/` tree wherever the operator happened
+        // to be standing and write a live Yahoo response — prices included —
+        // into it, plus a capture log beside it, reporting the same success
+        // line either way. Task 19 asks a human to run this during a live
+        // trading day, so that is not a hypothetical path.
+        //
+        // The corpus is already on disk and already recognisable, so the
+        // refusal is keyed on finding it rather than on guessing where it
+        // should be: no absolute path is derived from the binary's location,
+        // because a wrong guess writes prices somewhere else just as silently.
+        // The message names no absolute path either (R44) — it says what is
+        // wrong, not where this process happens to be.
+        var rootIsDirectory: ObjCBool = false
+        let rootExists = FileManager.default.fileExists(atPath: fixturesRootURL.path,
+                                                        isDirectory: &rootIsDirectory)
+        guard rootExists, rootIsDirectory.boolValue else {
+            FileHandle.standardError.write(Data(
+                (Rendering.probeRefusesMissingFixturesRoot() + "\n").utf8))
+            return 1
+        }
+
         let today = Self.dateFormatter.string(from: now())
         let directoryName = "yahoo-\(today)"
         let directory = fixturesRootURL.appendingPathComponent(directoryName, isDirectory: true)
