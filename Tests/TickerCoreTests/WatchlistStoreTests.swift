@@ -124,6 +124,65 @@ private func write(_ json: String, to url: URL) throws {
     #expect(try String(contentsOf: url, encoding: .utf8) == json)
 }
 
+@Test func aStoreFileThatCannotBeReadIsAFaultRatherThanAFirstLaunch() throws {
+    // `load()` and `save()` both read the file through `try? Data(contentsOf:)`,
+    // which answers `nil` to two different questions: "there is no file" and
+    // "there is a file and I cannot read it". Absent is a first launch, so an
+    // unreadable store — chmod 000 after a migration, wrong ownership after a
+    // restore from backup, an unreadable mount — loaded as an empty watchlist
+    // with no error reported, and the next `save()` then read the same `nil`,
+    // skipped the version gate that was supposed to protect the file, and
+    // wrote the empty watchlist straight over it. Two steps, both silent, and
+    // the user's symbols are gone.
+    //
+    // Both halves are asserted here because either alone leaves the data loss
+    // intact: a `load()` that throws is no protection if `save()` still
+    // overwrites, and vice versa.
+    let url = tempURL()
+    let json = #"{"schemaVersion":1,"symbols":["AAPL","BRK-B"]}"#
+    try write(json, to: url)
+    let before = try Data(contentsOf: url)
+
+    try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: url.path)
+    defer {
+        try? FileManager.default.setAttributes([.posixPermissions: 0o644],
+                                               ofItemAtPath: url.path)
+    }
+    // The premise, not the assertion: if this process can still read the file
+    // (running as root, say) the rest of the test proves nothing, and saying so
+    // is better than passing vacuously.
+    let readBack = try? Data(contentsOf: url)
+    #expect(readBack == nil, "the file is still readable, so this test is vacuous")
+
+    let store = FileWatchlistStore(url: url)
+
+    var caughtOnLoad: TickerError?
+    do {
+        let loaded = try store.load()
+        Issue.record("an unreadable store loaded as \(loaded.symbols.count) symbols")
+    } catch let error as TickerError {
+        caughtOnLoad = error
+    } catch {
+        Issue.record("load() threw a non-TickerError: \(error)")
+    }
+    #expect(try #require(caughtOnLoad) == .storeQuarantineFailed(at: url))
+
+    var caughtOnSave: TickerError?
+    do {
+        try store.save(Store())
+        Issue.record("save() wrote over a file it could not read")
+    } catch let error as TickerError {
+        caughtOnSave = error
+    } catch {
+        Issue.record("save() threw a non-TickerError: \(error)")
+    }
+    #expect(try #require(caughtOnSave) == .storeQuarantineFailed(at: url))
+
+    // The point of the whole finding: byte for byte, the user's file.
+    try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: url.path)
+    #expect(try Data(contentsOf: url) == before)
+}
+
 @Test func anUnreadableSchemaVersionIsRefusedRatherThanQuarantined() throws {
     // `{"schemaVersion":"99"}` — a future Squiggle that quotes the version, or
     // any hand-edit that does. It used to miss the gate's `as? Int`, fail the

@@ -104,7 +104,12 @@ public enum Rendering {
         case .storeCorrupt(let quarantinedAt):
             return "store file was corrupt; moved aside to \(quarantinedAt.lastPathComponent)"
         case .storeQuarantineFailed(let url):
-            return "store file at \(url.lastPathComponent) is corrupt and could not be moved aside"
+            // Covers both ways this case arises — a corrupt file that could not
+            // be moved aside, and a file that could not be read at all (see
+            // `FileWatchlistStore.readIfPresent`). What the user needs from
+            // either is the same: the file is unusable and it is still there,
+            // so the next launch will hit it again.
+            return "store file at \(url.lastPathComponent) is unusable and is still where it was"
         }
     }
 

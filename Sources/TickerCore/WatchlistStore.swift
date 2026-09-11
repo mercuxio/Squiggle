@@ -10,7 +10,11 @@ public protocol WatchlistStore: Sendable {
 /// Three rules, each of which exists because the alternative loses the user's
 /// data:
 ///
-/// 1. **A missing file is not an error** — it is a first launch.
+/// 1. **A missing file is not an error** — it is a first launch. An
+///    *unreadable* one is an error, and the two must never be conflated:
+///    answering "first launch" to a file that is there but cannot be read
+///    hands the app an empty watchlist and then invites it to save that over
+///    the user's real one.
 /// 2. **A newer schema is refused, not rewritten.** A future Squiggle's file
 ///    must survive a downgrade; saving over it discards whatever that version
 ///    knew and this one does not. Refused on the way *in* and on the way
@@ -37,7 +41,7 @@ public struct FileWatchlistStore: WatchlistStore {
     }
 
     public func load() throws -> Store {
-        guard let data = try? Data(contentsOf: url) else {
+        guard let data = try readIfPresent() else {
             return Store()          // first launch
         }
 
@@ -66,7 +70,15 @@ public struct FileWatchlistStore: WatchlistStore {
         // Rule 2 is only half a rule if it guards the read alone: `load()`
         // refuses a v99 file, and nothing stopped the app from calling `save()`
         // a moment later and destroying it anyway.
-        if let existing = try? Data(contentsOf: url) {
+        //
+        // The read itself must not swallow either. `try? Data(contentsOf:)`
+        // stood here, so a file that existed but could not be read looked
+        // exactly like no file at all: the gate was skipped and this method
+        // wrote over it. Paired with the same `try?` in `load()`, that was a
+        // two-step data loss with no error reported at either step — load
+        // returns empty, save overwrites. `readIfPresent` throws instead, and
+        // the throw happens before the write.
+        if let existing = try readIfPresent() {
             try Self.refuseUnlessThisVersionCanHonour(existing)
         }
 
@@ -77,6 +89,40 @@ public struct FileWatchlistStore: WatchlistStore {
         // sorted, because an unstable key order makes every diff noise.
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         try encoder.encode(store).write(to: url, options: .atomic)
+    }
+
+    /// The file's bytes, or `nil` when there is no file.
+    ///
+    /// Absence is read from the error the filesystem actually reports rather
+    /// than from a `fileExists` probe taken a moment earlier: the probe answers
+    /// a different question than the read that follows it, and every other
+    /// failure — a chmod 000 after a restore, wrong ownership, an unreadable
+    /// mount, a directory where the file should be — has to come back as a
+    /// fault and not as a first launch.
+    ///
+    /// The fault reuses `storeQuarantineFailed(at:)` rather than introducing a
+    /// case of its own. That case already means "the file is unreadable and is
+    /// still sitting exactly where it was", which is this situation precisely;
+    /// its payload is documented as where the file *is*, not where it went; and
+    /// `Diagnosis.status(for:)` and `DoctorRun.classifyStoreError` already route
+    /// it to the diagnosis this deserves — the store file degraded, the schema
+    /// check skipped, because nothing here ever got far enough to read a
+    /// version. Nothing is quarantined on this path: a file that cannot be read
+    /// might be the user's only copy of their watchlist, and moving it is a
+    /// decision for a caller who knows the contents are unusable, not for one
+    /// that could not get the contents at all.
+    private func readIfPresent() throws -> Data? {
+        do {
+            return try Data(contentsOf: url)
+        } catch let error as CocoaError
+            where error.code == .fileReadNoSuchFile || error.code == .fileNoSuchFile {
+            return nil
+        } catch {
+            // Never the underlying error: `NSError`'s description for a read
+            // failure carries this machine's absolute path to the store (R44),
+            // and `TickerError` is the vocabulary every caller catches.
+            throw TickerError.storeQuarantineFailed(at: url)
+        }
     }
 
     /// Throws unless the document's `schemaVersion` is one this build can read.
