@@ -7,6 +7,7 @@ let package = Package(
     products: [
         .library(name: "TickerCore", targets: ["TickerCore"]),
         .executable(name: "squigglectl", targets: ["squigglectl"]),
+        .executable(name: "Squiggle", targets: ["Squiggle"]),
     ],
     dependencies: [
         .package(url: "https://github.com/swiftlang/swift-testing.git", from: "0.10.0"),
@@ -18,6 +19,7 @@ let package = Package(
         // "One flagged deviation from the spec".
         .target(name: "YahooFeed", dependencies: ["TickerCore"]),
         .executableTarget(name: "squigglectl", dependencies: ["TickerCore", "YahooFeed"]),
+        .executableTarget(name: "Squiggle", dependencies: ["TickerCore", "YahooFeed"]),
         .testTarget(
             name: "TickerCoreTests",
             dependencies: [
@@ -31,6 +33,14 @@ let package = Package(
                 "squigglectl",
                 "TickerCore",
                 "YahooFeed",
+                .product(name: "Testing", package: "swift-testing"),
+            ]
+        ),
+        .testTarget(
+            name: "SquiggleTests",
+            dependencies: [
+                "Squiggle",
+                "TickerCore",
                 .product(name: "Testing", package: "swift-testing"),
             ]
         ),
