@@ -34,6 +34,7 @@ final class TickerView: NSView {
     func apply(layout: StripLayout,
                metrics: StripRenderer.Metrics,
                visibleWidth: Double,
+               mode: MotionMode,
                pointsPerSecond: Double,
                color: (ColorRole) -> CGColor) {
         guard let host = layer else { return }
@@ -54,13 +55,25 @@ final class TickerView: NSView {
             host.addSublayer(rowLayer)
             rowLayers.append(rowLayer)
 
-            // Spec §5.2: content that already fits gets no animation at all —
-            // removed, not paused, not slowed. Each row is judged on its own
-            // width, so a short row stays still while a long one scrolls.
-            guard StripRenderer.fits(contentWidth: row.contentWidth,
-                                     visibleWidth: visibleWidth) == false
-            else { continue }
+            animate(rowLayer, row: row, visibleWidth: visibleWidth,
+                    mode: mode, pointsPerSecond: pointsPerSecond)
+        }
+    }
 
+    /// Spec §5.2's first stopping condition is checked here and in one place
+    /// only, because it is the same rule in both modes: content that already
+    /// fits gets no animation at all — removed, not paused, not slowed.
+    private func animate(_ rowLayer: CALayer,
+                         row: StripLayout.Row,
+                         visibleWidth: Double,
+                         mode: MotionMode,
+                         pointsPerSecond: Double) {
+        guard StripRenderer.fits(contentWidth: row.contentWidth,
+                                 visibleWidth: visibleWidth) == false
+        else { return }
+
+        switch mode {
+        case .scroll:
             let slide = CABasicAnimation(keyPath: "position.x")
             slide.fromValue = 0
             slide.toValue = -row.contentWidth
@@ -72,6 +85,43 @@ final class TickerView: NSView {
             slide.timingFunction = CAMediaTimingFunction(name: .linear)
             slide.preferredFrameRateRange = StripRenderer.frameRate
             rowLayer.add(slide, forKey: "scroll")
+
+        case .step:
+            let offsets = MotionPolicy.pageOffsets(contentWidth: row.contentWidth,
+                                                   visibleWidth: visibleWidth)
+            let total = MotionPolicy.stepSeconds * Double(offsets.count)
+
+            // Discrete, so the position never interpolates: the layer is at
+            // page N and then it is at page N+1, with nothing in between for
+            // the eye to track. That is the whole point of Step.
+            let move = CAKeyframeAnimation(keyPath: "position.x")
+            move.values = offsets
+            move.keyTimes = MotionPolicy.pageKeyTimes(pageCount: offsets.count)
+                .map { NSNumber(value: $0) }
+            move.calculationMode = .discrete
+            move.duration = total
+            move.repeatCount = .infinity
+
+            let frames = MotionPolicy.fadeKeyframes(pageCount: offsets.count)
+            let fade = CAKeyframeAnimation(keyPath: "opacity")
+            fade.values = frames.values
+            fade.keyTimes = frames.keyTimes.map { NSNumber(value: $0) }
+            fade.duration = total
+            fade.repeatCount = .infinity
+
+            // Both under one group so `pause()` stops them together. Two
+            // independent animations paused a frame apart would leave the
+            // text half-faded on a page it had already left.
+            //
+            // The frame rate cap goes on the group and not on its children:
+            // the group is what Core Animation schedules, and a range set on
+            // a grouped child is not documented to be honoured.
+            let both = CAAnimationGroup()
+            both.animations = [move, fade]
+            both.duration = total
+            both.repeatCount = .infinity
+            both.preferredFrameRateRange = StripRenderer.frameRate
+            rowLayer.add(both, forKey: "step")
         }
     }
 

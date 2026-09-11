@@ -14,6 +14,10 @@ final class StatusItemController {
     private var settings: Settings
     private var timer: Timer?
     private let tickerView = TickerView()
+    // Retained by `NotificationCenter` until removed, same as `timer` is
+    // retained by the run loop until invalidated — `stop()` tears both down
+    // for the same reason.
+    private var reduceMotionObserver: NSObjectProtocol?
 
     init(runner: TickerRunner, settings: Settings) {
         self.runner = runner
@@ -37,6 +41,16 @@ final class StatusItemController {
         tickerView.autoresizingMask = [.width, .height]
         button.addSubview(tickerView)
 
+        // Reduce Motion can be toggled while Squiggle is running, and a user
+        // who turns it on because a marquee is making them ill should not have
+        // to quit the app to be rid of it.
+        reduceMotionObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification,
+            object: nil,
+            queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.render() }
+            }
+
         render()
         scheduleStep(after: 0)
     }
@@ -44,6 +58,10 @@ final class StatusItemController {
     func stop() {
         timer?.invalidate()
         timer = nil
+        if let reduceMotionObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(reduceMotionObserver)
+        }
+        reduceMotionObserver = nil
     }
 
     private func scheduleStep(after seconds: Double) {
@@ -97,9 +115,14 @@ final class StatusItemController {
         // R136: Monochrome is the default scheme, so this is the app's real
         // default appearance rather than a placeholder. Task 12 replaces the
         // closure, not the call.
+        let requested = MotionMode(setting: settings.motionMode)
+        let mode = MotionPolicy.effective(
+            requested: requested,
+            reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)
         tickerView.apply(layout: layout,
                          metrics: metrics,
                          visibleWidth: settings.maxVisibleWidth,
+                         mode: mode,
                          pointsPerSecond: settings.scrollPointsPerSecond,
                          color: { _ in NSColor.labelColor.cgColor })
     }
