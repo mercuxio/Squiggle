@@ -116,4 +116,51 @@ enum ErrorText {
     private static func minutes(_ seconds: Double) -> Int {
         max(1, Int((seconds / 60).rounded()))
     }
+
+    // MARK: - Settings
+
+    static let settingsTitle = "Squiggle Settings"
+
+    static let rowsLabel = "Rows"
+    static let intervalLabel = "Refresh"
+    // The spec spells §5.3 "Colour", and so does the rest of this project's
+    // prose. Deliberate, not an oversight.
+    static let schemeLabel = "Colour"
+    static let motionLabel = "Motion"
+    static let widthLabel = "Width"
+    static let speedLabel = "Speed"
+
+    static let rowTitles = ["One", "Two"]
+    /// In the order of `RateConstants.refreshIntervalChoices`. `SettingsFormTests`
+    /// asserts the two have the same length; nothing can assert they mean the
+    /// same thing, so keep them adjacent in any edit.
+    static let intervalTitles = ["Every minute", "Every 3 minutes",
+                                 "Every 5 minutes", "Every 15 minutes"]
+    static let schemeTitles = ["Monochrome", "Classic", "Accessible"]
+    static let motionTitles = ["Scroll", "Step"]
+
+    /// Spec §4.1: the resulting cadence, live beside the choice, "so the floor
+    /// is never a silent override".
+    ///
+    /// The parenthetical appears only when a floor actually binds, and
+    /// `Diagnosis.pacerThrottlesSettings` is asked rather than re-derived —
+    /// it is the same question `squigglectl doctor` reports on, and two
+    /// answers to it would be one too many.
+    static func effectiveInterval(userIntervalSeconds: Double,
+                                  watchlistCount: Int) -> String {
+        let chosen = intervalTitles[SettingsForm.interval.index(of: userIntervalSeconds)]
+        guard Diagnosis.pacerThrottlesSettings(userIntervalSeconds: userIntervalSeconds,
+                                               watchlistCount: watchlistCount) else {
+            return chosen
+        }
+        // R144: `.regular` and Low Power off, matching `pacerThrottlesSettings`
+        // exactly — a number that changed after hours would read as a fault in
+        // whichever control the user had just touched.
+        let cycle = RefreshPolicy.cycleInterval(userIntervalSeconds: userIntervalSeconds,
+                                                watchlistCount: watchlistCount,
+                                                marketState: .regular,
+                                                lowPowerMode: false)
+        let symbols = watchlistCount == 1 ? "1 symbol" : "\(watchlistCount) symbols"
+        return "\(chosen) (\(minutes(cycle)) min with \(symbols))"
+    }
 }

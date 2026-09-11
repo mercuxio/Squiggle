@@ -30,6 +30,8 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     private var document: Store
     private var storeFault: TickerError?
     private var nextStepEpoch: Double?
+    private var settingsWindow: SettingsWindowController?
+    private var persistTimer: Timer?
 
     // R139: one document, one saver. `settings` is a view onto it rather than
     // a second copy, so Task 13 changing a setting and Task 15 adding a symbol
@@ -103,6 +105,12 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     }
 
     func stop() {
+        if persistTimer != nil {
+            persistTimer?.invalidate()
+            persistTimer = nil
+            // An edit made in the last half-second is still only in memory.
+            persist()
+        }
         timer?.invalidate()
         timer = nil
         if let reduceMotionObserver {
@@ -312,6 +320,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     private func selector(for command: MenuCommand) -> Selector {
         switch command {
         case .refreshNow: return #selector(refreshNow)
+        case .settings: return #selector(openSettings)
         case .quit: return #selector(quit)
         }
     }
@@ -324,6 +333,44 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         // a refresh — it does not grant one.
         runner.requestImmediateCycle()
         scheduleStep(after: 0)
+    }
+
+    @objc private func openSettings() {
+        let controller = settingsWindow ?? SettingsWindowController(
+            settings: document.settings,
+            onChange: { [weak self] edited in self?.settingsChanged(edited) })
+        settingsWindow = controller
+        controller.watchlistCount = document.symbols.count
+        controller.apply(document.settings)
+        // An `LSUIElement` app is not in the Dock and is not activated by a
+        // menu click, so `makeKeyAndOrderFront` alone puts the window behind
+        // whatever the user was working in. This is the one place Squiggle
+        // asks to come forward, and it is in direct response to a click.
+        NSApp.activate(ignoringOtherApps: true)
+        controller.showWindow(nil)
+    }
+
+    private func settingsChanged(_ edited: Settings) {
+        document.settings = edited
+        // The interval is the one setting the engine holds a copy of.
+        runner.setUserInterval(edited.refreshIntervalSeconds)
+        render()
+        schedulePersist()
+    }
+
+    /// A continuous slider fires its action on every pixel of a drag. The JSON
+    /// file is the whole of this app's persistence (spec §6) and rewriting it
+    /// forty times a second for a number the user is still choosing is a lot
+    /// of disk for no benefit — so the write is coalesced to one per gesture.
+    /// Half a second, and `stop()` flushes, so the only way to lose an edit is
+    /// to kill the process mid-drag.
+    private func schedulePersist() {
+        persistTimer?.invalidate()
+        let timer = Timer(timeInterval: 0.5, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated { self?.persist() }
+        }
+        persistTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
     }
 
     @objc private func removeSymbol(_ sender: NSMenuItem) {

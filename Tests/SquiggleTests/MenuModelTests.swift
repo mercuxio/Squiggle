@@ -94,11 +94,12 @@ private func titles(_ model: MenuModel) -> [String] {
         if case .command(let command) = item { return command }
         return nil
     }
-    #expect(commands == [.refreshNow, .quit])
+    #expect(commands == [.refreshNow, .settings, .quit])
 }
 
 @Test func commandTitlesComeFromOnePlace() {
     #expect(MenuCommand.refreshNow.title == ErrorText.refreshNow)
+    #expect(MenuCommand.settings.title == ErrorText.settings)
     #expect(MenuCommand.quit.title == ErrorText.quit)
 }
 

@@ -9,6 +9,7 @@ import TickerCore
 /// `default:`.
 enum MenuCommand: Equatable, Sendable {
     case refreshNow
+    case settings
     case quit
 
     /// All wording lives in `ErrorText` (spec §7). This property exists so the
@@ -16,6 +17,7 @@ enum MenuCommand: Equatable, Sendable {
     var title: String {
         switch self {
         case .refreshNow: return ErrorText.refreshNow
+        case .settings: return ErrorText.settings
         case .quit: return ErrorText.quit
         }
     }
@@ -65,6 +67,7 @@ struct MenuModel: Equatable {
 
         items.append(.separator)
         items.append(.command(.refreshNow))
+        items.append(.command(.settings))
         items.append(.separator)
         items.append(.command(.quit))
         return MenuModel(items: items)

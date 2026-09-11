@@ -69,6 +69,15 @@ public struct Settings: Codable, Equatable, Sendable {
     public var maxVisibleWidth: Double
     public var launchAtLogin: Bool
 
+    /// The bounds `init(from:)` clamps to, named so that a control cannot be
+    /// built with a different range (R143). A slider that reaches 1,400 points
+    /// is a width the user sets, sees applied, and loses on the next launch,
+    /// with nothing anywhere reporting the reversal.
+    public static let speedRange: ClosedRange<Double> = 4...200
+    public static let widthRange: ClosedRange<Double> = 60...1200
+    /// Spec §5.1 offers one row or two. Anything else is a hand-edited file.
+    public static let rowChoices: [Int] = [1, 2]
+
     public init(refreshIntervalSeconds: Double = RateConstants.defaultRefreshInterval,
                 rows: Int = 2,
                 scrollPointsPerSecond: Double = 24,
@@ -122,16 +131,18 @@ public struct Settings: Codable, Equatable, Sendable {
             : RateConstants.defaultRefreshInterval
 
         let rawRows = c.lenient(Int.self, .rows, default: defaults.rows)
-        rows = (rawRows == 2) ? 2 : 1
+        rows = Settings.rowChoices.contains(rawRows) ? rawRows : defaults.rows
 
         let speed = finiteOrDefault(.scrollPointsPerSecond, defaults.scrollPointsPerSecond)
-        scrollPointsPerSecond = min(max(speed, 4), 200)
+        scrollPointsPerSecond = min(max(speed, Settings.speedRange.lowerBound),
+                                    Settings.speedRange.upperBound)
 
         colorScheme = c.lenient(String.self, .colorScheme, default: defaults.colorScheme)
         motionMode = c.lenient(String.self, .motionMode, default: defaults.motionMode)
 
         let width = finiteOrDefault(.maxVisibleWidth, defaults.maxVisibleWidth)
-        maxVisibleWidth = min(max(width, 60), 1200)
+        maxVisibleWidth = min(max(width, Settings.widthRange.lowerBound),
+                              Settings.widthRange.upperBound)
 
         launchAtLogin = c.lenient(Bool.self, .launchAtLogin, default: defaults.launchAtLogin)
     }
