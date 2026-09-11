@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 import TickerCore
 @testable import squigglectl
@@ -243,4 +244,130 @@ import TickerCore
 @Test func probeRejectsAnUnknownFlag() {
     #expect(throws: ParseError.self) { try Command.parse(["probe", "--bogus", "AAPL"]) }
     #expect(throws: ParseError.self) { try Command.parse(["probe", "AAPL", "--bogus"]) }
+}
+
+// MARK: - the unknown-flag sweep, on every verb and on one hyphen
+
+@Test func everyVerbRejectsASingleHyphenFlagInsteadOfTakingItAsAnArgument() throws {
+    // `watch` had no sweep at all, so `watch --raw AAPL` parsed as a watchlist
+    // of two symbols: `Symbol`'s forbidden set has no hyphen in it, so `--raw`
+    // is a perfectly constructible symbol, and the loop fetched it every cycle
+    // until Yahoo answered "not found". The other four swept `hasPrefix("--")`
+    // only, so `-x` walked through all of them.
+    let attempts: [[String]] = [
+        ["quote", "-x", "AAPL"], ["quote", "--raw2", "AAPL"],
+        ["watch", "-x", "AAPL"], ["watch", "--raw", "AAPL"],
+        ["search", "-x", "apple"], ["search", "--json", "apple"],
+        ["doctor", "-x"], ["doctor", "--json"],
+        ["probe", "-x", "AAPL"], ["probe", "--json", "AAPL"],
+    ]
+    for arguments in attempts {
+        do {
+            let parsed = try Command.parse(arguments)
+            Issue.record("\(arguments) parsed as \(parsed)")
+        } catch let error as ParseError {
+            #expect(error.message.contains("unknown flag"), "\(arguments): \(error.message)")
+        }
+    }
+}
+
+@Test func theSweepCostsNoRealSymbolAndNoRealRecordName() throws {
+    // The sweep tests `hasPrefix("-")`, which is a wider net than the `--` it
+    // replaces, so the things that legitimately carry punctuation have to be
+    // re-checked through every verb that accepts one. These five are the
+    // spellings this project treats as the canonical awkward cases.
+    for raw in ["^GSPC", "BRK-B", "VOD.L", "BTC-USD", "EURUSD=X"] {
+        #expect(try Command.parse(["quote", raw]) == .quote(symbol: raw, raw: false))
+        #expect(try Command.parse(["probe", raw]) == .probe(symbol: raw, record: nil))
+        let symbol = try #require(Symbol(raw))
+        #expect(try Command.parse(["watch", raw])
+            == .watch(symbols: [symbol],
+                      intervalSeconds: RateConstants.defaultRefreshInterval,
+                      maxCycles: nil))
+    }
+
+    // And the scenario names `probe --record` is documented with, all of which
+    // contain hyphens. `takeValue` strips the name before the sweep sees it,
+    // which is what keeps them legal.
+    for name in ["regular-session", "pre-market", "crypto-while-equities-closed"] {
+        #expect(try Command.parse(["probe", "AAPL", "--record", name])
+            == .probe(symbol: "AAPL", record: name))
+    }
+}
+
+@Test func aNegativeFlagValueStillReachesItsOwnErrorRatherThanTheSweep() throws {
+    // The reason a `-` sweep is safe: `takeValue` removes each known flag
+    // *and the token after it* before the sweep runs, so a negative number
+    // given to `--interval` or `--cycles` is diagnosed by the code that knows
+    // what those flags mean. Reported as "unknown flag: -5" it would send the
+    // operator looking for a flag they never typed.
+    //
+    // `--interval -5` is the one that does not end in an error at all: -5 is a
+    // number, so it reaches the clamp and runs at the bottom of the offered
+    // range. That is the same point from the other side — what matters is that
+    // the value is handled by the flag that asked for it, not intercepted as a
+    // flag of its own.
+    #expect(try Command.parse(["watch", "--interval", "-5", "AAPL"])
+        == .watch(symbols: [try #require(Symbol("AAPL"))],
+                  intervalSeconds: RateConstants.offeredRefreshIntervals.lowerBound,
+                  maxCycles: nil))
+
+    for arguments in [["watch", "--cycles", "-1", "AAPL"],
+                      ["search", "--limit", "-3", "apple"]] {
+        do {
+            let parsed = try Command.parse(arguments)
+            Issue.record("\(arguments) parsed as \(parsed)")
+        } catch let error as ParseError {
+            #expect(!error.message.contains("unknown flag"), "\(arguments): \(error.message)")
+            #expect(error.message.contains(arguments[1]), "\(arguments): \(error.message)")
+        }
+    }
+}
+
+// MARK: - one symbol means one symbol
+
+@Test func quoteAndProbeRefuseASecondSymbolRatherThanQuotingOnlyTheFirst() throws {
+    // Both took `rest.first` and dropped the remainder in silence, so
+    // `quote AAPL MSFT` printed a correct answer to a question the user did
+    // not ask — and `probe AAPL MSFT` made one request and reported on it as
+    // though the second symbol had never been typed. Diagnosed the way
+    // `doctor` already diagnoses a stray positional: named, and not called a
+    // flag.
+    for arguments in [["quote", "AAPL", "MSFT"], ["probe", "AAPL", "MSFT"],
+                      ["quote", "--raw", "AAPL", "MSFT"],
+                      ["probe", "AAPL", "MSFT", "--record", "regular-session"]] {
+        do {
+            let parsed = try Command.parse(arguments)
+            Issue.record("\(arguments) parsed as \(parsed)")
+        } catch let error as ParseError {
+            #expect(error.message.contains("MSFT"), "\(arguments): \(error.message)")
+            #expect(!error.message.contains("flag"), "\(arguments): \(error.message)")
+        }
+    }
+
+    // `search` is the exception and stays one: joining its leftovers is the
+    // whole point of not making people quote a multi-word query.
+    #expect(try Command.parse(["search", "berkshire", "hathaway"])
+        == .search(query: "berkshire hathaway", limit: 10))
+}
+
+// MARK: - the two interval rules, which are not the same rule
+
+@Test func theCommandLineClampAndTheStoreDecoderDisagreeOnPurpose() throws {
+    // `watch --interval`'s comment used to claim its clamp was "the same rule
+    // `Settings` applies to a hand-edited store file". It is not: the decoder
+    // replaces an interval outside the offered menu with the *default*, while
+    // the command line snaps it to the nearest end of the range. Both halves
+    // are pinned here, against each other, so the comment cannot drift back
+    // into being true-sounding.
+    let range = RateConstants.offeredRefreshIntervals
+    #expect(try Command.parse(["watch", "--interval", "7200", "AAPL"])
+        == .watch(symbols: [try #require(Symbol("AAPL"))],
+                  intervalSeconds: range.upperBound, maxCycles: nil))
+
+    let decoded = try JSONDecoder().decode(
+        Settings.self, from: Data(#"{"refreshIntervalSeconds":7200}"#.utf8))
+    #expect(decoded.refreshIntervalSeconds == RateConstants.defaultRefreshInterval)
+    #expect(decoded.refreshIntervalSeconds != range.upperBound,
+            "the two rules have converged; the comment describing them must be re-read")
 }

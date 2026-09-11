@@ -41,6 +41,32 @@ public enum Command: Equatable {
             return true
         }
 
+        /// Every verb calls this before it treats what is left as its own
+        /// arguments. Three things were wrong with the four hand-written
+        /// copies it replaces.
+        ///
+        /// `watch` had no sweep at all, so `squigglectl watch --raw AAPL`
+        /// parsed as a watchlist of two symbols — `--raw` and `AAPL` — because
+        /// `Symbol`'s forbidden set has no hyphen in it, and then failed
+        /// against Yahoo as a bad symbol rather than as the unknown flag it is.
+        ///
+        /// The other four tested `hasPrefix("--")`, so a single-hyphen `-x`
+        /// walked through every one of them and became a symbol or a search
+        /// word. `hasPrefix("-")` is the test, and it is safe precisely because
+        /// `takeValue` has already removed each known flag *and the token after
+        /// it* by the time this runs: `--interval -5` and `--cycles -1` reach
+        /// their own error messages, which say what is wrong with the number,
+        /// rather than being reported here as unknown flags.
+        ///
+        /// And having one copy is itself the point — the missing sweep in
+        /// `watch` is what four separate copies of a rule look like after
+        /// someone adds a fifth verb.
+        func rejectUnknownFlags() throws {
+            if let unknownFlag = rest.first(where: { $0.hasPrefix("-") }) {
+                throw ParseError("unknown flag: \(unknownFlag)")
+            }
+        }
+
         /// Removes `name` and the token after it, and returns that token.
         /// A flag given with nothing following it is a parse error, not a
         /// silently-ignored flag.
@@ -61,16 +87,23 @@ public enum Command: Equatable {
         case "quote":
             let raw = takeFlag("--raw")
             // Whatever is left after removing recognised flags is meant to be
-            // the symbol. A token still starting with `--` is not a symbol
+            // the symbol. A token still starting with a hyphen is not a symbol
             // that slipped through — it's a flag this verb doesn't know, and
             // reporting it as an unusable symbol would misdiagnose the
             // mistake (R64 removed `--json` from this parser but nothing
             // rejected it, so it silently became the symbol).
-            if let unknownFlag = rest.first(where: { $0.hasPrefix("--") }) {
-                throw ParseError("unknown flag: \(unknownFlag)")
-            }
+            try rejectUnknownFlags()
             guard let symbol = rest.first else {
                 throw ParseError("quote needs a symbol, e.g. `squigglectl quote AAPL`")
+            }
+            // One symbol, and `rest.first` used to take it and drop the rest in
+            // silence: `squigglectl quote AAPL MSFT` quoted AAPL and said
+            // nothing about MSFT, so the answer on screen was right for a
+            // question the user did not ask. Reported separately from the flag
+            // case above, the way `doctor` already separates them — calling
+            // `MSFT` an unknown flag would misdiagnose it.
+            if rest.count > 1 {
+                throw ParseError("quote takes one symbol, got: \(rest[1])")
             }
             return .quote(symbol: symbol, raw: raw)
 
@@ -81,9 +114,21 @@ public enum Command: Equatable {
                     throw ParseError("--interval needs a number of seconds, got \(intervalText)")
                 }
                 // Clamped, not rejected: a stray "30" or "7200" on the
-                // command line should run at the nearest honoured value, the
-                // same rule `Settings` applies to a hand-edited store file —
-                // see RateConstants.offeredRefreshIntervals.
+                // command line runs at the nearest end of
+                // `RateConstants.offeredRefreshIntervals` rather than failing.
+                //
+                // This is deliberately *not* what `Settings.init(from:)` does
+                // with the same out-of-range number in a hand-edited store
+                // file, and a comment here used to claim it was. That decoder
+                // replaces an unoffered interval with
+                // `RateConstants.defaultRefreshInterval` — 7200 becomes 180,
+                // not 900. The two differ because the inputs differ: a store
+                // file is persisted state that the app will re-save, so
+                // snapping it to a nearby value would write a number the user
+                // never chose back to their disk, while an interval typed on
+                // the command line lives for one run and clamping it does what
+                // the operator plainly meant. `theCommandLineClampAndTheStoreDecoderDisagreeOnPurpose`
+                // pins both halves against each other.
                 let range = RateConstants.offeredRefreshIntervals
                 intervalSeconds = min(max(parsed, range.lowerBound), range.upperBound)
             }
@@ -95,6 +140,12 @@ public enum Command: Equatable {
                 }
                 maxCycles = parsed
             }
+
+            // `watch` is the verb that had no sweep at all. It matters most
+            // here: every other verb would have failed loudly on a stray flag
+            // one step later, while this one turned it into a symbol and
+            // fetched it every cycle for as long as the loop ran.
+            try rejectUnknownFlags()
 
             var symbols: [Symbol] = []
             for token in rest {
@@ -119,14 +170,12 @@ public enum Command: Equatable {
                 limit = min(parsed, RateConstants.maxSearchResultCount)
             }
 
-            // Reject a stray `--flag` before it can join the query text below.
+            // Reject a stray flag before it can join the query text below.
             // Multi-word queries are the normal case, so anything left in
             // `rest` is ordinarily meant to become part of the search text —
-            // but a token starting with `--` is a mistyped or unsupported
+            // but a token starting with a hyphen is a mistyped or unsupported
             // flag, not a word to search for.
-            if let unknownFlag = rest.first(where: { $0.hasPrefix("--") }) {
-                throw ParseError("unknown flag: \(unknownFlag)")
-            }
+            try rejectUnknownFlags()
 
             // Multi-word queries are the normal case ("berkshire hathaway"),
             // so join the leftovers rather than demanding the user quote them.
@@ -138,11 +187,9 @@ public enum Command: Equatable {
             return .search(query: query, limit: limit)
 
         case "doctor":
-            // No flags of its own yet — any `--flag` here is a mistake, not a
+            // No flags of its own yet — any flag here is a mistake, not a
             // token to silently ignore. Same rule as `quote` and `search`.
-            if let unknownFlag = rest.first(where: { $0.hasPrefix("--") }) {
-                throw ParseError("unknown flag: \(unknownFlag)")
-            }
+            try rejectUnknownFlags()
             // And nothing positional either. `doctor` used to discard whatever
             // survived the flag check above, so `squigglectl doctor AAPL` ran
             // the same eight checks and gave no hint that the symbol had been
@@ -187,18 +234,21 @@ public enum Command: Equatable {
                         "and must not begin with -, got \(name)")
                 }
             }
-            // Same rule as `quote`, `search` and `doctor`: a stray `--flag`
-            // this verb doesn't know must not be silently swallowed or
-            // mistaken for the symbol — for whatever `--flag` reaches this
-            // sweep. `takeValue("--record")` above already removed
-            // `--record` and the single token after it, so a stray flag
-            // given as that token never gets here; the guard above is what
-            // catches it.
-            if let unknownFlag = rest.first(where: { $0.hasPrefix("--") }) {
-                throw ParseError("unknown flag: \(unknownFlag)")
-            }
+            // Same rule as `quote`, `search` and `doctor`: a stray flag this
+            // verb doesn't know must not be silently swallowed or mistaken for
+            // the symbol — for whatever flag reaches this sweep.
+            // `takeValue("--record")` above already removed `--record` and the
+            // single token after it, so a stray flag given as that token never
+            // gets here; the guard above is what catches it.
+            try rejectUnknownFlags()
             guard let symbol = rest.first else {
                 throw ParseError("probe needs a symbol, e.g. `squigglectl probe AAPL`")
+            }
+            // One symbol, for the same reason `quote` takes one: a probe of
+            // `AAPL MSFT` made exactly one request and reported on it as
+            // though the second symbol had never been typed.
+            if rest.count > 1 {
+                throw ParseError("probe takes one symbol, got: \(rest[1])")
             }
             return .probe(symbol: symbol, record: record)
 
