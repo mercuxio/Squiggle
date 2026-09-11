@@ -18,6 +18,8 @@ final class StatusItemController {
     // retained by the run loop until invalidated — `stop()` tears both down
     // for the same reason.
     private var reduceMotionObserver: NSObjectProtocol?
+    private var pauseMonitor: PauseMonitor?
+    private var pauseConditions = PauseConditions()
 
     init(runner: TickerRunner, settings: Settings) {
         self.runner = runner
@@ -51,6 +53,12 @@ final class StatusItemController {
                 MainActor.assumeIsolated { self?.render() }
             }
 
+        let monitor = PauseMonitor { [weak self] conditions in
+            self?.applyPause(conditions)
+        }
+        monitor.start(observing: button.window)
+        pauseMonitor = monitor
+
         render()
         scheduleStep(after: 0)
     }
@@ -62,6 +70,23 @@ final class StatusItemController {
             NSWorkspace.shared.notificationCenter.removeObserver(reduceMotionObserver)
         }
         reduceMotionObserver = nil
+        pauseMonitor?.stop()
+        pauseMonitor = nil
+    }
+
+    /// Spec §5.2: pausing is `speed = 0` with the offset captured, never a
+    /// removal — removing and re-adding makes the strip jump.
+    ///
+    /// The refresh side needs nothing here. `visibility()` reads
+    /// `pauseConditions` on the next scheduled step, and forcing a step now
+    /// would turn every unlock into an unscheduled request.
+    private func applyPause(_ conditions: PauseConditions) {
+        pauseConditions = conditions
+        if conditions.isPaused {
+            tickerView.pause()
+        } else {
+            tickerView.resume()
+        }
     }
 
     private func scheduleStep(after seconds: Double) {
@@ -88,10 +113,11 @@ final class StatusItemController {
         scheduleStep(after: wait)
     }
 
-    /// Task 10 replaces this with the notification-driven version (R134).
-    /// Until then the status item is always treated as visible, which is the
-    /// conservative answer: it costs requests, never correctness.
-    private func visibility() -> Visibility { .visible }
+    /// R134: reads the state `PauseMonitor` maintains rather than polling
+    /// anything itself. `pauseConditions` is updated only when it changes, so
+    /// this is always the answer as of the most recent notification, not a
+    /// snapshot taken here.
+    private func visibility() -> Visibility { pauseConditions.visibility }
 
     private func render() {
         let metrics = StripRenderer.metrics(rows: settings.rows,
