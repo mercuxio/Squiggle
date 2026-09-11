@@ -54,25 +54,33 @@ public struct Settings: Codable, Equatable, Sendable {
     /// 1 or 2. Anything else is nonsense from a hand-edited file.
     public var rows: Int
     public var scrollPointsPerSecond: Double
-    /// "auto" | "monochrome" | "color", stored verbatim: an unknown value is
-    /// carried through rather than rejected, so a file written by a future
-    /// version survives a downgrade unchanged. The consumer maps the string to
-    /// its own enum and defaults there — this type does not know the menu, and
-    /// a caller that force-maps a hand-edited `"puce"` will crash, so don't.
+    /// "monochrome" | "classic" | "accessible" (spec §5.3), stored verbatim:
+    /// an unknown value is carried through rather than rejected, so a file
+    /// written by a future version survives a downgrade unchanged. The
+    /// consumer maps the string to its own enum and defaults there — this type
+    /// does not know the menu, and it must not learn `NSColor`.
     public var colorScheme: String
+    /// "scroll" | "step" (spec §5.1). Same carry-through contract as
+    /// `colorScheme`. Step is *forced* when Reduce Motion is on, which is a
+    /// decision the renderer makes at draw time and never writes back here —
+    /// the setting records what the user chose, not what accessibility
+    /// overrode it with.
+    public var motionMode: String
     public var maxVisibleWidth: Double
     public var launchAtLogin: Bool
 
     public init(refreshIntervalSeconds: Double = RateConstants.defaultRefreshInterval,
-                rows: Int = 1,
+                rows: Int = 2,
                 scrollPointsPerSecond: Double = 24,
-                colorScheme: String = "auto",
+                colorScheme: String = "monochrome",
+                motionMode: String = "scroll",
                 maxVisibleWidth: Double = 260,
                 launchAtLogin: Bool = false) {
         self.refreshIntervalSeconds = refreshIntervalSeconds
         self.rows = rows
         self.scrollPointsPerSecond = scrollPointsPerSecond
         self.colorScheme = colorScheme
+        self.motionMode = motionMode
         self.maxVisibleWidth = maxVisibleWidth
         self.launchAtLogin = launchAtLogin
     }
@@ -120,6 +128,7 @@ public struct Settings: Codable, Equatable, Sendable {
         scrollPointsPerSecond = min(max(speed, 4), 200)
 
         colorScheme = c.lenient(String.self, .colorScheme, default: defaults.colorScheme)
+        motionMode = c.lenient(String.self, .motionMode, default: defaults.motionMode)
 
         let width = finiteOrDefault(.maxVisibleWidth, defaults.maxVisibleWidth)
         maxVisibleWidth = min(max(width, 60), 1200)

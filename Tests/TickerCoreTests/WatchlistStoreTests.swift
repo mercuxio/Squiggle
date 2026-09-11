@@ -18,9 +18,52 @@ private func write(_ json: String, to url: URL) throws {
     // First launch is not an error condition.
     let store = try FileWatchlistStore(url: tempURL()).load()
     #expect(store.symbols.isEmpty)
-    #expect(store.settings.rows == 1)
+    #expect(store.settings.rows == 2)
     #expect(store.settings.refreshIntervalSeconds == RateConstants.defaultRefreshInterval)
     #expect(store.cooldownUntilEpoch == nil)
+}
+
+@Test func theDefaultsAreTheOnesTheSpecNames() {
+    // Spec §5.1 "Two rows is the default", §5.3's table "Monochrome
+    // (default)", §5.1's two motion modes with Scroll named default. These
+    // were `1` and `"auto"` until ruling R118/R119 — and `"auto"` was never
+    // a scheme the spec defined at all, only a word a doc comment invented.
+    let s = Settings()
+    #expect(s.rows == 2)
+    #expect(s.colorScheme == "monochrome")
+    #expect(s.motionMode == "scroll")
+}
+
+@Test func aFileWrittenBeforeMotionModeExistedStillLoads() throws {
+    // R120: the key is new and `schemaVersion` deliberately did NOT move.
+    // `lenient` is what makes that safe, and this is the test that says so.
+    let url = tempURL()
+    try write(#"{"schemaVersion":1,"symbols":["AAPL"],"settings":{"rows":1}}"#, to: url)
+
+    let store = try FileWatchlistStore(url: url).load()
+    #expect(store.settings.motionMode == "scroll")
+    #expect(store.settings.rows == 1, "an explicit 1 must survive the new default")
+}
+
+@Test func anUnknownMotionModeIsCarriedThroughRatherThanRejected() throws {
+    // Same contract as `colorScheme`: a file from a future version survives a
+    // downgrade unchanged, and the consumer defaults when it maps.
+    let url = tempURL()
+    try write(#"{"schemaVersion":1,"settings":{"motionMode":"teleport"}}"#, to: url)
+
+    let store = try FileWatchlistStore(url: url).load()
+    #expect(store.settings.motionMode == "teleport")
+}
+
+@Test func aMotionModeOfTheWrongTypeCostsOnlyItself() throws {
+    let url = tempURL()
+    try write(#"{"schemaVersion":1,"symbols":["AAPL"],"settings":{"motionMode":7,"rows":1}}"#,
+              to: url)
+
+    let store = try FileWatchlistStore(url: url).load()
+    #expect(store.settings.motionMode == Settings().motionMode)
+    #expect(store.settings.rows == 1, "one bad field cost a good one")
+    #expect(store.symbols.count == 1)
 }
 
 @Test func aRoundTripPreservesEverything() throws {
@@ -79,7 +122,7 @@ private func write(_ json: String, to url: URL) throws {
 
     #expect(topLevel == ["cooldownUntilEpoch", "schemaVersion", "settings", "symbols"],
             "top-level keys are not sorted: \(topLevel)")
-    #expect(settingsKeys.count == 6, "did not find the settings keys: \(settingsKeys)")
+    #expect(settingsKeys.count == 7, "did not find the settings keys: \(settingsKeys)")
     #expect(settingsKeys == settingsKeys.sorted(),
             "settings keys are not sorted: \(settingsKeys)")
 }
@@ -92,7 +135,7 @@ private func write(_ json: String, to url: URL) throws {
 
     let store = try FileWatchlistStore(url: url).load()
     #expect(store.symbols.count == 1)
-    #expect(store.settings.rows == 1)
+    #expect(store.settings.rows == 2)
 }
 
 @Test func anUnknownKeyIsIgnoredRatherThanRejected() throws {
@@ -806,10 +849,13 @@ private func write(_ json: String, to url: URL) throws {
 
 @Test func aScalarWhereTheSymbolsArrayShouldBeLosesOnlyTheSymbols() throws {
     let url = tempURL()
-    try write(#"{"schemaVersion":1,"symbols":"AAPL","settings":{"rows":2}}"#, to: url)
+    // `rows` is deliberately the NON-default 1 (R118 moved the default to 2):
+    // asserting the default here would pass even if the settings were dropped
+    // entirely, which is the failure this test exists to catch.
+    try write(#"{"schemaVersion":1,"symbols":"AAPL","settings":{"rows":1}}"#, to: url)
     let store = try FileWatchlistStore(url: url).load()
     #expect(store.symbols.isEmpty)
-    #expect(store.settings.rows == 2, "a bad symbols array cost the settings too")
+    #expect(store.settings.rows == 1, "a bad symbols array cost the settings too")
 }
 
 @Test func theCapStillHoldsWhenTheArrayIsDecodedElementWise() throws {
