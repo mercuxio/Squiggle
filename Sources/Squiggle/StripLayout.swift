@@ -110,19 +110,27 @@ struct StripLayout: Equatable {
             return [name, Piece(text: Formatting.deadPlaceholder, role: .label)]
         }
 
-        let change = Formatting.change(quote, locale: locale)
+        let change = Formatting.changeParts(quote, locale: locale)
         let price = Formatting.price(quote.price, locale: locale)
 
         // Nothing to say about the change: show the price alone rather than a
         // bare glyph or an empty pair of brackets.
-        guard !change.isEmpty else {
+        guard !change.glyph.isEmpty || !change.body.isEmpty else {
             return [name, Piece(text: price, role: .label)]
         }
 
-        return [
-            name,
-            Piece(text: price + " ", role: .label),
-            Piece(text: change, role: .direction(quote.direction)),
-        ]
+        // The glyph is its own segment so that it, and nothing else, carries
+        // `.direction` — the delta and the percentage read as label text in
+        // every scheme. A `.unknown` quote has no glyph at all, and an empty
+        // segment is one every later stage would have to remember to skip,
+        // so it is left out rather than emitted at zero width.
+        var pieces = [name, Piece(text: price + " ", role: .label)]
+        if !change.glyph.isEmpty {
+            pieces.append(Piece(text: change.glyph, role: .direction(quote.direction)))
+        }
+        if !change.body.isEmpty {
+            pieces.append(Piece(text: change.body, role: .label))
+        }
+        return pieces
     }
 }

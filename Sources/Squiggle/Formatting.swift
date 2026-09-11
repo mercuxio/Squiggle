@@ -63,6 +63,23 @@ enum Formatting {
         return text
     }
 
+    /// `change` cut where colour changes hands: the direction glyph, which is
+    /// the only part the strip colours, and everything after it.
+    ///
+    /// Derived by splitting `change`'s own output rather than rebuilding it,
+    /// because the two must never disagree — the dropdown row renders the
+    /// whole string and the strip renders these two halves, and a reader
+    /// comparing them would see any difference at once. `glyph` is empty for
+    /// `.unknown`, which makes `body` the whole string.
+    static func changeParts(_ quote: Quote,
+                            locale: Locale = .autoupdatingCurrent)
+    -> (glyph: String, body: String) {
+        let full = Self.change(quote, locale: locale)
+        guard !full.isEmpty else { return ("", "") }
+        let glyph = quote.direction.glyph
+        return (glyph, String(full.dropFirst(glyph.count)))
+    }
+
     /// Two decimals normally; four under 1.0, where two would round most of the
     /// number away (a $0.0431 token, an FX cross). The threshold is on the
     /// magnitude, so it is the same either side of zero.

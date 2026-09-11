@@ -36,20 +36,52 @@ private func quote(_ raw: String, price: Double, change: Double?) throws -> Quot
         dead: [], rows: 1, gap: 20, locale: posix, measure: tenPerCharacter)
 
     let texts = layout.rows[0].segments.map(\.text)
-    #expect(texts == ["AAPL ", "232.10 ", "▼1.10 (0.47%)"])
+    #expect(texts == ["AAPL ", "232.10 ", "▼", "1.10 (0.47%)"])
 }
 
-@Test func onlyTheChangeSegmentCarriesDirection() throws {
-    // Spec §5.3: colour applies to the delta and the percentage, never to
-    // the symbol or the price.
+@Test func onlyTheDirectionGlyphCarriesDirection() throws {
+    // The triangle alone is coloured. The delta and the percentage read as
+    // label text in every scheme, so the eye lands on one small mark rather
+    // than on a coloured run competing with the price beside it.
     let aapl = try symbol("AAPL")
     let layout = StripLayout.build(
         symbols: [aapl],
         quotes: [aapl: try quote("AAPL", price: 232.1, change: 1.1)],
         dead: [], rows: 1, gap: 20, locale: posix, measure: tenPerCharacter)
 
-    #expect(layout.rows[0].segments.map(\.role)
-            == [.label, .label, .direction(.up)])
+    let segments = layout.rows[0].segments
+    #expect(segments.map(\.role) == [.label, .label, .direction(.up), .label])
+    #expect(segments[2].text == "▲")
+    #expect(segments[3].text == "1.10 (0.48%)")
+}
+
+@Test func aFlatChangeStillSplitsItsGlyphIntoItsOwnSegment() throws {
+    // `.flat` resolves to `.labelColor` in every scheme, so the split buys
+    // no colour here — but the segment shape must not depend on direction,
+    // or the renderer would have two layouts to reason about instead of one.
+    let msft = try symbol("MSFT")
+    let layout = StripLayout.build(
+        symbols: [msft],
+        quotes: [msft: try quote("MSFT", price: 410.0, change: 0)],
+        dead: [], rows: 1, gap: 20, locale: posix, measure: tenPerCharacter)
+
+    let segments = layout.rows[0].segments
+    #expect(segments.map(\.role) == [.label, .label, .direction(.flat), .label])
+    #expect(segments[2].text == "–")
+}
+
+@Test func anUnknownDirectionEmitsNoGlyphSegmentAtAll() throws {
+    // `Direction.unknown`'s glyph is the empty string. A zero-width segment
+    // would measure to nothing and draw nothing, so it is not emitted: an
+    // empty segment is one every later stage has to remember to skip.
+    let ipo = try symbol("IPO")
+    let layout = StripLayout.build(
+        symbols: [ipo],
+        quotes: [ipo: try quote("IPO", price: 12.5, change: nil)],
+        dead: [], rows: 1, gap: 20, locale: posix, measure: tenPerCharacter)
+
+    let roles = layout.rows[0].segments.map(\.role)
+    #expect(!roles.contains(.direction(.unknown)))
 }
 
 @Test func aDeadSymbolKeepsItsSlotAndCarriesNoDirection() throws {

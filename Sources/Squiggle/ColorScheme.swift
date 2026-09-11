@@ -49,9 +49,10 @@ enum ColorPolicy {
         // Exhaustive, no `default:` — a third role must fail the build here.
         switch role {
         case .label:
-            // Spec §5.3: colour applies to the delta and percentage only. The
-            // symbol is the anchor the eye lands on and must not move in the
-            // colour space.
+            // Colour applies to the direction glyph and to nothing else — not
+            // the symbol, not the price, and (since the punch list) not the
+            // delta or the percentage either. Every number on the strip stays
+            // put in the colour space; one small triangle moves.
             return .labelColor
 
         case .direction(let direction):
