@@ -196,6 +196,19 @@ enum ErrorText {
     static let launchAtLoginLabel = "Open at Login"
     static let openLoginItems = "Open Login Items…"
 
+    /// The note under the checkbox. A refusal outranks the state, because the
+    /// state is the same before and after one — that sameness is what made the
+    /// old silent failure unreadable.
+    ///
+    /// Domain and code and nothing else: R44 wants this line safe to paste
+    /// into a support email, and `LoginItemFailure` has already thrown away
+    /// the parts of the error that name files.
+    static func loginItemNote(for state: LoginItemState,
+                              failure: LoginItemFailure?) -> String? {
+        guard let failure else { return Self.loginItemNote(for: state) }
+        return "macOS refused the change (\(failure.domain) \(failure.code))."
+    }
+
     /// `nil` for the two states a checkbox already explains. The other two
     /// need a sentence because their fix is not in this window (R146).
     static func loginItemNote(for state: LoginItemState) -> String? {

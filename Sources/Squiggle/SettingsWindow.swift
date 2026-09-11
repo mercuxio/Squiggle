@@ -199,13 +199,23 @@ final class SettingsWindowController: NSWindowController {
     /// R146: read, never remember. The user can change this in System
     /// Settings while the window is open and nothing tells us.
     private func refreshLoginItem() {
-        show(launchAtLogin.read())
+        // `read()` cannot fail, and it is also the moment any earlier refusal
+        // stops being news — the note describes one attempt, not a standing
+        // condition.
+        show(LoginItemOutcome(launchAtLogin.read()))
     }
 
-    private func show(_ state: LoginItemState) {
+    /// The seam the window tests reach for. `windowBecameKey` is the real
+    /// trigger, and there is no way to make a test window become key without
+    /// a running event loop, so the notification's one line of work is what
+    /// gets called directly instead.
+    func refreshLoginItemForTesting() { refreshLoginItem() }
+
+    private func show(_ outcome: LoginItemOutcome) {
+        let state = outcome.state
         loginCheckbox.state = state.isOn ? .on : .off
         loginCheckbox.isEnabled = state.isEnabled
-        let note = ErrorText.loginItemNote(for: state)
+        let note = ErrorText.loginItemNote(for: state, failure: outcome.failure)
         loginNote.stringValue = note ?? ""
         loginNote.isHidden = note == nil
         loginSettingsButton.isHidden = !state.showsSystemSettingsButton

@@ -1,3 +1,4 @@
+import Foundation
 import ServiceManagement
 import Testing
 @testable import Squiggle
@@ -72,4 +73,63 @@ import Testing
     #expect(!LoginItemState.on.showsSystemSettingsButton)
     #expect(!LoginItemState.off.showsSystemSettingsButton)
     #expect(!LoginItemState.unavailable.showsSystemSettingsButton)
+}
+
+// MARK: - Saying why, when macOS refuses (the punch list's item 6)
+
+// The defect: `register()` was called through `try?`, so a refusal and a
+// success were the same event as far as this app could tell. The user saw a
+// checkbox that would not tick and no reason anywhere on screen.
+@Test func aRefusalExplainsItselfInsteadOfLeavingTheBoxSilentlyUnticked() throws {
+    let refused = LoginItemFailure(domain: "SMAppServiceErrorDomain", code: 1)
+    let note = try #require(ErrorText.loginItemNote(for: .off, failure: refused))
+    #expect(note.contains("SMAppServiceErrorDomain"))
+    #expect(note.contains("1"))
+}
+
+// The state note answers "what will happen at next login"; a failure answers
+// "why did nothing happen just now". The second is the newer news.
+@Test func aRefusalOutranksTheStateItLeftBehind() throws {
+    let refused = LoginItemFailure(domain: "SMAppServiceErrorDomain", code: 1)
+    let plain = try #require(ErrorText.loginItemNote(for: .needsApproval))
+    let failed = try #require(ErrorText.loginItemNote(for: .needsApproval,
+                                                     failure: refused))
+    #expect(plain != failed)
+}
+
+@Test func withNothingRefusedTheStateSpeaksForItself() {
+    for state in [LoginItemState.on, .off, .needsApproval, .unavailable] {
+        #expect(ErrorText.loginItemNote(for: state, failure: nil)
+                == ErrorText.loginItemNote(for: state))
+    }
+}
+
+// R44: this line is meant to be safe to read aloud or paste into an email, so
+// it carries the domain and code and nothing the system put a path into.
+@Test func aRefusalNoteNamesNoFile() throws {
+    let raw = NSError(domain: "NSCocoaErrorDomain", code: 513, userInfo: [
+        NSLocalizedDescriptionKey: "No permission to save /Users/someone/thing.",
+        NSFilePathErrorKey: "/Users/someone/thing",
+    ])
+    let note = try #require(ErrorText.loginItemNote(for: .off,
+                                                   failure: LoginItemFailure(raw)))
+    #expect(!note.contains("/"))
+}
+
+// An `Error` reduces to the two facts worth showing. Everything else about an
+// `NSError` — userInfo, the underlying error, the recovery suggestion — is
+// where the paths live.
+@Test func anErrorReducesToItsDomainAndCode() {
+    let raw = NSError(domain: "SMAppServiceErrorDomain", code: 1,
+                      userInfo: [NSFilePathErrorKey: "/Applications/Squiggle.app"])
+    let failure = LoginItemFailure(raw)
+    #expect(failure.domain == "SMAppServiceErrorDomain")
+    #expect(failure.code == 1)
+}
+
+// An outcome with nothing wrong reads exactly as the state did before this
+// existed, so every caller that only cares about the state stays honest.
+@Test func anOutcomeWithoutAFailureIsJustAState() {
+    #expect(LoginItemOutcome(.on).state == .on)
+    #expect(LoginItemOutcome(.on).failure == nil)
 }

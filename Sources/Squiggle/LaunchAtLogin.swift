@@ -39,6 +39,50 @@ enum LoginItemState: Equatable, Sendable {
     var showsSystemSettingsButton: Bool { self == .needsApproval }
 }
 
+/// Why a registration attempt did not take, reduced to the two facts that are
+/// safe to put on screen.
+///
+/// Deliberately *not* the error's `localizedDescription`. R44 wants this line
+/// pasteable into a support email, and Foundation's descriptions routinely
+/// name the file they were about — `/Applications/Squiggle.app`, or worse, a
+/// path under the user's home. The domain and code identify the failure
+/// exactly as well for anyone who can act on it.
+struct LoginItemFailure: Equatable, Sendable {
+    let domain: String
+    let code: Int
+
+    init(domain: String, code: Int) {
+        self.domain = domain
+        self.code = code
+    }
+
+    /// Every `Error` bridges to `NSError`, so this needs no per-framework
+    /// knowledge — and it drops `userInfo` on the floor, which is where the
+    /// paths live.
+    init(_ error: Error) {
+        let bridged = error as NSError
+        self.init(domain: bridged.domain, code: bridged.code)
+    }
+}
+
+/// What `apply` came back with: the state the system reports *now*, plus the
+/// reason it is not the state that was asked for, if there is one.
+///
+/// The two are separate because they answer different questions. The state
+/// says what will happen at the next login; the failure says why nothing
+/// happened just now. A refusal leaves the state unchanged and perfectly
+/// truthful — which is exactly why, before this existed, the app had nothing
+/// to show for it.
+struct LoginItemOutcome: Equatable, Sendable {
+    let state: LoginItemState
+    let failure: LoginItemFailure?
+
+    init(_ state: LoginItemState, failure: LoginItemFailure? = nil) {
+        self.state = state
+        self.failure = failure
+    }
+}
+
 enum LoginItemAction: Equatable {
     case register
     case unregister
@@ -57,29 +101,38 @@ struct LaunchAtLogin {
     var read: () -> LoginItemState
     /// Performs the action and returns the state afterwards, read back from
     /// the system rather than assumed from what was asked (spec §6).
-    var apply: (LoginItemAction) -> LoginItemState
+    var apply: (LoginItemAction) -> LoginItemOutcome
 
     @MainActor
     static let system = LaunchAtLogin(
         read: { LoginItemState(status: SMAppService.mainApp.status) },
         apply: { action in
+            // Throwing here is not exceptional: an unsigned bundle, a
+            // translocated copy running from a quarantined download, or a
+            // daemon that is already registered all land here.
+            //
+            // This used to be `try?`, and that was the defect behind the
+            // user's "the checkbox doesn't work". A refusal leaves the status
+            // exactly where it was, so re-reading it — which spec §6 requires,
+            // and which is the honest thing to show — produced a checkbox that
+            // silently sprang back with no way for the app, or the user, to
+            // learn why. Spec §7 allows no alert, so the reason goes to the
+            // note line under the checkbox instead.
+            var failure: LoginItemFailure?
             switch action {
             case .register:
-                // Throwing here is not exceptional: an unsigned bundle, a
-                // translocated copy running from a quarantined download, or a
-                // daemon that is already registered all land here. There is no
-                // alert to show (spec §7 allows none), and the state read back
-                // below is what the user sees — an unchanged checkbox, which
-                // is the truth.
-                try? SMAppService.mainApp.register()
+                do { try SMAppService.mainApp.register() }
+                catch { failure = LoginItemFailure(error) }
             case .unregister:
-                try? SMAppService.mainApp.unregister()
+                do { try SMAppService.mainApp.unregister() }
+                catch { failure = LoginItemFailure(error) }
             case .openSystemSettings:
                 SMAppService.openSystemSettingsLoginItems()
             case .nothing:
                 break
             }
-            return LoginItemState(status: SMAppService.mainApp.status)
+            return LoginItemOutcome(LoginItemState(status: SMAppService.mainApp.status),
+                                    failure: failure)
         })
 
     /// What clicking the checkbox should do, given what the system currently

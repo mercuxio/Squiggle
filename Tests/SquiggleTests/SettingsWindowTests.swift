@@ -19,6 +19,9 @@ private final class LoginItemSpy: @unchecked Sendable {
     /// rather than assuming the action worked (spec §6), and R146 turns on
     /// the window believing that answer over the checkbox it came from.
     var result: LoginItemState
+    /// What `apply` reports having gone wrong. `nil` is the ordinary case and
+    /// the one every test written before item 6 assumes.
+    var failure: LoginItemFailure?
 
     init(state: LoginItemState, result: LoginItemState) {
         self.state = state
@@ -29,7 +32,7 @@ private final class LoginItemSpy: @unchecked Sendable {
         LaunchAtLogin(read: { [self] in state },
                       apply: { [self] action in
                           applied.append(action)
-                          return result
+                          return LoginItemOutcome(result, failure: failure)
                       })
     }
 }
@@ -162,4 +165,43 @@ private func window(settings: Settings = Settings(),
 
     box.performClick(nil)
     #expect(spy.applied == [.openSystemSettings])
+}
+
+// MARK: - Saying why, when macOS refuses (the punch list's item 6)
+
+@MainActor
+@Test func aRefusedRegistrationSaysSoRatherThanJustUntickingItself() throws {
+    // Item 6 end to end. Before this, `register()` ran through `try?` and a
+    // refusal was indistinguishable from a no-op: the window re-read `.off`,
+    // put the box back down and said nothing. The user's report was "the
+    // checkbox doesn't work", which is exactly what a silent refusal looks
+    // like from outside.
+    let spy = LoginItemSpy(state: .off, result: .off)
+    spy.failure = LoginItemFailure(domain: "SMAppServiceErrorDomain", code: 1)
+    let controller = window(launchAtLogin: spy.seam)
+    let box = try #require(button(titled: ErrorText.launchAtLoginLabel, in: controller))
+
+    box.performClick(nil)
+
+    #expect(spy.applied == [.register])
+    #expect(box.state == .off)
+    let note = try #require(ErrorText.loginItemNote(for: .off, failure: spy.failure))
+    #expect(labelExists(note, in: controller))
+}
+
+@MainActor
+@Test func openingTheWindowAgainClearsALastRefusal() throws {
+    // The note describes one attempt, not a standing condition. `read()`
+    // cannot fail, so a window brought back to key has nothing to report and
+    // must not still be showing why something went wrong minutes ago.
+    let spy = LoginItemSpy(state: .off, result: .off)
+    spy.failure = LoginItemFailure(domain: "SMAppServiceErrorDomain", code: 1)
+    let controller = window(launchAtLogin: spy.seam)
+    let box = try #require(button(titled: ErrorText.launchAtLoginLabel, in: controller))
+    box.performClick(nil)
+
+    controller.refreshLoginItemForTesting()
+
+    let note = try #require(ErrorText.loginItemNote(for: .off, failure: spy.failure))
+    #expect(!labelExists(note, in: controller))
 }
