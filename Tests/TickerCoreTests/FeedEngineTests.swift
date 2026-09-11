@@ -870,4 +870,41 @@ struct FeedEngineTests {
         #expect(snapshot.contractCircuit == .closed,
                 "a network-only failure must not trip the independent contract circuit")
     }
+
+    // MARK: - Refresh now
+
+    @Test func refreshNowRetiresTheCycleDeadline() throws {
+        let clock = FakeClock()
+        let one = try sym("AAPL")
+        var e = engine(clock, [one])
+        // A fresh engine fetches twice before it is holding a deadline at all:
+        // the first call runs with `cursor == 0` and never reaches the deadline
+        // block, and the second is the one that sets it.
+        _ = e.next(openMarket())
+        _ = e.next(openMarket())
+        clock.advance(60)
+
+        let waiting = e.next(openMarket())
+        let isWaiting: Bool
+        if case .sleep = waiting { isWaiting = true } else { isWaiting = false }
+        #expect(isWaiting, "a 180s cycle 60s in should still be waiting, got \(waiting)")
+
+        e.requestImmediateCycle()
+        #expect(e.next(openMarket()) == .fetch(one))
+    }
+
+    @Test func refreshNowCannotWalkPastACooldown() throws {
+        // Spec §4.3 and §7 together: the item still takes a token, so it must
+        // not become a way around a 429 by clicking it enough times.
+        let clock = FakeClock()
+        let one = try sym("AAPL")
+        var e = engine(clock, [one])
+        e.record(.rateLimited(retryAfterSeconds: nil), for: one)
+
+        e.requestImmediateCycle()
+        let action = e.next(openMarket())
+        let isWaiting: Bool
+        if case .sleep = action { isWaiting = true } else { isWaiting = false }
+        #expect(isWaiting, "the cooldown let a fetch through: \(action)")
+    }
 }

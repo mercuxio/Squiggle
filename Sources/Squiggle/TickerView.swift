@@ -125,6 +125,15 @@ final class TickerView: NSView {
         }
     }
 
+    /// The ticker is a picture, not a control.
+    ///
+    /// A layer-backed `NSView` sitting inside `NSStatusBarButton` wins the hit
+    /// test over the button beneath it, and `NSView`'s default `mouseDown` does
+    /// nothing — so without this the strip would swallow every click and the
+    /// dropdown would never open. Returning `nil` makes the view invisible to
+    /// the mouse and leaves the button to do what a status item button does.
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
     /// Spec §5.2: `speed = 0` with the offset captured, never a removal.
     func pause() {
         guard isPaused == false else { return }

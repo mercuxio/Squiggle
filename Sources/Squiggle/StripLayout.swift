@@ -110,24 +110,18 @@ struct StripLayout: Equatable {
             return [name, Piece(text: Formatting.deadPlaceholder, role: .label)]
         }
 
-        let delta = Formatting.delta(quote.change, locale: locale)
-        let percent = Formatting.percent(quote.changePercent, locale: locale)
-        let glyph = quote.direction.glyph
+        let change = Formatting.change(quote, locale: locale)
+        let price = Formatting.price(quote.price, locale: locale)
 
         // Nothing to say about the change: show the price alone rather than a
         // bare glyph or an empty pair of brackets.
-        guard !delta.isEmpty || !percent.isEmpty else {
-            return [name, Piece(text: Formatting.price(quote.price, locale: locale), role: .label)]
-        }
-
-        var change = glyph + delta
-        if !percent.isEmpty {
-            change += change.isEmpty ? "(\(percent))" : " (\(percent))"
+        guard !change.isEmpty else {
+            return [name, Piece(text: price, role: .label)]
         }
 
         return [
             name,
-            Piece(text: Formatting.price(quote.price, locale: locale) + " ", role: .label),
+            Piece(text: price + " ", role: .label),
             Piece(text: change, role: .direction(quote.direction)),
         ]
     }

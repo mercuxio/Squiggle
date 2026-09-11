@@ -8,10 +8,9 @@ import TickerCore
 /// state, Low Power Mode, and the ladder's cooldown, so a repeating timer
 /// would be answering a question that had already changed.
 @MainActor
-final class StatusItemController {
+final class StatusItemController: NSObject, NSMenuDelegate {
     private let statusItem: NSStatusItem
     private let runner: TickerRunner
-    private var settings: Settings
     private var timer: Timer?
     private let tickerView = TickerView()
     // Retained by `NotificationCenter` until removed, same as `timer` is
@@ -21,10 +20,30 @@ final class StatusItemController {
     private var pauseMonitor: PauseMonitor?
     private var pauseConditions = PauseConditions()
 
-    init(runner: TickerRunner, settings: Settings) {
+    private let store: any WatchlistStore
+    // `WatchlistStore` is a protocol and has no URL, and a save that fails for
+    // a filesystem reason needs one to report. Carried beside the store rather
+    // than reached for through a concrete type, so the controller still takes
+    // any conforming store.
+    private let storeURL: URL
+    private var document: Store
+    private var storeFault: TickerError?
+    private var nextStepEpoch: Double?
+
+    // R139: one document, one saver. `settings` is a view onto it rather than
+    // a second copy, so Task 13 changing a setting and Task 15 adding a symbol
+    // cannot end up writing over one another.
+    private var settings: Settings { document.settings }
+
+    init(runner: TickerRunner, store: any WatchlistStore, storeURL: URL,
+         document: Store, storeFault: TickerError?) {
         self.runner = runner
-        self.settings = settings
+        self.store = store
+        self.storeURL = storeURL
+        self.document = document
+        self.storeFault = storeFault
         self.statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        super.init()
         statusItem.button?.title = ""
     }
 
@@ -42,6 +61,15 @@ final class StatusItemController {
         tickerView.frame = button.bounds
         tickerView.autoresizingMask = [.width, .height]
         button.addSubview(tickerView)
+
+        let menu = NSMenu()
+        // Without this, AppKit decides for itself which items are enabled and
+        // the footer — an item with no action, which is exactly what "is this
+        // clickable" is judged on — would be greyed out along with everything
+        // else that has no target.
+        menu.autoenablesItems = false
+        menu.delegate = self
+        statusItem.menu = menu
 
         // Reduce Motion can be toggled while Squiggle is running, and a user
         // who turns it on because a marquee is making them ill should not have
@@ -92,6 +120,8 @@ final class StatusItemController {
     private func scheduleStep(after seconds: Double) {
         timer?.invalidate()
         let delay = max(seconds, RateConstants.minimumWaitSeconds)
+        // The footer's "retrying in" is this number and not an estimate of it.
+        nextStepEpoch = Date().timeIntervalSince1970 + delay
         let fired = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { [weak self] _ in
             // `Timer`'s block is not main-actor-isolated, so hop explicitly
             // rather than annotating the closure and hoping.
@@ -151,5 +181,113 @@ final class StatusItemController {
                          mode: mode,
                          pointsPerSecond: settings.scrollPointsPerSecond,
                          color: { _ in NSColor.labelColor.cgColor })
+    }
+
+    // MARK: - The dropdown
+
+    // R132: rebuilt every time it opens rather than kept in sync. A menu that
+    // is only visible for the second it is being read has no state worth
+    // maintaining, and the timer is on `.common` (Task 6), so the prices
+    // behind it keep arriving while it is up.
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        menu.removeAllItems()
+        let model = MenuModel.build(symbols: runner.symbols,
+                                    quotes: runner.quotes,
+                                    dead: runner.deadSymbols,
+                                    lastSuccessEpoch: runner.lastSuccessEpoch,
+                                    lastError: runner.lastError,
+                                    storeFault: storeFault,
+                                    nowEpoch: Date().timeIntervalSince1970,
+                                    nextStepEpoch: nextStepEpoch)
+        for item in model.items {
+            menu.addItem(menuItem(for: item))
+        }
+    }
+
+    private func menuItem(for item: MenuModel.Item) -> NSMenuItem {
+        // No `default:`: a fifth kind of item must fail the build here rather
+        // than vanish from the menu.
+        switch item {
+        case .separator:
+            return .separator()
+
+        case .footer(let text):
+            let entry = NSMenuItem(title: text, action: nil, keyEquivalent: "")
+            entry.isEnabled = false
+            return entry
+
+        case .quote(let title, let symbol):
+            let entry = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+            // Enabled with no action of its own: a disabled parent will not
+            // open its submenu, and the row itself does nothing when clicked.
+            entry.isEnabled = true
+            let submenu = NSMenu()
+            submenu.autoenablesItems = false
+            let remove = NSMenuItem(title: ErrorText.removeSymbol,
+                                    action: #selector(removeSymbol(_:)), keyEquivalent: "")
+            remove.target = self
+            remove.isEnabled = true
+            remove.representedObject = symbol
+            submenu.addItem(remove)
+            entry.submenu = submenu
+            return entry
+
+        case .command(let command):
+            let entry = NSMenuItem(title: command.title,
+                                   action: selector(for: command), keyEquivalent: "")
+            entry.target = self
+            entry.isEnabled = true
+            return entry
+        }
+    }
+
+    private func selector(for command: MenuCommand) -> Selector {
+        switch command {
+        case .refreshNow: return #selector(refreshNow)
+        case .quit: return #selector(quit)
+        }
+    }
+
+    // MARK: - Menu actions
+
+    @objc private func refreshNow() {
+        // R140: this retires the cycle deadline. The cooldown, both circuits
+        // and the token bucket all still get their say, so the click asks for
+        // a refresh — it does not grant one.
+        runner.requestImmediateCycle()
+        scheduleStep(after: 0)
+    }
+
+    @objc private func removeSymbol(_ sender: NSMenuItem) {
+        guard let symbol = sender.representedObject as? Symbol else { return }
+        document.symbols.removeAll { $0 == symbol }
+        runner.replaceWatchlist(document.symbols)
+        persist()
+        render()
+    }
+
+    @objc private func quit() {
+        stop()
+        NSApp.terminate(nil)
+    }
+
+    /// Writes the whole document. Never throws at a menu click: a failed save
+    /// leaves the change in memory — the user asked for it and it is on the
+    /// screen — and reports itself in the footer instead, which is the app's
+    /// only error surface (spec §7, zero alerts).
+    private func persist() {
+        do {
+            try store.save(document)
+            storeFault = nil
+        } catch let error as TickerError {
+            storeFault = error
+        } catch {
+            // `FileWatchlistStore.save` can fail at `createDirectory` or at the
+            // write itself with a raw `NSError`, which no `catch let e as
+            // TickerError` would match. `storeQuarantineFailed` is the case
+            // that already means "the file is where it was and Squiggle cannot
+            // use it" — true here too, in the other direction.
+            storeFault = .storeQuarantineFailed(at: storeURL)
+        }
     }
 }

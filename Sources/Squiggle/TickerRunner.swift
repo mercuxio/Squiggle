@@ -95,6 +95,8 @@ final class TickerRunner {
         engine.setUserInterval(seconds)
     }
 
+    func requestImmediateCycle() { engine.requestImmediateCycle() }
+
     /// Exists for `theCalendarOutOfTheBodyIsWhatDrivesTheNextContext`. The
     /// aggregate is otherwise private because nothing outside `step` needs it,
     /// and a calendar read from elsewhere would be a second opinion about

@@ -9,19 +9,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var controller: StatusItemController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        let store = FileWatchlistStore(url: FileWatchlistStore.defaultURL(applicationName: "Squiggle"))
-        // A store that will not load is not a reason to refuse to launch: an
-        // empty watchlist is a usable app with an empty strip, and spec §7
-        // puts the explanation in the dropdown footer rather than an alert.
-        // Task 11 carries the fault into that footer; this keeps the launch.
-        let loaded = try? store.load()
-        let settings = loaded?.settings ?? Settings()
-        let symbols = loaded?.symbols ?? []
+        let url = FileWatchlistStore.defaultURL(applicationName: "Squiggle")
+        let store = FileWatchlistStore(url: url)
 
-        let runner = TickerRunner(symbols: symbols,
-                                  userIntervalSeconds: settings.refreshIntervalSeconds,
+        // A store that will not load is not a reason to refuse to launch: an
+        // empty watchlist is a usable app with an empty strip. Task 6 dropped
+        // the fault on the floor with a `try?` and a note saying this task
+        // would pick it up; this is that. Spec §7 puts it in the dropdown
+        // footer, and nowhere else — no alert, no notification.
+        var document = Store()
+        var storeFault: TickerError?
+        do {
+            document = try store.load()
+        } catch let error as TickerError {
+            storeFault = error
+        } catch {
+            storeFault = .storeQuarantineFailed(at: url)
+        }
+
+        let runner = TickerRunner(symbols: document.symbols,
+                                  userIntervalSeconds: document.settings.refreshIntervalSeconds,
                                   fetcher: YahooClient())
-        let controller = StatusItemController(runner: runner, settings: settings)
+        let controller = StatusItemController(runner: runner, store: store, storeURL: url,
+                                              document: document, storeFault: storeFault)
         self.controller = controller
         controller.start()
     }

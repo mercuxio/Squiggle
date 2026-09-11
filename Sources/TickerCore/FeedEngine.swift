@@ -287,6 +287,23 @@ public struct FeedEngine {
         cycleDeadline = 0
     }
 
+    /// Retire the current cycle's deadline, so the next `next()` starts a new
+    /// pass instead of sleeping out the remainder of this one. What the
+    /// dropdown's *Refresh now* does (spec §7).
+    ///
+    /// This is the *only* gate it lifts, and that is the point. The cooldown
+    /// ladder, both circuit breakers, the market calendar, the occlusion check
+    /// and the token bucket all sit elsewhere in `next()` — the first five
+    /// above this deadline in `RefreshPolicy.decide`, the bucket below it — so
+    /// no amount of clicking can turn a 429 into a request.
+    ///
+    /// A no-op while a cycle is in flight: the deadline is only consulted once
+    /// the cursor has been all the way round, and until then the engine is
+    /// already fetching as fast as the bucket permits.
+    public mutating func requestImmediateCycle() {
+        cycleDeadline = 0
+    }
+
     public var latest: [Symbol: Quote] { latestQuotes }
 
     public var deadSymbols: Set<Symbol> { dead }

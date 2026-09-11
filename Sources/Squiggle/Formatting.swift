@@ -1,4 +1,5 @@
 import Foundation
+import TickerCore
 
 /// Every number the user reads, and nothing else: no colour, no sentences
 /// (R129), no AppKit. Sentences live in `ErrorText`; colour lives in
@@ -41,6 +42,25 @@ enum Formatting {
         guard let text = formatter(locale: locale, fractionDigits: 2)
             .string(from: abs(changePercent) as NSNumber) else { return "" }
         return text + "%"
+    }
+
+    /// The change, as both the strip segment and the dropdown row render it:
+    /// the direction glyph carrying the sign (R127), then the absolute delta,
+    /// then the absolute percentage in brackets.
+    ///
+    /// Empty when the quote has neither a delta nor a percentage — the caller
+    /// then shows the price alone, rather than a bare glyph or an empty pair
+    /// of brackets.
+    static func change(_ quote: Quote, locale: Locale = .autoupdatingCurrent) -> String {
+        let delta = Self.delta(quote.change, locale: locale)
+        let percent = Self.percent(quote.changePercent, locale: locale)
+        guard !delta.isEmpty || !percent.isEmpty else { return "" }
+
+        var text = quote.direction.glyph + delta
+        if !percent.isEmpty {
+            text += text.isEmpty ? "(\(percent))" : " (\(percent))"
+        }
+        return text
     }
 
     /// Two decimals normally; four under 1.0, where two would round most of the
