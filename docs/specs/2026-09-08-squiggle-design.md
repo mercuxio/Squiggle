@@ -445,7 +445,13 @@ one. The pause predicates are all `Bool`, which is precisely the shape
 
 ## 9. Build order
 
-No UI until the feed has survived a real trading session.
+No UI until the feed has survived a real trading session. **Retired
+2026-09-11 by the project owner (ruling R117): Squiggle is a personal,
+non-critical app, and a day of wall clock to confirm a budget the sweep
+already bounds at 741 against 1,200 is not worth its cost.** Step 4 below
+is skipped; the UI phase may begin. What the trading day would have caught
+and no test can — a request burst on wake-from-sleep — is now the UI
+phase's first obligation rather than a precondition of it.
 
 1. `squigglectl quote AAPL` against `v8/chart` — confirms the endpoint,
    unauthenticated, from this machine.

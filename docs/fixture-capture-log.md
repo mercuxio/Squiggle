@@ -86,7 +86,12 @@ Still owed (rate-limit-gated, NOT clock-gated — retry it on its own):
       which point `YahooSearchDecodingTests.swift`'s `fixture(_:)` helper
       repoints at it and the synthetic file is deleted.
 
-Still owed (clock-gated; collect during the Task 19 trading day):
+Still owed (clock-gated). Task 19 was skipped on 2026-09-11 (ruling R117),
+so these are no longer scheduled — collect them opportunistically, whenever
+someone is at the machine at the right hour. **No test loads any of them:**
+the names appear in `Tests/` only in comments and in `CommandTests`'s
+`--record` name-validation loop, so the suite is green without them and
+stays green. They exist to detect contract drift later, not to gate now.
 - [ ] regular-session — RECAPTURE during a live session if the corpus was
       taken outside 09:30-16:00 ET; the held file is a closed-market stand-in
 - [ ] pre-market — capture AAPL between 04:00 and 09:30 ET

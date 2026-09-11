@@ -14,7 +14,7 @@
 
 This plan implements **steps 1–4 of the spec's build order (§9)**. It stops at a working CLI that has survived a real trading session. Steps 5–9 — the status item, the Core Animation strip, settings, the symbol picker, and packaging — are deliberately out of scope and get their own plan.
 
-That boundary is the spec's own: *"No UI until the feed has survived a real trading session."* Task 19 is that session. Nothing in the app target may be written before it passes.
+That boundary was the spec's own: *"No UI until the feed has survived a real trading session."* Task 19 was that session. **It was skipped on 2026-09-11 by the project owner's decision (ruling R117), and the spec's gate retired with it.** Tasks 1-18 stand as written; the app target is unblocked. See Task 19's header for what was given up.
 
 The deliverable is independently useful software: a `squigglectl` that fetches quotes, watches a watchlist across a market open and close, and produces an actionable diagnostic dump — plus the fully tested pure core the app will later sit on.
 
@@ -7748,7 +7748,20 @@ git commit -m "feat: probe reports what changed, not just that something did"
 
 ---
 
-## Task 19: The trading day
+## Task 19: The trading day — SKIPPED
+
+> **Not run.** On 2026-09-11 the project owner ruled this task out of scope
+> for a personal, non-critical app (ledger ruling R117). Nothing below was
+> executed. It is kept in full because it is the only written description of
+> what has *not* been verified, and because the clock-gated fixtures in
+> Step 2 remain collectable at any time by anyone who happens to be at the
+> machine at those hours — no test depends on them.
+>
+> **The one item that outlived the skip:** Step 3.2, wake-from-sleep. A
+> burst on wake gets the user's IP throttled, no test can suspend a machine,
+> and this project has already been rate-limited six times. It carries
+> forward as the UI phase's first obligation.
+
 
 Build-order step 4, and the gate the spec puts in front of every line of UI code: *"No UI until the feed has survived a real trading session."*
 
