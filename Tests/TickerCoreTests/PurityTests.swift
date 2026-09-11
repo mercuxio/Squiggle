@@ -1,0 +1,164 @@
+import Foundation
+import Testing
+
+/// F14. The purity rule is the oldest constraint in this project and it was
+/// enforced entirely by everyone remembering it.
+///
+/// `TickerCore` is pure: no AppKit, no SwiftUI, no `UserDefaults`, no
+/// `URLSession`, no `Network`, no timers, no clocks, no randomness, no
+/// user-facing strings. Foundation value types and Foundation *file* APIs are
+/// permitted, which is why `WatchlistStore` is allowed to live here. Every one
+/// of those exclusions is written down in the plan's Global Constraints and in
+/// the spec, and several are re-stated in a doc comment on the type they
+/// constrain — and a rule that lives only in prose is exactly the defect
+/// signature this review keeps finding. Nothing failed when the rule broke.
+///
+/// The check is on `import` lines and nothing else, deliberately. A scanner
+/// that also went looking for `Date()` or `Timer` or `random` in the body text
+/// would be a grep with opinions: it would fire on the word inside a comment,
+/// on `MonotonicClock`'s and `Randomizing`'s own protocol declarations — which
+/// exist precisely so the impure thing is injected from outside, and are the
+/// mechanism that keeps the rule rather than a breach of it — and on
+/// `ISO8601DateFormatter`, a Foundation value type. Imports are different in
+/// kind: a module is either linked into this target or it is not, the line
+/// that links it is unambiguous, and every capability the rule excludes
+/// arrives through one. AppKit, SwiftUI, Network, Dispatch and Combine cannot
+/// be reached from `TickerCore` without one of these lines.
+enum TickerCoreSource {
+    static let directory = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()      // TickerCoreTests
+        .deletingLastPathComponent()      // Tests
+        .deletingLastPathComponent()      // repository root
+        .appendingPathComponent("Sources/TickerCore")
+
+    /// The modules `text` imports, in the order the lines appear.
+    ///
+    /// One definition, used by both the production scan and the test that
+    /// proves the scan can see a violation — a second copy would be free to
+    /// drift into agreeing with the first about nothing.
+    static func modules(in text: String) -> [String] {
+        text.split(separator: "\n").compactMap { line -> String? in
+            var rest = line.drop(while: { $0 == " " || $0 == "\t" })
+            // `@preconcurrency import Foundation` and friends.
+            while rest.hasPrefix("@") {
+                rest = rest.drop(while: { !$0.isWhitespace })
+                    .drop(while: { $0.isWhitespace })
+            }
+            guard rest.hasPrefix("import ") else { return nil }
+            var words = rest.dropFirst("import ".count)
+                .split(whereSeparator: { $0.isWhitespace })
+                .map(String.init)
+            // `import struct Foundation.Data` — the kind, then the path.
+            let kinds = ["typealias", "struct", "class", "enum", "protocol",
+                         "var", "let", "func"]
+            if let first = words.first, kinds.contains(first) { words.removeFirst() }
+            guard let path = words.first else { return nil }
+            return path.split(separator: ".").first.map(String.init)
+        }
+    }
+
+    /// Every `.swift` file in a directory, paired with the modules it imports.
+    static func importsByFile(in directory: URL = TickerCoreSource.directory) throws
+        -> [(file: String, modules: [String])] {
+        let names = try FileManager.default
+            .contentsOfDirectory(atPath: directory.path)
+            .filter { $0.hasSuffix(".swift") }
+            .sorted()
+
+        return try names.map { name in
+            let text = try String(contentsOf: directory.appendingPathComponent(name),
+                                  encoding: .utf8)
+            return (file: name, modules: modules(in: text))
+        }
+    }
+}
+
+/// The modules that would end the purity rule the moment one of them appeared.
+/// Named individually as well as excluded by the allowlist below, so a failure
+/// says *which* rule broke and not merely that something new arrived.
+private let forbiddenModules: Set<String> = [
+    "AppKit", "SwiftUI", "UIKit", "Cocoa", "Carbon",
+    "Network", "CoreWLAN", "SystemConfiguration",
+    "Dispatch", "Combine", "os", "OSLog",
+    "ServiceManagement", "CoreGraphics", "QuartzCore",
+    "Security", "CryptoKit", "Darwin", "Glibc",
+]
+
+/// The modules `TickerCore` is allowed to link. One entry, and that is the
+/// point: the rule is not "avoid a list of bad modules", it is "Foundation
+/// value types and Foundation file APIs, and nothing else". A new import is a
+/// decision about the architecture and should cost a deliberate edit to this
+/// line rather than passing unremarked.
+private let permittedModules: Set<String> = ["Foundation"]
+
+@Test func tickerCoreImportsNothingThatWouldMakeItImpure() throws {
+    let scanned = try TickerCoreSource.importsByFile()
+
+    // The scanner has to be shown to have looked before its silence means
+    // anything: a parse that matched nothing, or a `directory` that stopped
+    // resolving, would pass on an empty result and report the target as pure
+    // forever. Two guards, because the interesting failure is vacuity.
+    //
+    // The file count is bounded below so a moved path fails here. The module
+    // *set* is then pinned to exactly `["Foundation"]`, which is both the
+    // liveness proof — a scan that matched nothing gives an empty set and
+    // fails — and the rule itself, stated once over the whole target.
+    //
+    // Note what it is not: "every file imports Foundation". Most of this
+    // target imports nothing at all, which is the purity rule at its strongest
+    // rather than a gap in it — and since that is a statement about the code
+    // and not about the scan, it is taken below rather than described here.
+    #expect(scanned.count >= 20, "found only \(scanned.count) sources — did the path move?")
+    let found = Set(scanned.flatMap(\.modules))
+    #expect(found == permittedModules,
+            "TickerCore links \(found.sorted()); it may link only \(permittedModules.sorted())")
+
+    let importFree = scanned.filter { $0.modules.isEmpty }.count
+    #expect(importFree > scanned.count / 2,
+            "only \(importFree) of \(scanned.count) sources import nothing at all")
+
+    for (file, modules) in scanned {
+        for module in modules {
+            #expect(!forbiddenModules.contains(module),
+                    "TickerCore/\(file) imports \(module), which ends the purity rule")
+            #expect(permittedModules.contains(module),
+                    "TickerCore/\(file) imports \(module); TickerCore may link only Foundation")
+        }
+    }
+}
+
+/// The companion the test above needs to be worth anything: the scanner must
+/// actually see a forbidden import when there is one, in each of the forms an
+/// import can take. Run against a scratch directory rather than against
+/// `Sources/TickerCore`, because the alternative is writing `import Network`
+/// into the real target and trusting the cleanup.
+@Test func theImportScannerSeesEveryFormAnImportCanTake() throws {
+    let scratch = FileManager.default.temporaryDirectory
+        .appendingPathComponent("tickercore-purity-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: scratch) }
+
+    let sample = """
+        @preconcurrency import Network
+        import struct Foundation.Data
+          import AppKit
+        // import SwiftUI
+        let importantThing = 1
+        """
+    try sample.write(to: scratch.appendingPathComponent("Sample.swift"),
+                     atomically: true, encoding: .utf8)
+
+    let scanned = try TickerCoreSource.importsByFile(in: scratch)
+    let modules = try #require(scanned.first).modules
+    #expect(modules == ["Network", "Foundation", "AppKit"])
+
+    // Both halves of the production assertion fire on this input.
+    #expect(modules.contains(where: { forbiddenModules.contains($0) }))
+    #expect(modules.contains(where: { !permittedModules.contains($0) }))
+
+    // A commented-out import is not an import, and neither is an identifier
+    // that merely begins with the word — the two ways a line-oriented scan
+    // over-reports.
+    #expect(!modules.contains("SwiftUI"))
+    #expect(modules.count == 3)
+}
