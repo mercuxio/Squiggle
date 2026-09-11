@@ -30,6 +30,7 @@ let package = Package(
             dependencies: [
                 "squigglectl",
                 "TickerCore",
+                "YahooFeed",
                 .product(name: "Testing", package: "swift-testing"),
             ]
         ),

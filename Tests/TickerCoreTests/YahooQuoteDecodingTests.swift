@@ -204,3 +204,26 @@ enum Fixture {
         try YahooQuoteDecoding.quote(from: Data(), symbol: symbol)
     }
 }
+
+@Test func oneBodyYieldsBothTheQuoteAndTheCalendar() throws {
+    // Spec §3.2: asking a second endpoint for the calendar would double the
+    // app's share of the daily budget. R122 moved this decode into the core so
+    // the app gets it without depending on `YahooClient`.
+    let data = try Fixture.data("regular-session.json")
+    let symbol = try #require(Symbol("AAPL"))
+
+    let snapshot = try YahooQuoteDecoding.snapshot(from: data, symbol: symbol)
+    #expect(snapshot.quote.symbol == symbol)
+    #expect(snapshot.tradingPeriod != nil)
+}
+
+@Test func aBodyWithNoUsableCalendarStillYieldsItsQuote() throws {
+    // The calendar is a bonus fact the body happens to carry, not a promise.
+    // An instrument whose `tradingPeriods` Yahoo has not sent this session must
+    // not cost the user a perfectly good price.
+    let data = try Fixture.data("crypto.json")
+    let symbol = try #require(Symbol("BTC-USD"))
+
+    let snapshot = try YahooQuoteDecoding.snapshot(from: data, symbol: symbol)
+    #expect(snapshot.quote.price > 0)
+}

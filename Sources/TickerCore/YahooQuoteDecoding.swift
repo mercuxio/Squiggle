@@ -135,3 +135,34 @@ public enum YahooQuoteDecoding {
             .replacingOccurrences(of: ".[", with: "[")
     }
 }
+
+/// One instrument's price and its exchange's calendar, from one response body.
+///
+/// Lives here rather than in `YahooFeed` (ruling R122) because it holds two
+/// `TickerCore` values and no networking type at all. That is what lets a
+/// caller hold `any QuoteFetching` — bytes in, both facts out — instead of a
+/// concrete client, which is the difference between a testable polling loop
+/// and one that can only be run against the live endpoint.
+public struct Snapshot: Sendable {
+    public let quote: Quote
+    public let tradingPeriod: TradingPeriod?
+
+    public init(quote: Quote, tradingPeriod: TradingPeriod?) {
+        self.quote = quote
+        self.tradingPeriod = tradingPeriod
+    }
+}
+
+extension YahooQuoteDecoding {
+    /// One request, both facts (spec §3.2). Asking a second endpoint for the
+    /// calendar would double Squiggle's share of the daily budget.
+    public static func snapshot(from data: Data, symbol: Symbol) throws -> Snapshot {
+        Snapshot(
+            quote: try quote(from: data, symbol: symbol),
+            // A `try?`, deliberately: the calendar is a bonus fact this body
+            // happens to carry, not something this function promises. An older
+            // instrument, or a shape Yahoo has not sent this session, yields
+            // `nil` rather than failing a request that produced a good quote.
+            tradingPeriod: try? tradingPeriod(from: data))
+    }
+}

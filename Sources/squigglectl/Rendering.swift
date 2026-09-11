@@ -1,5 +1,6 @@
 import Foundation
 import TickerCore
+import YahooFeed
 
 /// Every string a human reads from this tool. `TickerCore` has none — its own
 /// doc comment on `TickerError` says wording lives in the caller, and this is
@@ -113,19 +114,10 @@ public enum Rendering {
         }
     }
 
-    /// The only place `squigglectl` turns a caught `Error` into a
-    /// `TransportFault`, and so the only place it decides what a transport
-    /// failure is allowed to say about itself.
-    ///
-    /// A `URLError` contributes its code and nothing else. Everything else
-    /// contributes nothing at all: an error this program does not recognise is
-    /// an error whose description it cannot vouch for, and `doctor`'s output
-    /// has to be safe to paste into a support email (R44). Kept next to
-    /// `describe(_ fault:)` below so the two halves of that vocabulary — what
-    /// may enter it, and what it may print — cannot drift apart.
+    /// Forwards to `YahooFeed.TransportFaults` (R125). Kept as an entry point
+    /// because `WatchLoop`, `ProbeRun` and `RenderingTests` all call it here.
     public static func transportFault(for error: any Error) -> TransportFault {
-        guard let urlError = error as? URLError else { return .unrecognized }
-        return .urlSession(code: urlError.code.rawValue)
+        TransportFaults.classify(error)
     }
 
     /// The user-facing half of `TransportFault`, and the whole of R44's
