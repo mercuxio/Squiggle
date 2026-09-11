@@ -79,3 +79,62 @@ private let barHeight = 22.0
 @Test func resumingNeverGoesNegative() {
     #expect(StripRenderer.resumedBeginTime(nowInLayerTime: 10, pausedOffset: 40) == 0)
 }
+
+// A row that fits its window is never animated (see `narrowContentFits`
+// above), so it has nothing to tile into: one copy of its segments, and a
+// container exactly as wide as the row's own content.
+//
+// `container.bounds.width` is `CGFloat`; wrapped in `Double(...)` before the
+// `#expect` because the standalone swift-testing macro's expansion of a bare
+// `CGFloat == Double` comparison reports a spurious failure on values that
+// are bit-for-bit equal — converting to a matching type on both sides of the
+// `==` avoids the mis-resolution rather than working around it after the fact.
+@Test func oneCopyDrawsEachSegmentOnce() {
+    let metrics = StripRenderer.metrics(rows: 1, barHeight: barHeight)
+    let row = StripLayout.Row(
+        segments: [
+            StripLayout.Segment(text: "AAPL ", role: .label, x: 0, width: 40),
+            StripLayout.Segment(text: "▲1.23 (3.5%)", role: .direction(.up), x: 40, width: 90),
+        ],
+        contentWidth: 150)
+
+    let container = StripRenderer.rowLayer(row, metrics: metrics, scale: 2, copies: 1,
+                                           color: { _ in NSColor.labelColor.cgColor })
+
+    #expect(container.sublayers?.count == row.segments.count)
+    #expect(Double(container.bounds.width) == row.contentWidth)
+}
+
+// A row that overflows its window is animated, and the second copy is what
+// makes the wrap seamless — so it gets two of everything, and a container
+// twice as wide.
+@Test func twoCopiesDrawEachSegmentTwice() {
+    let metrics = StripRenderer.metrics(rows: 1, barHeight: barHeight)
+    let row = StripLayout.Row(
+        segments: [
+            StripLayout.Segment(text: "AAPL ", role: .label, x: 0, width: 40),
+            StripLayout.Segment(text: "▲1.23 (3.5%)", role: .direction(.up), x: 40, width: 90),
+        ],
+        contentWidth: 150)
+
+    let container = StripRenderer.rowLayer(row, metrics: metrics, scale: 2, copies: 2,
+                                           color: { _ in NSColor.labelColor.cgColor })
+
+    #expect(container.sublayers?.count == row.segments.count * 2)
+    #expect(Double(container.bounds.width) == row.contentWidth * 2)
+}
+
+// A caller asking for fewer than one copy still gets a row, not an empty
+// layer — the same floor `metrics(rows:)` applies to row count.
+@Test func copiesBelowOneAreClampedToOne() {
+    let metrics = StripRenderer.metrics(rows: 1, barHeight: barHeight)
+    let row = StripLayout.Row(
+        segments: [StripLayout.Segment(text: "AAPL ", role: .label, x: 0, width: 40)],
+        contentWidth: 40)
+
+    let container = StripRenderer.rowLayer(row, metrics: metrics, scale: 2, copies: 0,
+                                           color: { _ in NSColor.labelColor.cgColor })
+
+    #expect(container.sublayers?.count == row.segments.count)
+    #expect(Double(container.bounds.width) == row.contentWidth)
+}

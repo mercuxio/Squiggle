@@ -94,7 +94,7 @@ private final class FakeClock: MonotonicClock, @unchecked Sendable {
 
     _ = await runner.step(nowEpoch: 1_000, visibility: .visible, lowPowerMode: false)
 
-    #expect(runner.marketStateForTesting(atEpoch: 1_000) != nil)
+    #expect(runner.marketState(atEpoch: 1_000) != nil)
 }
 
 @MainActor

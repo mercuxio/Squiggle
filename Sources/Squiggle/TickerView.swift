@@ -49,28 +49,37 @@ final class TickerView: NSView {
         isPaused = false
 
         for (index, row) in layout.rows.enumerated() {
-            let rowLayer = StripRenderer.rowLayer(row, metrics: metrics,
-                                                  scale: scale, color: color)
+            // Spec §5.2's first stopping condition, decided once here and
+            // threaded to both the layer builder and the animation: content
+            // that already fits gets one copy and no animation, rather than
+            // two tiled copies with the animation that would have made the
+            // tiling invisible simply not there.
+            let animated = StripRenderer.fits(contentWidth: row.contentWidth,
+                                              visibleWidth: visibleWidth) == false
+            let rowLayer = StripRenderer.rowLayer(row, metrics: metrics, scale: scale,
+                                                  copies: animated ? 2 : 1, color: color)
             rowLayer.position = CGPoint(x: 0, y: Double(index) * metrics.rowHeight)
             host.addSublayer(rowLayer)
             rowLayers.append(rowLayer)
 
-            animate(rowLayer, row: row, visibleWidth: visibleWidth,
+            animate(rowLayer, row: row, animated: animated, visibleWidth: visibleWidth,
                     mode: mode, pointsPerSecond: pointsPerSecond)
         }
     }
 
-    /// Spec §5.2's first stopping condition is checked here and in one place
-    /// only, because it is the same rule in both modes: content that already
-    /// fits gets no animation at all — removed, not paused, not slowed.
+    /// Spec §5.2's first stopping condition is decided once, in `apply`, and
+    /// passed in as `animated` — content that already fits gets no animation
+    /// at all, removed rather than paused or slowed. It is not re-checked
+    /// here: `apply` already used it to decide how many copies `rowLayer`
+    /// drew, and a second `fits` call here could only ever agree or disagree
+    /// with that, never usefully override it.
     private func animate(_ rowLayer: CALayer,
                          row: StripLayout.Row,
+                         animated: Bool,
                          visibleWidth: Double,
                          mode: MotionMode,
                          pointsPerSecond: Double) {
-        guard StripRenderer.fits(contentWidth: row.contentWidth,
-                                 visibleWidth: visibleWidth) == false
-        else { return }
+        guard animated else { return }
 
         switch mode {
         case .scroll:

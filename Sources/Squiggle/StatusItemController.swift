@@ -19,6 +19,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     private var reduceMotionObserver: NSObjectProtocol?
     private var pauseMonitor: PauseMonitor?
     private var pauseConditions = PauseConditions()
+    private var appearanceObservation: NSKeyValueObservation?
 
     private let store: any WatchlistStore
     // `WatchlistStore` is a protocol and has no URL, and a save that fails for
@@ -87,6 +88,16 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         monitor.start(observing: button.window)
         pauseMonitor = monitor
 
+        // Spec §5.3: "re-renders on appearance change". KVO rather than a
+        // notification because `effectiveAppearance` is a property of this one
+        // button and the interesting change is the menu bar's, which is not
+        // what `NSApp.effectiveAppearance` reports. The observation is stored
+        // because KVO stops the moment it is released.
+        appearanceObservation = statusItem.button?.observe(\.effectiveAppearance) {
+            [weak self] _, _ in
+            MainActor.assumeIsolated { self?.render() }
+        }
+
         render()
         scheduleStep(after: 0)
     }
@@ -100,6 +111,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         reduceMotionObserver = nil
         pauseMonitor?.stop()
         pauseMonitor = nil
+        appearanceObservation = nil
     }
 
     /// Spec §5.2: pausing is `speed = 0` with the offset captured, never a
@@ -149,6 +161,65 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     /// snapshot taken here.
     private func visibility() -> Visibility { pauseConditions.visibility }
 
+    // MARK: - Colour
+
+    /// Spec §7's stale state. Asks `RefreshPolicy`; never computes an age.
+    ///
+    /// The spec is explicit about this and the reason is arithmetic: the
+    /// threshold is three *cycles*, and at twenty symbols the cycle floors at
+    /// 1,440s — so "stale" is 72 minutes there and 9 at the same user setting
+    /// with one symbol. Anything here that compared an age against the user's
+    /// interval would dim a perfectly healthy strip eight times out of nine.
+    private func isStale(atEpoch epoch: Double) -> Bool {
+        RefreshPolicy.isStale(
+            lastSuccessEpoch: runner.lastSuccessEpoch,
+            nowEpoch: epoch,
+            userIntervalSeconds: runner.userIntervalSeconds,
+            watchlistCount: runner.symbols.count,
+            // The same assumption `TickerRunner.step` makes before the first
+            // quote arrives, and deliberately the same one: a second opinion
+            // about market hours inside one app is a bug.
+            marketState: runner.marketState(atEpoch: epoch) ?? .regular,
+            lowPowerMode: ProcessInfo.processInfo.isLowPowerModeEnabled)
+    }
+
+    /// The closure `TickerView` paints with (R136).
+    ///
+    /// The scheme and the staleness are decided once, here, and captured — the
+    /// closure is called once per segment and neither answer can change
+    /// between segments of one strip. What it does per call is resolve an
+    /// `NSColor` into a `CGColor`, which is the part that genuinely depends on
+    /// the appearance.
+    private func colorResolver() -> (ColorRole) -> CGColor {
+        let scheme = ColorPolicy.effective(
+            requested: ColorScheme(setting: settings.colorScheme),
+            differentiateWithoutColor:
+                NSWorkspace.shared.accessibilityDisplayShouldDifferentiateWithoutColor)
+        let stale = isStale(atEpoch: Date().timeIntervalSince1970)
+
+        // Spec §5.3: the *button's* effective appearance, not the app's. The
+        // menu bar can be dark while the app is light — that is the ordinary
+        // state of a Mac with a dark wallpaper and a light system appearance —
+        // and `NSColor.cgColor` resolves against whatever appearance happens
+        // to be current, which during a timer callback is the app's. Measured:
+        // `labelColor` is white at alpha 0.847 under `.darkAqua` and black at
+        // the same alpha under `.aqua`. Getting this wrong paints black text
+        // on a black menu bar.
+        let appearance = statusItem.button?.effectiveAppearance
+            ?? NSApp.effectiveAppearance
+
+        return { role in
+            let color = ColorPolicy.color(for: role, scheme: scheme, isStale: stale)
+            // Seeded with the unresolved answer and overwritten inside the
+            // block. `performAsCurrentDrawingAppearance` runs synchronously, so
+            // the seed never survives — it is here because `CGColor` has no
+            // sensible empty value and a force-unwrap would be worse.
+            var resolved = color.cgColor
+            appearance.performAsCurrentDrawingAppearance { resolved = color.cgColor }
+            return resolved
+        }
+    }
+
     private func render() {
         let metrics = StripRenderer.metrics(rows: settings.rows,
                                             barHeight: Double(NSStatusBar.system.thickness))
@@ -168,9 +239,6 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         // thing while a title was what it drew; a marquee needs a window that
         // does not resize itself to the content it is meant to clip.
         statusItem.length = settings.maxVisibleWidth
-        // R136: Monochrome is the default scheme, so this is the app's real
-        // default appearance rather than a placeholder. Task 12 replaces the
-        // closure, not the call.
         let requested = MotionMode(setting: settings.motionMode)
         let mode = MotionPolicy.effective(
             requested: requested,
@@ -180,7 +248,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
                          visibleWidth: settings.maxVisibleWidth,
                          mode: mode,
                          pointsPerSecond: settings.scrollPointsPerSecond,
-                         color: { _ in NSColor.labelColor.cgColor })
+                         color: colorResolver())
     }
 
     // MARK: - The dropdown

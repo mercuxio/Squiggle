@@ -64,21 +64,34 @@ enum StripRenderer {
         max(0, nowInLayerTime - pausedOffset)
     }
 
-    /// One row's text, laid out twice end to end. The second copy is what
-    /// makes the wrap seamless: by the time the first copy has scrolled fully
-    /// out to the left, the second is exactly where the first began, so the
-    /// animation can snap back to zero with nothing visibly changing.
+    /// One row's text, laid out once if the row fits its window and twice if
+    /// it doesn't. The second copy is what makes the wrap seamless: by the
+    /// time the first copy has scrolled fully out to the left, the second is
+    /// exactly where the first began, so the animation can snap back to zero
+    /// with nothing visibly changing. A row that already fits is never
+    /// animated, so a second copy there would just be duplicate text sitting
+    /// in the strip with nothing to wrap into.
+    ///
+    /// `copies` is decided once, by `TickerView.apply`, from the same `fits`
+    /// check `TickerView.animate` uses — so the tiling here and the decision
+    /// to animate can never disagree about whether this row moves.
     ///
     /// `Row.contentWidth` already includes the trailing gap (Task 5), which
     /// is what keeps the join from butting the last symbol against the first.
     static func rowLayer(_ row: StripLayout.Row,
                          metrics: Metrics,
                          scale: Double,
+                         copies: Int,
                          color: (ColorRole) -> CGColor) -> CALayer {
+        // A caller asking for fewer than one copy is asking for an empty row,
+        // which is never the intent — one copy, undrawn tiling, is the
+        // cheapest safe answer.
+        let copyCount = max(1, copies)
+
         let container = CALayer()
         container.contentsScale = scale
         container.bounds = CGRect(x: 0, y: 0,
-                                  width: row.contentWidth * 2,
+                                  width: row.contentWidth * Double(copyCount),
                                   height: metrics.rowHeight)
         container.anchorPoint = CGPoint(x: 0, y: 0)
 
@@ -88,7 +101,7 @@ enum StripRenderer {
         let textHeight = Double(metrics.font.ascender - metrics.font.descender)
         let y = (metrics.rowHeight - textHeight) / 2
 
-        for copy in 0..<2 {
+        for copy in 0..<copyCount {
             let shift = Double(copy) * row.contentWidth
             for segment in row.segments {
                 let text = CATextLayer()

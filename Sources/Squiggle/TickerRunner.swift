@@ -97,11 +97,17 @@ final class TickerRunner {
 
     func requestImmediateCycle() { engine.requestImmediateCycle() }
 
-    /// Exists for `theCalendarOutOfTheBodyIsWhatDrivesTheNextContext`. The
-    /// aggregate is otherwise private because nothing outside `step` needs it,
-    /// and a calendar read from elsewhere would be a second opinion about
-    /// market hours.
-    func marketStateForTesting(atEpoch epoch: Double) -> MarketState? {
+    /// The aggregate trading state across the live watchlist, as of `epoch`.
+    ///
+    /// Read by `step` to build its `EngineContext`, and by
+    /// `StatusItemController` for the staleness check spec §7 dims the strip
+    /// on — `RefreshPolicy.isStale` needs it, because a closed market is never
+    /// stale however old the last price is.
+    ///
+    /// `nil` before any quote has arrived. Both callers then assume `.regular`,
+    /// and they must keep assuming the same thing: two different guesses about
+    /// market hours in one app is the bug `TradingCalendars` exists to prevent.
+    func marketState(atEpoch epoch: Double) -> MarketState? {
         calendars.aggregateState(atEpoch: epoch)
     }
 }
