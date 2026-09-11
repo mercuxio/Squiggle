@@ -31,7 +31,9 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     private var storeFault: TickerError?
     private var nextStepEpoch: Double?
     private var settingsWindow: SettingsWindowController?
+    private var pickerWindow: SymbolPickerWindowController?
     private var persistTimer: Timer?
+    private let search: SymbolSearch
 
     // R139: one document, one saver. `settings` is a view onto it rather than
     // a second copy, so Task 13 changing a setting and Task 15 adding a symbol
@@ -39,12 +41,13 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     private var settings: Settings { document.settings }
 
     init(runner: TickerRunner, store: any WatchlistStore, storeURL: URL,
-         document: Store, storeFault: TickerError?) {
+         document: Store, storeFault: TickerError?, search: @escaping SymbolSearch) {
         self.runner = runner
         self.store = store
         self.storeURL = storeURL
         self.document = document
         self.storeFault = storeFault
+        self.search = search
         self.statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         super.init()
         statusItem.button?.title = ""
@@ -319,6 +322,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
 
     private func selector(for command: MenuCommand) -> Selector {
         switch command {
+        case .addSymbol: return #selector(openSymbolPicker)
         case .refreshNow: return #selector(refreshNow)
         case .settings: return #selector(openSettings)
         case .quit: return #selector(quit)
@@ -350,6 +354,37 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         controller.showWindow(nil)
     }
 
+    @objc private func openSymbolPicker() {
+        let controller = pickerWindow ?? SymbolPickerWindowController(
+            search: search,
+            watchlist: document.symbols,
+            onAdd: { [weak self] symbol in self?.add(symbol) })
+        pickerWindow = controller
+        controller.setWatchlist(document.symbols)
+        NSApp.activate(ignoringOtherApps: true)
+        controller.showWindow(nil)
+    }
+
+    private func add(_ symbol: Symbol) {
+        // The cap is enforced in the picker (R150), and again here, because
+        // this is the method that writes the file and the store would
+        // otherwise truncate at the next launch and pick the survivors itself.
+        guard document.symbols.count < RateConstants.maxWatchlistCount,
+              !document.symbols.contains(symbol) else { return }
+        document.symbols.append(symbol)
+        runner.replaceWatchlist(document.symbols)
+        persist()
+        pickerWindow?.setWatchlist(document.symbols)
+        // A new symbol has no quote yet, so this repaints the strip with its
+        // dead-symbol placeholder immediately rather than leaving a gap until
+        // the next cycle.
+        render()
+        // R140's path: ask for a cycle now so the price arrives in seconds
+        // rather than at the next deadline, which at 20 symbols is 24 minutes.
+        runner.requestImmediateCycle()
+        scheduleStep(after: 0)
+    }
+
     private func settingsChanged(_ edited: Settings) {
         document.settings = edited
         // The interval is the one setting the engine holds a copy of.
@@ -378,6 +413,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         document.symbols.removeAll { $0 == symbol }
         runner.replaceWatchlist(document.symbols)
         persist()
+        pickerWindow?.setWatchlist(document.symbols)
         render()
     }
 

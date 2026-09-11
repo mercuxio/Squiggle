@@ -49,7 +49,7 @@ enum ErrorText {
 
     /// Exhaustive over `TickerError`, with no `default:`: a nineteenth case
     /// must fail the build here rather than reach a user as an empty line.
-    private static func message(for error: TickerError) -> String {
+    static func message(for error: TickerError) -> String {
         switch error {
         case .offline:
             return "No network connection."
@@ -115,6 +115,32 @@ enum ErrorText {
 
     private static func minutes(_ seconds: Double) -> Int {
         max(1, Int((seconds / 60).rounded()))
+    }
+
+    // MARK: - Symbol picker
+
+    static let searchPlaceholder = "Company or symbol"
+    static let alreadyWatching = "Already watching"
+    static let noMatches = "No matches. You can still try it as a symbol."
+    /// The sibling of `noMatches` for text `Symbol.init?` refuses outright.
+    /// Offering "try it as a symbol" here would be an instruction the Add
+    /// button then declines to carry out.
+    static let notASymbol = "No matches, and that isn't a symbol Yahoo would accept."
+    static let watchlistFull =
+        "Watching \(RateConstants.maxWatchlistCount) symbols — remove one to add another."
+
+    /// `AAPL — Apple Inc. (NASDAQ)`. The exchange is dropped rather than shown
+    /// empty: Yahoo returns a blank one for some instruments and " ()" reads
+    /// as a rendering fault.
+    static func searchRow(_ result: SearchResult) -> String {
+        let head = "\(result.symbol.raw) — \(result.name)"
+        return result.exchange.isEmpty ? head : "\(head) (\(result.exchange))"
+    }
+
+    /// The typed text, quoted so its spacing and punctuation are visible —
+    /// which is the point, since it is about to be used exactly as written.
+    static func literalRow(_ symbol: Symbol) -> String {
+        "Try “\(symbol.raw)” as a symbol"
     }
 
     // MARK: - Settings

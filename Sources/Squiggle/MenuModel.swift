@@ -8,6 +8,7 @@ import TickerCore
 /// lets `StatusItemController` map it to a selector with a `switch` and no
 /// `default:`.
 enum MenuCommand: Equatable, Sendable {
+    case addSymbol
     case refreshNow
     case settings
     case quit
@@ -16,6 +17,7 @@ enum MenuCommand: Equatable, Sendable {
     /// menu never spells a title itself and a test can say so.
     var title: String {
         switch self {
+        case .addSymbol: return ErrorText.addSymbol
         case .refreshNow: return ErrorText.refreshNow
         case .settings: return ErrorText.settings
         case .quit: return ErrorText.quit
@@ -66,6 +68,7 @@ struct MenuModel: Equatable {
         items.append(.footer(footer))
 
         items.append(.separator)
+        items.append(.command(.addSymbol))
         items.append(.command(.refreshNow))
         items.append(.command(.settings))
         items.append(.separator)

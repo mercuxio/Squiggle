@@ -27,11 +27,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             storeFault = .storeQuarantineFailed(at: url)
         }
 
+        let client = YahooClient()
         let runner = TickerRunner(symbols: document.symbols,
                                   userIntervalSeconds: document.settings.refreshIntervalSeconds,
-                                  fetcher: YahooClient())
-        let controller = StatusItemController(runner: runner, store: store, storeURL: url,
-                                              document: document, storeFault: storeFault)
+                                  fetcher: client)
+        let controller = StatusItemController(
+            runner: runner, store: store, storeURL: url,
+            document: document, storeFault: storeFault,
+            search: { try await client.searchResults(query: $0,
+                                                     limit: RateConstants.maxSearchResultCount) })
         self.controller = controller
         controller.start()
     }
