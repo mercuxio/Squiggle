@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleName</key>
+	<string>Squiggle</string>
+	<key>CFBundleDisplayName</key>
+	<string>Squiggle</string>
+	<key>CFBundleExecutable</key>
+	<string>Squiggle</string>
+	<!-- An LSUIElement app has no dock tile, but Finder, System Settings >
+	     Login Items, and any installer still ask for the icon, so it is not
+	     optional just because the app is an agent. -->
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.houlanyit.Squiggle</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.0.0</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>14.0</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<!-- Squiggle's entire UI is one status item. No dock tile, no app
+	     switcher entry, no menu bar menu of its own. `main.swift` sets the
+	     matching activation policy for the case where the binary is run
+	     without a bundle at all. -->
+	<key>LSUIElement</key>
+	<true/>
+</dict>
+</plist>
