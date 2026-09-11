@@ -112,6 +112,35 @@ public struct FileWatchlistStore: WatchlistStore {
     /// decision for a caller who knows the contents are unusable, not for one
     /// that could not get the contents at all.
     private func readIfPresent() throws -> Data? {
+        // Bounded before the read, because `Data(contentsOf:)` has no bound of
+        // its own and neither does the decoder behind it. The store lives at a
+        // path anything on the machine may write to, and the app reads it at
+        // launch and after every settings change.
+        //
+        // The bound is derived from the largest document this program can
+        // legitimately produce, not guessed. `RateConstants.maxWatchlistCount`
+        // symbols of at most `Symbol`'s 32 characters, plus `Settings`' fields,
+        // plus a version and a cooldown, pretty-printed and sorted, comes to
+        // well under two kilobytes — `theWorstLegitimateStoreIsFarInsideTheSizeBound`
+        // measures that rather than asserting it from memory. A mebibyte leaves
+        // that worst case three orders of magnitude of room for hand-editing
+        // (the file is user-editable by design, spec §6) while still refusing
+        // the case that motivated this: a multi-hundred-megabyte file, which
+        // one measurement on 2026-09-08 took 97.9 seconds and 2.6 GB of peak
+        // footprint to load before answering with the same 20 symbols the cap
+        // allows. Removing the version probe's separate parse would not have
+        // helped — it was 3% of that time.
+        //
+        // Over the bound is a refusal, not a truncation and not a quarantine:
+        // a prefix of a JSON document is not a smaller JSON document, and a
+        // file this program will not read is not a file it knows enough about
+        // to move.
+        let attributes = try? FileManager.default.attributesOfItem(atPath: url.path)
+        if let size = (attributes?[.size] as? NSNumber)?.int64Value,
+           size > Self.maximumStoreBytes {
+            throw TickerError.storeQuarantineFailed(at: url)
+        }
+
         do {
             return try Data(contentsOf: url)
         } catch let error as CocoaError
@@ -124,6 +153,9 @@ public struct FileWatchlistStore: WatchlistStore {
             throw TickerError.storeQuarantineFailed(at: url)
         }
     }
+
+    /// The largest store file this program will read. See `readIfPresent`.
+    static let maximumStoreBytes: Int64 = 1 << 20
 
     /// Throws unless the document's `schemaVersion` is one this build can read.
     /// Never touches the file: refusing is the whole point.
@@ -144,6 +176,20 @@ public struct FileWatchlistStore: WatchlistStore {
             return          // absent, or not a JSON object at all
         }
         guard let version = raw as? Int else {
+            throw TickerError.storeVersionUnreadable
+        }
+        // Bounded below as well as above. `version <= currentSchemaVersion`
+        // alone waves through `0` and `-5`: no Squiggle ever wrote those, so
+        // the file was written by something else or damaged, and treating it as
+        // "old enough to be safe" is exactly backwards — it would load under v1
+        // rules and the next `save()` would rewrite it in v1's understanding.
+        // Reported as `storeVersionUnreadable` rather than
+        // `storeSchemaUnsupported(version:)` because there is nothing to
+        // report: `doctor` would print "store schema -5 is not supported",
+        // naming a version that never existed as though it were a newer
+        // Squiggle's. Like every other arm of this gate, refusing leaves the
+        // file exactly where it is — never quarantined.
+        guard version >= 1 else {
             throw TickerError.storeVersionUnreadable
         }
         guard version <= Store.currentSchemaVersion else {

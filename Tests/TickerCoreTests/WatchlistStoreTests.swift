@@ -124,6 +124,108 @@ private func write(_ json: String, to url: URL) throws {
     #expect(try String(contentsOf: url, encoding: .utf8) == json)
 }
 
+@Test func aStoreFileOverTheSizeBoundIsRefusedRatherThanRead() throws {
+    // `Data(contentsOf:)` has no bound of its own, and neither does the
+    // decoder behind it, so the size of the store was whatever the filesystem
+    // was willing to hold. One measurement of the pathological case took 97.9
+    // seconds and 2.6 GB of peak footprint to answer with the twenty symbols
+    // the cap allows anyway.
+    //
+    // Padded with whitespace rather than with symbols: this is a test about
+    // size, and a document that is valid JSON all the way through proves the
+    // refusal happened before the read rather than as a decode failure that
+    // would have quarantined it.
+    let url = tempURL()
+    let padding = String(repeating: " ", count: Int(FileWatchlistStore.maximumStoreBytes))
+    let json = #"{"schemaVersion":1,"symbols":["AAPL"]}"# + padding
+    try write(json, to: url)
+
+    var caught: TickerError?
+    do {
+        let loaded = try FileWatchlistStore(url: url).load()
+        Issue.record("an oversized store loaded as \(loaded.symbols.count) symbols")
+    } catch let error as TickerError {
+        caught = error
+    } catch {
+        Issue.record("load() threw a non-TickerError: \(error)")
+    }
+    #expect(try #require(caught) == .storeQuarantineFailed(at: url))
+
+    // Not truncated and not quarantined: the file is exactly as long as it
+    // was, and it is the only thing in its directory.
+    #expect(try Data(contentsOf: url).count == json.utf8.count)
+    let siblings = try FileManager.default.contentsOfDirectory(
+        atPath: url.deletingLastPathComponent().path)
+    #expect(siblings == ["squiggle.json"], "the refusal moved something: \(siblings)")
+}
+
+@Test func theWorstLegitimateStoreIsFarInsideTheSizeBound() throws {
+    // The other side of the bound, and the thing that keeps the derivation in
+    // `readIfPresent`'s comment honest: the largest document this program can
+    // itself write — a full watchlist of maximum-length symbols, every setting
+    // populated, a cooldown, pretty-printed and sorted — must load, and must
+    // sit orders of magnitude below the bound rather than just under it. If
+    // `maxWatchlistCount`, `Symbol`'s length cap or `Settings` ever grow enough
+    // to threaten that, this fails while there is still room to think.
+    let longest = String(repeating: "A", count: 32)
+    let symbols = try (0..<RateConstants.maxWatchlistCount).map { index in
+        try #require(Symbol(String(longest.dropLast(2)) + String(format: "%02d", index)))
+    }
+    let fat = Store(schemaVersion: Store.currentSchemaVersion,
+                    symbols: symbols,
+                    settings: Settings(refreshIntervalSeconds: 900, rows: 2,
+                                       scrollPointsPerSecond: 24,
+                                       colorScheme: "monochrome", maxVisibleWidth: 320,
+                                       launchAtLogin: true),
+                    cooldownUntilEpoch: 1_757_000_000)
+
+    let url = tempURL()
+    let store = FileWatchlistStore(url: url)
+    try store.save(fat)
+    let written = try Data(contentsOf: url).count
+    #expect(written * 100 < Int(FileWatchlistStore.maximumStoreBytes),
+            "the worst legitimate store is \(written) bytes, within 100x of the bound")
+    #expect(try store.load() == fat)
+}
+
+@Test func aSchemaVersionBelowOneIsRefusedAndLeftWhereItIs() throws {
+    // The gate was bounded on one side only — `version <= 1` — so `0` and
+    // `-5` were "old enough to be safe" and loaded under v1 rules, after
+    // which `save()` would rewrite the file in v1's understanding. No
+    // Squiggle ever wrote a version below 1, so such a file was written by
+    // something else or damaged, which is the same reason the *upper* bound
+    // exists, mirrored.
+    //
+    // `storeVersionUnreadable`, not `storeSchemaUnsupported(version:)`:
+    // `doctor` renders the latter as "store schema -5 is not supported by this
+    // version", which reads as a report about a newer Squiggle and names a
+    // version that never existed.
+    for version in [0, -5] {
+        let url = tempURL()
+        let json = "{\"schemaVersion\":\(version),\"symbols\":[\"AAPL\"]}"
+        try write(json, to: url)
+
+        var caught: TickerError?
+        do {
+            let loaded = try FileWatchlistStore(url: url).load()
+            Issue.record("schemaVersion \(version) loaded as \(loaded.symbols.count) symbols")
+        } catch let error as TickerError {
+            caught = error
+        } catch {
+            Issue.record("load() threw a non-TickerError: \(error)")
+        }
+        #expect(try #require(caught) == .storeVersionUnreadable)
+
+        // Refusing must never be destructive, and specifically must not
+        // quarantine: the file is still there, byte for byte, and nothing has
+        // been set aside next to it.
+        #expect(try String(contentsOf: url, encoding: .utf8) == json)
+        let siblings = try FileManager.default.contentsOfDirectory(
+            atPath: url.deletingLastPathComponent().path)
+        #expect(siblings == ["squiggle.json"], "the refusal moved something: \(siblings)")
+    }
+}
+
 @Test func aStoreFileThatCannotBeReadIsAFaultRatherThanAFirstLaunch() throws {
     // `load()` and `save()` both read the file through `try? Data(contentsOf:)`,
     // which answers `nil` to two different questions: "there is no file" and
@@ -207,13 +309,22 @@ private func write(_ json: String, to url: URL) throws {
     #expect(FileManager.default.fileExists(atPath: url.path))
 }
 
-@Test func anOlderSchemaLoadsRatherThanBeingRefused() throws {
-    // The gate is one-directional. A file this version can already understand
-    // is read normally; only a version it cannot honour is refused.
-    let url = tempURL()
-    try write(#"{"schemaVersion":0,"symbols":["AAPL","MSFT"]}"#, to: url)
-    let store = try FileWatchlistStore(url: url).load()
-    #expect(store.symbols.map(\.raw) == ["AAPL", "MSFT"])
+@Test func everySchemaVersionThisBuildCanHonourLoads() throws {
+    // The gate refuses in both directions but only outside its range: a file
+    // this version can understand is read normally.
+    //
+    // This used to stand on `{"schemaVersion":0}`, on the reading that 0 is
+    // simply an older version. It is not: `Store.currentSchemaVersion` has
+    // been 1 since the first release, so no Squiggle ever wrote a 0, and a
+    // file claiming one was written by something else or damaged — which is
+    // why the gate now has a lower bound too. Swept over the honourable range
+    // instead, so it keeps meaning what it says when that range grows.
+    for version in 1...Store.currentSchemaVersion {
+        let url = tempURL()
+        try write("{\"schemaVersion\":\(version),\"symbols\":[\"AAPL\",\"MSFT\"]}", to: url)
+        let store = try FileWatchlistStore(url: url).load()
+        #expect(store.symbols.map(\.raw) == ["AAPL", "MSFT"])
+    }
 }
 
 @Test func savingOverANewerFileIsRefusedTooNotJustReadingIt() throws {
