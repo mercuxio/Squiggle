@@ -893,6 +893,111 @@ struct FeedEngineTests {
         #expect(e.next(openMarket()) == .fetch(one))
     }
 
+    /// The user's report: "the refresh also doesn't seem to work. the refresh
+    /// should force the refresh to immediate regardless of the refresh
+    /// settings." Reported on a Saturday, which is the whole story: with the
+    /// market closed, `RefreshPolicy.decide` returns `.wait` *before* `next()`
+    /// ever reaches the cycle deadline that `requestImmediateCycle` clears, so
+    /// the click cleared a variable nothing on that path reads and the app
+    /// slept until Monday's open.
+    @Test func refreshNowFetchesEvenWithTheMarketClosed() throws {
+        let clock = FakeClock()
+        let one = try sym("AAPL")
+        var e = engine(clock, [one])
+        let closed = EngineContext(nowEpoch: 1_757_000_000, marketState: .closed,
+                                   visibility: .visible, lowPowerMode: false,
+                                   nextSessionOpenEpoch: 1_757_000_000 + 172_800)
+
+        let asleep = e.next(closed)
+        let isWaiting: Bool
+        if case .sleep = asleep { isWaiting = true } else { isWaiting = false }
+        #expect(isWaiting, "a closed market should rest, got \(asleep)")
+
+        e.requestImmediateCycle()
+        #expect(e.next(closed) == .fetch(one))
+    }
+
+    /// The same rule for the other schedule gate. An occluded strip is a
+    /// reason not to spend a request on its own, and not a reason to ignore a
+    /// button the user just pressed — the dropdown they pressed it in is
+    /// exactly what covers the strip.
+    @Test func refreshNowFetchesEvenWhileOccluded() throws {
+        let clock = FakeClock()
+        let one = try sym("AAPL")
+        var e = engine(clock, [one])
+        let hidden = EngineContext(nowEpoch: 1_757_000_000, marketState: .regular,
+                                   visibility: .occluded, lowPowerMode: false,
+                                   nextSessionOpenEpoch: nil)
+
+        let asleep = e.next(hidden)
+        let isWaiting: Bool
+        if case .sleep = asleep { isWaiting = true } else { isWaiting = false }
+        #expect(isWaiting, "an occluded strip should rest, got \(asleep)")
+
+        e.requestImmediateCycle()
+        #expect(e.next(hidden) == .fetch(one))
+    }
+
+    /// One click, one pass over the whole watchlist — and then the ordinary
+    /// schedule again. The request has to outlive the first symbol or a
+    /// three-symbol watchlist would refresh only its first row; it has to die
+    /// at the end of the pass or a single click would keep a closed market
+    /// fetching forever.
+    @Test func refreshNowCoversEverySymbolAndThenStops() throws {
+        let clock = FakeClock()
+        let watched = [try sym("AAPL"), try sym("MSFT"), try sym("^GSPC")]
+        var e = engine(clock, watched)
+        let closed = EngineContext(nowEpoch: 1_757_000_000, marketState: .closed,
+                                   visibility: .visible, lowPowerMode: false,
+                                   nextSessionOpenEpoch: 1_757_000_000 + 172_800)
+
+        e.requestImmediateCycle()
+        var fetched: [Symbol] = []
+        for _ in watched {
+            let action = e.next(closed)
+            guard case .fetch(let symbol) = action else {
+                Issue.record("the requested pass stopped early at \(action)")
+                break
+            }
+            fetched.append(symbol)
+            // The bucket refills a token every 30 seconds and is the last word
+            // on *when*; this test is about the gates above it.
+            clock.advance(RateConstants.spacingSeconds)
+        }
+        // As a set: the pass starts wherever the cursor is and wraps, so the
+        // claim is that it covers every symbol, not that it begins at the top.
+        #expect(Set(fetched) == Set(watched))
+        #expect(fetched.count == watched.count)
+
+        let after = e.next(closed)
+        let isWaiting: Bool
+        if case .sleep = after { isWaiting = true } else { isWaiting = false }
+        #expect(isWaiting, "the closed market went back to sleep? got \(after)")
+    }
+
+    /// The user's second report, one message after the first: "also adding a
+    /// symbol should retrieve its value immediately." The controller already
+    /// asks for a cycle the moment the watchlist changes, so what was missing
+    /// is *where* that cycle starts — appended last, a new symbol was fetched
+    /// last, one 30-second token behind every symbol that already had a price.
+    @Test func aNewlyAddedSymbolIsTheNextThingFetched() throws {
+        let clock = FakeClock()
+        let old = [try sym("AAPL"), try sym("MSFT")]
+        var e = engine(clock, old)
+        for symbol in old {
+            _ = e.next(openMarket())
+            e.recordSuccess(Quote(symbol: symbol, shortName: nil, price: 1,
+                                  previousClose: nil, currency: "USD", asOfEpoch: nil),
+                            for: symbol)
+            clock.advance(RateConstants.spacingSeconds)
+        }
+
+        let added = try sym("^GSPC")
+        e.replaceWatchlist(old + [added])
+        e.requestImmediateCycle()
+        #expect(e.next(openMarket()) == .fetch(added))
+    }
+
     @Test func refreshNowCannotWalkPastACooldown() throws {
         // Spec §4.3 and §7 together: the item still takes a token, so it must
         // not become a way around a 429 by clicking it enough times.

@@ -63,6 +63,18 @@ public struct FeedEngine {
     /// very first pass and a pass right after `replaceWatchlist` must not
     /// wait for a deadline that was never set for them.
     private var cycleDeadline: Double = 0
+    /// How many fetches the user's own request still has owing: set to the
+    /// watchlist's size by `requestImmediateCycle()` and counted down one per
+    /// `.fetch`. A count rather than a flag because the pass has to survive
+    /// the first symbol — one click refreshes the whole watchlist — and has to
+    /// end at the last one, or a single click on a closed market would leave
+    /// the engine fetching until the market opened.
+    ///
+    /// Counting fetches rather than watching the cursor is what lets the pass
+    /// begin anywhere: `replaceWatchlist` parks the cursor on the symbol with
+    /// no price yet, and a pass of `count` fetches from there still covers
+    /// every symbol by wrapping.
+    private var refreshRemaining = 0
 
     private var userIntervalSeconds: Double
 
@@ -120,7 +132,8 @@ public struct FeedEngine {
             cooldownRemaining: ladder.secondsRemaining(),
             circuitAllows: networkCircuit.wouldAllowRequest() && contractCircuit.wouldAllowRequest(),
             circuitOpenRemaining: max(networkCircuit.secondsRemaining(),
-                                      contractCircuit.secondsRemaining())))
+                                      contractCircuit.secondsRemaining()),
+            userRequested: refreshRemaining > 0))
 
         if case .wait(let seconds) = decision {
             return .sleep(seconds: max(RateConstants.minimumWaitSeconds, seconds))
@@ -147,7 +160,13 @@ public struct FeedEngine {
         // `RefreshPolicy.cycleInterval` at all, and the token bucket becomes
         // the only throttle.
         if cursor >= live.count {
-            guard now >= cycleDeadline else {
+            // A requested pass wraps through here rather than stopping at it.
+            // It started wherever the cursor happened to be — on the newly
+            // added symbol, after `replaceWatchlist` — so the symbols above
+            // that point are reached by coming round, and the deadline that
+            // would ordinarily gate a new pass has already been overruled by
+            // the request itself.
+            guard refreshRemaining > 0 || now >= cycleDeadline else {
                 return .sleep(seconds: max(RateConstants.minimumWaitSeconds, cycleDeadline - now))
             }
             cursor = 0
@@ -202,6 +221,10 @@ public struct FeedEngine {
 
         let symbol = live[cursor]
         cursor += 1
+        // One off the user's request, on the one path that actually fetches.
+        // Not above the bucket or the circuits: a pass refused there has not
+        // happened, and the request must still be owing when they relent.
+        if refreshRemaining > 0 { refreshRemaining -= 1 }
         return .fetch(symbol)
     }
 
@@ -263,7 +286,13 @@ public struct FeedEngine {
         // "try again" gesture; a symbol earlier marked dead is not
         // resurrected by anything else, so this is its only way back.
         dead = []
-        cursor = 0
+        // Not `0`. The user's report: "adding a symbol should retrieve its
+        // value immediately" — and a new symbol is appended last, so starting
+        // the next pass at the top would fetch it last, one token every 30
+        // seconds behind every symbol that already has a price. Parking the
+        // cursor on the first symbol with nothing to show means the pass the
+        // controller asks for straight after this fetches the new one first.
+        cursor = newSymbols.firstIndex { latestQuotes[$0] == nil } ?? 0
         // A watchlist edit invalidates whatever cycle was in progress: the
         // deadline was computed from the old watchlist's count, and letting
         // it stand would gate the new list's first pass on a number that no
@@ -287,21 +316,33 @@ public struct FeedEngine {
         cycleDeadline = 0
     }
 
-    /// Retire the current cycle's deadline, so the next `next()` starts a new
-    /// pass instead of sleeping out the remainder of this one. What the
-    /// dropdown's *Refresh now* does (spec §7).
+    /// Ask for one fetch per watched symbol, starting at the next `next()` and
+    /// overruling the schedule. What the dropdown's *Refresh now* does, and
+    /// what the controller does after a watchlist edit (spec §7).
     ///
-    /// This is the *only* gate it lifts, and that is the point. The cooldown
-    /// ladder, both circuit breakers, the market calendar, the occlusion check
-    /// and the token bucket all sit elsewhere in `next()` — the first five
-    /// above this deadline in `RefreshPolicy.decide`, the bucket below it — so
-    /// no amount of clicking can turn a 429 into a request.
+    /// It lifts the **schedule** and nothing else — the cycle deadline, the
+    /// market calendar and the occlusion check, all three of which are things
+    /// the user configured or the clock decided. The cooldown ladder and both
+    /// circuit breakers are checked above it inside `RefreshPolicy.decide`,
+    /// and the token bucket below it in `next()`, so no amount of clicking can
+    /// turn a 429 into a request, and the 30-second spacing floor still holds.
     ///
-    /// A no-op while a cycle is in flight: the deadline is only consulted once
-    /// the cursor has been all the way round, and until then the engine is
-    /// already fetching as fast as the bucket permits.
+    /// Not a no-op mid-cycle, which is what the older deadline-only version
+    /// was: a pass already in flight gets its remaining symbols counted afresh
+    /// from here, so the click means the same thing whenever it lands.
     public mutating func requestImmediateCycle() {
-        cycleDeadline = 0
+        // Not `cycleDeadline = 0`, which is what this used to be and why the
+        // user reported the button doing nothing: the deadline has exactly one
+        // reader, inside the `cursor >= live.count` branch of `next()`, and
+        // `RefreshPolicy.decide` runs first and returns on any waiting path —
+        // so on a closed market, an occluded strip, a cooldown or an open
+        // circuit, the click cleared a variable nothing on that path reads.
+        //
+        // The request is read by `decide` instead, which sits above every gate
+        // that could swallow it. Asking for one fetch per symbol — rather than
+        // winding the cursor back to zero — is what lets the pass start at
+        // whichever symbol the cursor is on and still cover all of them.
+        refreshRemaining = liveSymbols.count
     }
 
     public var latest: [Symbol: Quote] { latestQuotes }

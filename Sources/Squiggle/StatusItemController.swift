@@ -432,6 +432,9 @@ final class StatusItemController: NSObject {
         render()
         // R140's path: ask for a cycle now so the price arrives in seconds
         // rather than at the next deadline, which at 20 symbols is 24 minutes.
+        // `replaceWatchlist` above parks the engine's cursor on this symbol —
+        // it is the only one without a quote — so it is the first one fetched
+        // rather than the last, and the request overrules a closed market.
         runner.requestImmediateCycle()
         scheduleStep(after: 0)
     }

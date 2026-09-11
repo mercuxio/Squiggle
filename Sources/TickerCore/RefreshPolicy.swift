@@ -32,11 +32,18 @@ public struct RefreshInput: Sendable {
     public var cooldownRemaining: Double
     public var circuitAllows: Bool
     public var circuitOpenRemaining: Double
+    /// The user pressed *Refresh Now*. It retires the **schedule** — the
+    /// market calendar, the occlusion check, the cycle interval — and nothing
+    /// else. The cooldown and both circuits are checked above it and the token
+    /// bucket below it, so this is a request for a refresh, not a grant of
+    /// one. Defaulted so that every ordinary caller keeps saying nothing.
+    public var userRequested: Bool
 
     public init(nowMonotonic: Double, nowEpoch: Double, marketState: MarketState,
                 visibility: Visibility, lowPowerMode: Bool, userIntervalSeconds: Double,
                 watchlistCount: Int, nextSessionOpenEpoch: Double?, isCoolingDown: Bool,
-                cooldownRemaining: Double, circuitAllows: Bool, circuitOpenRemaining: Double) {
+                cooldownRemaining: Double, circuitAllows: Bool, circuitOpenRemaining: Double,
+                userRequested: Bool = false) {
         self.nowMonotonic = nowMonotonic
         self.nowEpoch = nowEpoch
         self.marketState = marketState
@@ -49,6 +56,7 @@ public struct RefreshInput: Sendable {
         self.cooldownRemaining = cooldownRemaining
         self.circuitAllows = circuitAllows
         self.circuitOpenRemaining = circuitOpenRemaining
+        self.userRequested = userRequested
     }
 }
 
@@ -214,6 +222,18 @@ public enum RefreshPolicy {
         guard input.watchlistCount > 0 else {
             return .wait(seconds: sanitizedWait(RateConstants.defaultRefreshInterval))
         }
+
+        // Below the safety gates and above every schedule gate — which is the
+        // whole of what *Refresh Now* means. The user's words: "the refresh
+        // should force the refresh to immediate regardless of the refresh
+        // settings", and the settings are exactly what lies below: the market
+        // calendar, the occlusion check and the cycle interval. The cooldown
+        // and the circuits are not settings, so they stay above.
+        //
+        // It goes after the watchlist guard rather than before it because an
+        // empty watchlist has nothing to fetch — there is no symbol to return
+        // and `next()` would only come straight back here.
+        if input.userRequested { return .fetch }
 
         let cycle = cycleInterval(userIntervalSeconds: input.userIntervalSeconds,
                                   watchlistCount: input.watchlistCount,
