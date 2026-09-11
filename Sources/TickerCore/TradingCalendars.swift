@@ -29,6 +29,10 @@ import Foundation
 /// one `cycleDeadline`; giving each symbol its own would be a redesign of
 /// `FeedEngine.next()`, not a change to its callers.
 ///
+/// Per-symbol calendars are still kept rather than aggregated on arrival, so
+/// nothing is lost: removing the crypto symbol restores the equity answer on
+/// the very next tick, with no stale `.regular` left behind.
+///
 /// Lives in `TickerCore` by ruling R121: `squigglectl watch` and the app's
 /// `TickerRunner` both have to build an `EngineContext`, and this is the only
 /// thing that knows how.
@@ -75,9 +79,10 @@ public struct TradingCalendars: Sendable {
 
     /// How open a state is. `.pre` outranks `.post` only to keep the aggregate
     /// deterministic when both appear — `RefreshPolicy` stretches the cycle
-    /// identically for the two, so the choice cannot change what the engine
-    /// does. A `switch` with no `default:`, so a fifth `MarketState` fails the
-    /// build here rather than silently ranking as something.
+    /// identically for the two (`RefreshPolicy.swift`, the `quiet` term), so
+    /// the choice cannot change what the engine does. A `switch` with no
+    /// `default:`, so a fifth `MarketState` fails the build here rather than
+    /// silently ranking as something.
     public static func openness(_ state: MarketState) -> Int {
         switch state {
         case .closed: return 0

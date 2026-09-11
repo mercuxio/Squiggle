@@ -301,8 +301,12 @@ private enum RepositoryFile {
     let call = "log(Rendering.stateLine(engine.diagnosticSnapshot, requests: fetches))"
     let callRange = try #require(source.range(of: call))
     let loopStart = try #require(source.range(of: "while maxCycles"))
-    // The first `return 0` *after* the loop starts is the loop's exit — the
-    // earlier one in the file belongs to `Calendars.openness(.closed)`.
+    // The first `return 0` *after* the loop starts is the loop's exit. As of
+    // task 2 (R121) that is the only `return 0` left in this file at all —
+    // `Calendars.openness(.closed)`, which used to contribute an earlier one,
+    // moved to `TickerCore` — but the range restriction stays so this search
+    // does not start matching whatever `return 0` a future change adds ahead
+    // of the loop.
     let loopEnd = try #require(source.range(of: "return 0",
                                             range: loopStart.upperBound..<source.endIndex))
 
