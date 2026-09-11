@@ -167,7 +167,14 @@ private func write(_ json: String, to url: URL) throws {
     // sit orders of magnitude below the bound rather than just under it. If
     // `maxWatchlistCount`, `Symbol`'s length cap or `Settings` ever grow enough
     // to threaten that, this fails while there is still room to think.
+    // The 32 is `Symbol`'s own length cap, which nothing else in the suite
+    // pins. Without this line the test would go on measuring a document the
+    // app can no longer produce the moment that cap grew — and the size bound
+    // derived from it, in `readIfPresent`'s comment, would be measuring
+    // history.
     let longest = String(repeating: "A", count: 32)
+    #expect(Symbol(longest) != nil)
+    #expect(Symbol(longest + "A") == nil, "Symbol's length cap moved past 32")
     let symbols = try (0..<RateConstants.maxWatchlistCount).map { index in
         try #require(Symbol(String(longest.dropLast(2)) + String(format: "%02d", index)))
     }
@@ -183,6 +190,15 @@ private func write(_ json: String, to url: URL) throws {
     let store = FileWatchlistStore(url: url)
     try store.save(fat)
     let written = try Data(contentsOf: url).count
+
+    // Two assertions, because `readIfPresent`'s comment makes two claims and
+    // the ratio alone would let the figure in it rot: 100x of a mebibyte is
+    // ten kilobytes, so the original assertion passed at any size up to nine
+    // times the one the comment quotes. The two-kilobyte ceiling is what
+    // re-takes "1,080 bytes on this build"; the ratio is the property the
+    // bound was chosen for.
+    #expect(written < 2_048,
+            "the worst legitimate store is \(written) bytes; readIfPresent() quotes 1,080")
     #expect(written * 100 < Int(FileWatchlistStore.maximumStoreBytes),
             "the worst legitimate store is \(written) bytes, within 100x of the bound")
     #expect(try store.load() == fat)

@@ -286,10 +286,24 @@ import TickerCore
                       maxCycles: nil))
     }
 
-    // And the scenario names `probe --record` is documented with, all of which
-    // contain hyphens. `takeValue` strips the name before the sweep sees it,
-    // which is what keeps them legal.
-    for name in ["regular-session", "pre-market", "crypto-while-equities-closed"] {
+    // The plain symbols Task 19 Step 1 launches with, and Step 3's deliberately
+    // bad one: `NOTAREALTICKER` has to reach Yahoo and come back
+    // `symbolNotFound`, which is a different answer from a parse failure and
+    // the only way that intervention tests anything.
+    for raw in ["AAPL", "MSFT", "NOTAREALTICKER"] {
+        #expect(try Command.parse(["quote", raw]) == .quote(symbol: raw, raw: false))
+    }
+
+    // And every scenario name `probe --record` is documented with — the five
+    // in Task 19 Step 2's table plus the hand-captured one beside it. All
+    // contain hyphens, and `takeValue` strips the name before the sweep sees
+    // it, which is what keeps them legal. Taken from the documents rather than
+    // from memory would be better still, but the names are a closed set that
+    // `docs/fixture-capture-log.md` and the plan both spell out, and a name
+    // this list misses is one no test would have exercised either way.
+    for name in ["regular-session", "pre-market", "post-market",
+                 "overnight-closed", "weekend", "crypto-while-equities-closed",
+                 "search-apple"] {
         #expect(try Command.parse(["probe", "AAPL", "--record", name])
             == .probe(symbol: "AAPL", record: name))
     }

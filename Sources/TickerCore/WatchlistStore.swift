@@ -121,9 +121,10 @@ public struct FileWatchlistStore: WatchlistStore {
         // legitimately produce, not guessed. `RateConstants.maxWatchlistCount`
         // symbols of at most `Symbol`'s 32 characters, plus `Settings`' fields,
         // plus a version and a cooldown, pretty-printed and sorted, comes to
-        // well under two kilobytes — `theWorstLegitimateStoreIsFarInsideTheSizeBound`
-        // measures that rather than asserting it from memory. A mebibyte leaves
-        // that worst case three orders of magnitude of room for hand-editing
+        // 1,080 bytes on this build — `theWorstLegitimateStoreIsFarInsideTheSizeBound`
+        // writes that document and measures it rather than asserting it from
+        // memory, and fails if it ever passes two kilobytes. A mebibyte leaves
+        // that worst case nearly three orders of magnitude of room for hand-editing
         // (the file is user-editable by design, spec §6) while still refusing
         // the case that motivated this: a multi-hundred-megabyte file, which
         // one measurement on 2026-09-08 took 97.9 seconds and 2.6 GB of peak
