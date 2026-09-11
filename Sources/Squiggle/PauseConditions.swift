@@ -5,7 +5,9 @@ import TickerCore
 ///
 /// A named event rather than a raw `Notification`, so the rule ("a locked
 /// screen pauses") is testable without standing up a notification centre, and
-/// so the five magic strings live in exactly one place (R138).
+/// so the four magic strings — the ones nothing but a string literal can name,
+/// unlike the compiler-checked `NSWorkspace.*` constants — live in exactly one
+/// place (R138).
 enum PauseEvent: Equatable, Sendable {
     case screenLocked
     case screenUnlocked

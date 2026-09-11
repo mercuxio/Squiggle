@@ -47,10 +47,9 @@ final class PauseMonitor {
             let token = NotificationCenter.default.addObserver(
                 forName: NSWindow.didChangeOcclusionStateNotification,
                 object: window, queue: .main
-            ) { [weak self] note in
-                let isVisible = (note.object as? NSWindow)?
-                    .occlusionState.contains(.visible) ?? true
+            ) { [weak self, weak window] _ in
                 MainActor.assumeIsolated {
+                    let isVisible = window?.occlusionState.contains(.visible) ?? true
                     self?.handle(.occlusionChanged(isVisible: isVisible))
                 }
             }
