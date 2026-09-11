@@ -120,6 +120,9 @@ enum ErrorText {
     // MARK: - Symbol picker
 
     static let searchPlaceholder = "Company or symbol"
+    /// The picker's one button. Separate from `addSymbol`, which is the menu
+    /// command and the window's title — this is the verb on the button.
+    static let addButton = "Add"
     static let alreadyWatching = "Already watching"
     static let noMatches = "No matches. You can still try it as a symbol."
     /// The sibling of `noMatches` for text `Symbol.init?` refuses outright.

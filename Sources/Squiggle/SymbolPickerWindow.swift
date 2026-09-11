@@ -21,7 +21,7 @@ final class SymbolPickerWindowController: NSWindowController,
     private let field = NSTextField()
     private let table = NSTableView()
     private let messageLabel = NSTextField(labelWithString: "")
-    private let addButton = NSButton(title: "Add", target: nil, action: nil)
+    private let addButton = NSButton(title: ErrorText.addButton, target: nil, action: nil)
 
     init(search: @escaping SymbolSearch,
          watchlist: [Symbol],
