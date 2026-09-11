@@ -48,10 +48,22 @@ enum Fixture {
     }
 }
 
-@Test func aNonUSDListingKeepsItsOwnCurrency() throws {
+@Test func aNonUSDListingKeepsItsOwnCurrencyExactlyAsSpelled() throws {
     let symbol = try #require(Symbol("VOD.L"))
     let quote = try YahooQuoteDecoding.quote(from: Fixture.data("non-usd-listing.json"), symbol: symbol)
-    #expect(quote.currency != "USD")
+
+    // The assertion is the *case*, not merely the difference. This fixture's
+    // currency is `GBp` — pence, one hundredth of `GBP` — so upper-casing it
+    // does not tidy a string, it multiplies the displayed unit by a hundred.
+    // The rule this project states is that a currency code is never
+    // upper-cased and never validated against ISO 4217; `GBp` is the reason
+    // the rule exists and this is the only test that witnesses it.
+    //
+    // It used to read `quote.currency != "USD"`, which a decoder ending in
+    // `.uppercased()` passes with "GBP" — and nothing else in the suite would
+    // have noticed either, since every other currency assertion is against
+    // "USD", which is its own upper-casing.
+    #expect(quote.currency == "GBp")
 }
 
 @Test func aZeroPreviousCloseYieldsUnknownRatherThanInfinity() throws {
@@ -104,9 +116,17 @@ enum Fixture {
 }
 
 @Test func theRateLimitBodyIsNotMistakenForJSON() throws {
-    // Observed 2026-09-08: `text/html`, 19 bytes, not JSON. A parser that
-    // assumes a JSON body on error throws the wrong error — and the wrong
-    // error means the wrong backoff ladder.
+    // `text/html`, not JSON. A parser that assumes a JSON body on error
+    // throws the wrong error — and the wrong error means the wrong backoff
+    // ladder.
+    //
+    // This file is the *reconstruction*, 17 bytes, with the trailing CRLF
+    // stripped. The 19-byte figure a comment here used to quote belongs to
+    // `429-body-live.txt`, the bytes Yahoo actually sent, which
+    // `theLiveRateLimitBodyDecodesTheSameWayAsTheReconstruction` below loads
+    // and pins. Both sizes are asserted rather than described, because the
+    // whole point of keeping two files is that they differ.
+    #expect(try Fixture.data("429-body.html").count == 17)
     let symbol = try #require(Symbol("AAPL"))
     var caughtError: TickerError?
     do {
@@ -135,6 +155,47 @@ enum Fixture {
     }
     let error = try #require(caughtError)
     #expect(error == .notJSON)
+}
+
+@Test func theUnauthorizedBodyIsAContractFaultAndNotAClassification() throws {
+    // `401-body.json` had no test at all, while its marker file claimed its
+    // "only job is to prove the parser classifies a 401 body as
+    // `unauthorized`". The parser cannot do that and never could: nothing in
+    // this body says 401. `TickerError.unauthorized(status:)` is raised by
+    // `YahooClient` from the HTTP status line, before a byte of the body is
+    // decoded, and it carries the status *number* — which only the response
+    // knows.
+    //
+    // What the fixture does witness is why that ordering is not an
+    // implementation detail. Handed to the decoder, this body is well-formed
+    // JSON with no `chart` key, so it comes back as a contract fault — and a
+    // contract fault opens a circuit whose threshold is 1 and whose cooldown
+    // is an hour, on the theory that the endpoint's shape has changed for
+    // every symbol at once. A 401 is not a shape change; it is a credential
+    // problem that backoff cannot fix. Decoding first would file one as the
+    // other.
+    let data = try Fixture.data("401-body.json")
+
+    // Well-formed JSON, so `.notJSON` is not what is being witnessed here.
+    #expect(throws: Never.self) {
+        try JSONSerialization.jsonObject(with: data)
+    }
+
+    let symbol = try #require(Symbol("AAPL"))
+    var caughtError: TickerError?
+    do {
+        _ = try YahooQuoteDecoding.quote(from: data, symbol: symbol)
+    } catch let error as TickerError {
+        caughtError = error
+    }
+    let error = try #require(caughtError)
+    #expect(error == .missingField(path: "chart"))
+    #expect(error.isContractFault)
+    #expect(FailureKind(error) == .contractFault)
+
+    // And the classification it must *not* collide with. `unauthorized`
+    // carries a status; a decoder has no status to carry.
+    #expect(FailureKind(error) != .unauthorized)
 }
 
 @Test func anEmptyBodyIsItsOwnError() throws {
