@@ -8,11 +8,17 @@ import TickerCore
 /// state, Low Power Mode, and the ladder's cooldown, so a repeating timer
 /// would be answering a question that had already changed.
 @MainActor
-final class StatusItemController: NSObject, NSMenuDelegate {
+final class StatusItemController: NSObject {
     private let statusItem: NSStatusItem
     private let runner: TickerRunner
     private var timer: Timer?
     private let tickerView = TickerView()
+    /// The dropdown. One panel for the life of the app, its contents rebuilt
+    /// on every open — see `presentDropdown`.
+    private let dropdown = StatusPanel()
+    /// The footer's coffee button. The one URL in the app that is not Yahoo's,
+    /// and the only one a click opens in a browser.
+    private let coffeeURL = URL(string: "https://buymeacoffee.com/benjamintan")!
     // Retained by `NotificationCenter` until removed, same as `timer` is
     // retained by the run loop until invalidated — `stop()` tears both down
     // for the same reason.
@@ -68,14 +74,12 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         tickerView.autoresizingMask = [.width, .height]
         button.addSubview(tickerView)
 
-        let menu = NSMenu()
-        // Without this, AppKit decides for itself which items are enabled and
-        // the footer — an item with no action, which is exactly what "is this
-        // clickable" is judged on — would be greyed out along with everything
-        // else that has no target.
-        menu.autoenablesItems = false
-        menu.delegate = self
-        statusItem.menu = menu
+        // No `statusItem.menu` any more. Assigning one makes AppKit swallow
+        // the button's clicks to open the menu itself, so the panel and a menu
+        // cannot both exist — and `NSMenu` cannot right-align the trash button
+        // or the quit icon the user asked for.
+        button.target = self
+        button.action = #selector(toggleDropdown)
 
         // Reduce Motion can be toggled while Squiggle is running, and a user
         // who turns it on because a marquee is making them ill should not have
@@ -123,6 +127,10 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         pauseMonitor?.stop()
         pauseMonitor = nil
         appearanceObservation = nil
+        // The panel installs two global event monitors while it is open, and
+        // they outlive the panel unless it is closed. `close()` is where they
+        // are removed.
+        dropdown.close()
     }
 
     /// Spec §5.2: pausing is `speed = 0` with the offset captured, never a
@@ -296,12 +304,32 @@ final class StatusItemController: NSObject, NSMenuDelegate {
 
     // MARK: - The dropdown
 
-    // R132: rebuilt every time it opens rather than kept in sync. A menu that
-    // is only visible for the second it is being read has no state worth
+    /// The status item's own action. A second click closes, the way a menu
+    /// title does — and the panel's outside-click monitor deliberately ignores
+    /// clicks on this button so the two do not fight over the same press.
+    @objc private func toggleDropdown() {
+        if dropdown.isShowing {
+            dropdown.close()
+        } else {
+            presentDropdown()
+        }
+    }
+
+    // R132: rebuilt every time it opens rather than kept in sync. A dropdown
+    // that is only visible for the second it is being read has no state worth
     // maintaining, and the timer is on `.common` (Task 6), so the prices
     // behind it keep arriving while it is up.
-    func menuNeedsUpdate(_ menu: NSMenu) {
-        menu.removeAllItems()
+    private func presentDropdown() {
+        guard let button = statusItem.button else { return }
+        rebuildDropdownContent()
+        dropdown.show(under: button) { [weak self] in self?.quit() }
+    }
+
+    /// Also called after the watchlist changes, because removing a symbol
+    /// happens *inside* the open dropdown — leaving the row of a symbol that
+    /// is no longer watched on screen, with a live trash button, would be the
+    /// one state this view must never be in.
+    private func rebuildDropdownContent() {
         let model = MenuModel.build(symbols: runner.symbols,
                                     quotes: runner.quotes,
                                     dead: runner.deadSymbols,
@@ -310,58 +338,28 @@ final class StatusItemController: NSObject, NSMenuDelegate {
                                     storeFault: storeFault,
                                     nowEpoch: Date().timeIntervalSince1970,
                                     nextStepEpoch: nextStepEpoch)
-        for item in model.items {
-            menu.addItem(menuItem(for: item))
-        }
+        // The closure is called during `init` and never stored, so `self` is
+        // captured strongly on purpose: a weak capture here would need a
+        // fallback selector for a case that cannot happen.
+        dropdown.setContent(DropdownView(model: model,
+                                         target: self,
+                                         remove: #selector(removeSymbol(_:)),
+                                         command: { self.selector(for: $0) }))
     }
 
-    private func menuItem(for item: MenuModel.Item) -> NSMenuItem {
-        // No `default:`: a fifth kind of item must fail the build here rather
-        // than vanish from the menu.
-        switch item {
-        case .separator:
-            return .separator()
-
-        case .footer(let text):
-            let entry = NSMenuItem(title: text, action: nil, keyEquivalent: "")
-            entry.isEnabled = false
-            return entry
-
-        case .quote(let title, let symbol):
-            let entry = NSMenuItem(title: title, action: nil, keyEquivalent: "")
-            // Enabled with no action of its own: a disabled parent will not
-            // open its submenu, and the row itself does nothing when clicked.
-            entry.isEnabled = true
-            let submenu = NSMenu()
-            submenu.autoenablesItems = false
-            let remove = NSMenuItem(title: ErrorText.removeSymbol,
-                                    action: #selector(removeSymbol(_:)), keyEquivalent: "")
-            remove.target = self
-            remove.isEnabled = true
-            remove.representedObject = symbol
-            submenu.addItem(remove)
-            entry.submenu = submenu
-            return entry
-
-        case .command(let command):
-            let entry = NSMenuItem(title: command.title,
-                                   action: selector(for: command), keyEquivalent: "")
-            entry.target = self
-            entry.isEnabled = true
-            return entry
-        }
-    }
-
+    /// No `default:`: a sixth command must fail the build here rather than
+    /// reach the footer as a button that does nothing.
     private func selector(for command: MenuCommand) -> Selector {
         switch command {
         case .addSymbol: return #selector(openSymbolPicker)
         case .refreshNow: return #selector(refreshNow)
         case .settings: return #selector(openSettings)
+        case .buyCoffee: return #selector(openCoffee)
         case .quit: return #selector(quit)
         }
     }
 
-    // MARK: - Menu actions
+    // MARK: - Dropdown actions
 
     @objc private func refreshNow() {
         // R140: this retires the cycle deadline. The cooldown, both circuits
@@ -369,9 +367,15 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         // a refresh — it does not grant one.
         runner.requestImmediateCycle()
         scheduleStep(after: 0)
+        // The dropdown stays open — the click came from inside it — so the
+        // status line under the rows is rebuilt to say when the retry is due.
+        rebuildDropdownContent()
     }
 
     @objc private func openSettings() {
+        // The panel sits at `.popUpMenu` level, above every ordinary window,
+        // so a settings window opened underneath it would be invisible.
+        dropdown.close()
         let controller = settingsWindow ?? SettingsWindowController(
             settings: document.settings,
             onChange: { [weak self] edited in self?.settingsChanged(edited) })
@@ -387,6 +391,8 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     }
 
     @objc private func openSymbolPicker() {
+        // Same reason as `openSettings`.
+        dropdown.close()
         let controller = pickerWindow ?? SymbolPickerWindowController(
             search: search,
             watchlist: document.symbols,
@@ -445,8 +451,23 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         RunLoop.main.add(timer, forMode: .common)
     }
 
-    @objc private func removeSymbol(_ sender: NSMenuItem) {
-        guard let symbol = sender.representedObject as? Symbol else { return }
+    /// The footer's coffee button.
+    ///
+    /// The dropdown is closed first, and not as a courtesy: a `.popUpMenu`
+    /// panel stays above the browser window that is about to open, so leaving
+    /// it up would park it on top of the page it just sent the user to.
+    @objc private func openCoffee() {
+        dropdown.close()
+        NSWorkspace.shared.open(coffeeURL)
+    }
+
+    /// The user's item 2: one click, in the row, with no submenu.
+    ///
+    /// The symbol comes off the button rather than out of a row index, so a
+    /// cycle that lands between the build and the click cannot make this
+    /// remove the wrong one.
+    @objc private func removeSymbol(_ sender: RemoveButton) {
+        let symbol = sender.symbol
         document.symbols.removeAll { $0 == symbol }
         runner.replaceWatchlist(document.symbols)
         persist()
@@ -455,6 +476,9 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         // effective interval just as adding one raises it.
         settingsWindow?.watchlistCount = document.symbols.count
         render()
+        // The click came from a row of the panel that is still open. Rebuilding
+        // is what takes that row away.
+        rebuildDropdownContent()
     }
 
     @objc private func quit() {

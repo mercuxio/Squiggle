@@ -1,16 +1,18 @@
 import Foundation
 import TickerCore
 
-/// A dropdown item that does something, as opposed to one that says something.
+/// One button in the dropdown's footer bar.
 ///
-/// *Remove* is not here: it lives inside a symbol's own row, where it has a
-/// symbol to act on. A command in this enum needs no argument, which is what
-/// lets `StatusItemController` map it to a selector with a `switch` and no
-/// `default:`.
-enum MenuCommand: Equatable, Sendable {
+/// *Remove* is not here: it lives in a symbol's own row, where it has a symbol
+/// to act on. A command in this enum needs no argument, which is what lets
+/// `StatusItemController` map it to a selector with a `switch` and no
+/// `default:` — and what lets `MenuFooterView` lay them out as five identical
+/// icon buttons differing only in glyph and action.
+enum MenuCommand: Equatable, Sendable, CaseIterable {
     case addSymbol
     case refreshNow
     case settings
+    case buyCoffee
     case quit
 
     /// All wording lives in `ErrorText` (spec §7). This property exists so the
@@ -20,6 +22,7 @@ enum MenuCommand: Equatable, Sendable {
         case .addSymbol: return ErrorText.addSymbol
         case .refreshNow: return ErrorText.refreshNow
         case .settings: return ErrorText.settings
+        case .buyCoffee: return ErrorText.buyCoffee
         case .quit: return ErrorText.quit
         }
     }
@@ -28,17 +31,20 @@ enum MenuCommand: Equatable, Sendable {
 /// What the dropdown says, as a value.
 ///
 /// The same split as `StripLayout` and `StripRenderer`: this decides the rows
-/// and the wording, and `StatusItemController` turns it into `NSMenuItem`s.
-/// The reason is the same too — every rule worth testing is in here, and none
+/// and the wording, and `DropdownView` turns it into views. The reason is the
+/// same too — every rule worth testing is in here, and none
 /// of it needs a status bar, a window server or a run loop to exercise.
 struct MenuModel: Equatable {
     enum Item: Equatable {
-        /// One watchlist row. The symbol rides along because the row's submenu
-        /// has a *Remove* item that needs to know what it is removing.
+        /// One watchlist row. The symbol rides along because the row carries a
+        /// trash button that needs to know what it is removing.
         case quote(title: String, symbol: Symbol)
         /// Spec §7's one line of detail, and the app's only error surface.
+        ///
+        /// Named before the footer *bar* existed, and kept: "footer" is the
+        /// spec's own word for this line. The row of icons beneath it is
+        /// `MenuFooterView`, and the two are not the same thing.
         case footer(String)
-        case command(MenuCommand)
         case separator
     }
 
@@ -65,14 +71,11 @@ struct MenuModel: Equatable {
             lastSuccessAgoSeconds: lastSuccessEpoch.map { nowEpoch - $0 },
             lastError: lastError ?? storeFault,
             retryInSeconds: nextStepEpoch.map { max(0, $0 - nowEpoch) })
+        // The list ends here. The four commands that used to follow are now the
+        // footer bar, which is chrome rather than another entry in the same
+        // list of things — and, being a view, is the only way to put one of
+        // them on the right-hand edge.
         items.append(.footer(footer))
-
-        items.append(.separator)
-        items.append(.command(.addSymbol))
-        items.append(.command(.refreshNow))
-        items.append(.command(.settings))
-        items.append(.separator)
-        items.append(.command(.quit))
         return MenuModel(items: items)
     }
 

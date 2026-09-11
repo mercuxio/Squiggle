@@ -16,8 +16,19 @@ enum ErrorText {
     static let refreshNow = "Refresh Now"
     static let settings = "Settings…"
     static let addSymbol = "Add Symbol…"
-    static let removeSymbol = "Remove"
     static let quit = "Quit Squiggle"
+    static let buyCoffee = "Buy me a coffee"
+
+    /// The trash button's only label. Icon-only controls are invisible to
+    /// VoiceOver otherwise, and twenty rows of "Remove" would leave a screen
+    /// reader user counting to work out which one they were on.
+    ///
+    /// The symbol is spelled exactly as Yahoo spells it and the user typed it —
+    /// `^GSPC`, `BRK-B`, `VOD.L`. Case is significant everywhere else in this
+    /// app and a label is no place to start normalising it.
+    static func removeSymbol(_ symbol: String) -> String {
+        "Remove \(symbol)"
+    }
 
     // MARK: - The footer line
 

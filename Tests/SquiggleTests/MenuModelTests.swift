@@ -31,7 +31,6 @@ private func titles(_ model: MenuModel) -> [String] {
         switch $0 {
         case .quote(let title, _): return title
         case .footer(let text): return text
-        case .command(let command): return command.title
         case .separator: return nil
         }
     }
@@ -89,18 +88,34 @@ private func titles(_ model: MenuModel) -> [String] {
     #expect(rows == order)
 }
 
-@Test func theCommandsAreAlwaysThere() {
-    let commands = model().items.compactMap { item -> MenuCommand? in
-        if case .command(let command) = item { return command }
-        return nil
+/// The commands used to be items in this list. They are the footer bar now,
+/// and the list stops at the status line — so the last thing the model emits
+/// is always spec §7's one line of detail, whatever the watchlist looks like.
+@Test func theListEndsAtTheStatusLine() {
+    for built in [model(), model(symbols: []), model(lastError: .rateLimited(retryAfterSeconds: nil))] {
+        let last = built.items.last
+        guard case .footer = last else {
+            Issue.record("the model's last item was \(String(describing: last))")
+            continue
+        }
     }
-    #expect(commands == [.addSymbol, .refreshNow, .settings, .quit])
+}
+
+/// Every footer button, in the order the user asked for them. `CaseIterable`
+/// is what `MenuFooterView` splits into its leading four and trailing one, so
+/// a case added without a place in that row would silently go missing.
+@MainActor
+@Test func everyCommandHasAPlaceInTheFooter() {
+    let placed = MenuFooterView.leadingCommands + [MenuFooterView.trailingCommand]
+    #expect(placed == [.settings, .addSymbol, .refreshNow, .buyCoffee, .quit])
+    #expect(Set(placed) == Set(MenuCommand.allCases))
 }
 
 @Test func commandTitlesComeFromOnePlace() {
     #expect(MenuCommand.addSymbol.title == ErrorText.addSymbol)
     #expect(MenuCommand.refreshNow.title == ErrorText.refreshNow)
     #expect(MenuCommand.settings.title == ErrorText.settings)
+    #expect(MenuCommand.buyCoffee.title == ErrorText.buyCoffee)
     #expect(MenuCommand.quit.title == ErrorText.quit)
 }
 
