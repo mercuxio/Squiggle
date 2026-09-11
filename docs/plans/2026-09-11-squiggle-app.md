@@ -109,34 +109,55 @@ Sources/YahooFeed/
 Sources/squigglectl/
   WatchLoop.swift                MODIFIED  R121: uses TickerCore.TradingCalendars
   Rendering.swift                MODIFIED  R125: transportFault forwards
-Sources/Squiggle/
-  main.swift                     entry point: NSApplication, .accessory, delegate
-  AppDelegate.swift              lifecycle; owns the controller; no dock, no menu bar menu
-  StatusItemController.swift     the NSStatusItem, the one timer, the dropdown
-  TickerRunner.swift             drives FeedEngine against any QuoteFetching
-  StripLayout.swift              segments, widths, offsets, colour roles (R124)
-  StripRenderer.swift            StripLayout -> CALayer + the one animation
-  TickerView.swift               the NSView the status item button hosts
-  PauseConditions.swift          occlusion, lock, screensaver, display sleep
-  ColorScheme.swift              the three schemes; NSColor resolution
-  Formatting.swift               price / delta / percent / age — no colour
-  ErrorText.swift                every user-facing string in the app
-  SettingsWindow.swift           width, speed, interval, rows, scheme, motion
-  SymbolPickerWindow.swift       search-driven picker with literal fallback
-  LaunchAtLogin.swift            SMAppService, read back not mirrored
+Sources/Squiggle/                          (task that creates it in brackets)
+  main.swift                 [3]  entry point: NSApplication, .accessory, delegate
+  AppDelegate.swift          [3]  lifecycle; owns the controller; no dock menu
+  Formatting.swift           [3]  price / delta / percent / age — no colour
+  ErrorText.swift            [4]  every user-facing string in the app
+  StripLayout.swift          [5]  segments, widths, offsets, colour roles (R124)
+  TickerRunner.swift         [6]  drives FeedEngine against any QuoteFetching
+  StatusItemController.swift [6]  the NSStatusItem, the one timer, the dropdown
+  StripRenderer.swift        [8]  StripLayout -> CALayer + the one animation
+  TickerView.swift           [8]  the NSView the status item button hosts
+  MotionPolicy.swift         [9]  scroll vs step; Reduce Motion forces step
+  PauseConditions.swift     [10]  occlusion, lock, screensaver, display sleep
+  PauseMonitor.swift        [10]  the notification observers behind them (R134)
+  MenuModel.swift           [11]  the dropdown as a value; rebuilt on demand
+  ColorScheme.swift         [12]  the three schemes; NSColor resolution (R136)
+  SettingsForm.swift        [13]  the settings window as a value, clamps and all
+  SettingsWindow.swift      [13]  the NSWindow built in code (R133)
+  LaunchAtLogin.swift       [14]  SMAppService, read back not mirrored (R146)
+  SymbolPickerModel.swift   [15]  rows + message; generations live here (R148)
+  SymbolPickerWindow.swift  [15]  search-driven picker with literal fallback
 Tests/SquiggleTests/
-  FormattingTests.swift
-  ErrorTextTests.swift
-  StripLayoutTests.swift
-  ColorSchemeTests.swift
-  PauseConditionsTests.swift
-  TickerRunnerTests.swift
-  SettingsBindingTests.swift
-  SymbolPickerTests.swift
+  FormattingTests.swift      [3]
+  ErrorTextTests.swift       [4]
+  StripLayoutTests.swift     [5]
+  TickerRunnerTests.swift    [6]   modified again by [12]
+  StripRendererTests.swift   [8]
+  MotionPolicyTests.swift    [9]
+  PauseConditionsTests.swift [10]
+  MenuModelTests.swift      [11]   extended by [13] and [15]
+  ColorSchemeTests.swift    [12]
+  SettingsFormTests.swift   [13]
+  LaunchAtLoginTests.swift  [14]
+  SymbolPickerTests.swift   [15]
+  WakeTests.swift           [16]
 Tests/TickerCoreTests/
-  WatchlistStoreTests.swift      MODIFIED  R118/R119/R120
-  TradingCalendarsTests.swift    NEW       R121: moved from squigglectlTests
+  WatchlistStoreTests.swift  [1]   MODIFIED  R118/R119/R120; again by [14]
+  TradingCalendarsTests.swift [2]  NEW  R121: moved from squigglectlTests
+  FeedEngineTests.swift     [11]   MODIFIED  requestImmediateCycle
+  MonotonicClockTests.swift [16]   NEW  R152: SystemClock is uptime, not a wall clock
+docs/
+  wake-from-sleep-log.md    [16]  the sleep audit's result (R153); no prices
 ```
+
+Two names in an earlier draft of this map turned out not to survive contact
+with the tasks, and are corrected above: there is no `SettingsBindingTests.swift`
+(Task 13 writes `SettingsFormTests.swift`, because what it tests is a value
+type and not a binding), and `PauseConditions.swift` does not hold its own
+observers (Task 10 splits the watching into `PauseMonitor.swift` so the
+conditions stay a pure value — R134).
 
 ---
 
@@ -2516,7 +2537,7 @@ struct StripRendererTests {
     @Test("content wider than the window animates")
     func wideContentDoesNotFit() {
         let overflowing = StripRenderer.fits(contentWidth: 261, visibleWidth: 260)
-        #expect(overflowing == false)
+        #expect(!overflowing)
     }
 
     // The Core Animation pause/resume recipe: on resume the layer's begin
@@ -3367,7 +3388,7 @@ struct PauseConditionsTests {
     @Test("a fresh set of conditions is not paused")
     func nothingIsPausedAtLaunch() {
         let fresh = PauseConditions()
-        #expect(fresh.isPaused == false)
+        #expect(!fresh.isPaused)
         #expect(fresh.visibility == .visible)
     }
 
@@ -3414,7 +3435,7 @@ struct PauseConditionsTests {
         conditions.apply(.displaysWoke)
         #expect(conditions.isPaused)
         conditions.apply(.screenUnlocked)
-        #expect(conditions.isPaused == false)
+        #expect(!conditions.isPaused)
     }
 
     @Test("clearing one condition while another holds stays paused")
@@ -3425,7 +3446,7 @@ struct PauseConditionsTests {
         conditions.apply(.screenUnlocked)
         #expect(conditions.isPaused)
         conditions.apply(.occlusionChanged(isVisible: true))
-        #expect(conditions.isPaused == false)
+        #expect(!conditions.isPaused)
     }
 
     // macOS sends `screenIsLocked` more than once in some flows (lock, then
@@ -3437,7 +3458,7 @@ struct PauseConditionsTests {
         conditions.apply(.screenLocked)
         conditions.apply(.screenLocked)
         conditions.apply(.screenUnlocked)
-        #expect(conditions.isPaused == false)
+        #expect(!conditions.isPaused)
     }
 }
 ```
@@ -3949,7 +3970,7 @@ struct MenuModelTests {
                                               previousClose: 68.4, currency: "GBp")])
         let row = try #require(titles(built).first)
         #expect(row.contains("GBp"))
-        #expect(row.contains("GBP") == false)
+        #expect(!row.contains("GBP"))
     }
 
     @Test("a dead symbol keeps its row and shows the placeholder")
@@ -4057,10 +4078,15 @@ struct MenuModelTests {
             if case .separator = item { return true }
             return false
         }
-        #expect(isSeparator.first == false)
-        #expect(isSeparator.last == false)
+        // `first`/`last` are `Bool?`, so `!` will not apply and `== false`
+        // is the swallowed shape. Hoist, defaulting to `true` so an empty
+        // menu — itself a bug — fails here rather than passing vacuously.
+        let opensWithSeparator = isSeparator.first ?? true
+        let endsWithSeparator = isSeparator.last ?? true
+        #expect(!opensWithSeparator)
+        #expect(!endsWithSeparator)
         let doubled = zip(isSeparator, isSeparator.dropFirst()).contains { $0 && $1 }
-        #expect(doubled == false)
+        #expect(!doubled)
     }
 }
 ```
@@ -4650,8 +4676,8 @@ struct ColorSchemeTests {
 
     @Test("a fresh strip is not dimmed")
     func freshIsNotDim() {
-        let fresh = color(.label, .monochrome, stale: false) == NSColor.tertiaryLabelColor
-        #expect(fresh == false)
+        let dimmed = color(.label, .monochrome, stale: false) == NSColor.tertiaryLabelColor
+        #expect(!dimmed)
     }
 }
 ```
@@ -4903,7 +4929,7 @@ Seven checks. The first four take a symbol that is up and one that is down, so b
 4. With Classic still set, turn on System Settings › Accessibility › Display › **Differentiate Without Color** while the app is running. The colour drains within a second, with no relaunch. Turn it off; it comes back.
 5. Switch System Settings › Appearance between Light and Dark. The strip stays legible through the change. If it goes invisible, `performAsCurrentDrawingAppearance` is not wrapping the `cgColor` call.
 6. Turn on Increase Contrast. The strip gets more opaque rather than less — this is the check R142 is about, and an opacity-based dim would have failed it.
-7. The stale state, which needs no market: turn Wi-Fi off and leave the app running past three cycles. With one or two symbols in the store that is nine minutes; `swift run squigglectl doctor` prints the cycle if you would rather not guess. The **whole** strip fades to a dim grey — symbol, price and delta together — and keeps scrolling. Turn Wi-Fi back on; it comes back to full contrast at the next successful fetch.
+7. The stale state, which needs no market: turn Wi-Fi off and leave the app running past three cycles. With one or two symbols in the store that is nine minutes; `swift run --build-system native squigglectl doctor` prints the cycle if you would rather not guess. The **whole** strip fades to a dim grey — symbol, price and delta together — and keeps scrolling. Turn Wi-Fi back on; it comes back to full contrast at the next successful fetch.
 
 ```bash
 pkill -x Squiggle
@@ -4918,6 +4944,2110 @@ swift test --build-system native
 ```bash
 git add Sources/Squiggle/ColorScheme.swift Sources/Squiggle/TickerRunner.swift Sources/Squiggle/StatusItemController.swift Tests/SquiggleTests/ColorSchemeTests.swift Tests/SquiggleTests/TickerRunnerTests.swift
 git commit -m "feat: colour the deltas, and dim the strip when it goes stale"
+```
+
+---
+
+## Task 13: Settings
+
+Spec build-order step 7: "Width slider, speed slider, refresh interval, row count, colour schemes, launch at login." Everything but the last one, which is Task 14 — `SMAppService` registration has its own failure modes and its own verification (log out, log back in, watch for the status item), and bolting it onto a task that is otherwise pure AppKit layout would give a reviewer one gate for two unrelated risks.
+
+R133 settles the mechanism: an `NSWindow` built in code. No xib, no storyboard, no SwiftUI. Seven controls do not justify a second UI framework in a menu bar utility, and a storyboard is a file no test can read.
+
+Every control applies immediately. There is no OK and no Cancel, because spec §4.1 requires the effective-interval line to update "live beside the choice", and a window that previews one setting live while queueing the other six behind a button would be lying about which of them had taken effect.
+
+**Files:**
+- Create: `Sources/Squiggle/SettingsForm.swift`
+- Create: `Sources/Squiggle/SettingsWindow.swift`
+- Modify: `Sources/TickerCore/Store.swift`
+- Modify: `Sources/Squiggle/ErrorText.swift`
+- Modify: `Sources/Squiggle/MenuModel.swift`
+- Modify: `Sources/Squiggle/StatusItemController.swift`
+- Test: `Tests/SquiggleTests/SettingsFormTests.swift`
+- Test: `Tests/SquiggleTests/MenuModelTests.swift`
+
+**Interfaces:**
+- Consumes: `Settings`, `RateConstants.refreshIntervalChoices`, `RefreshPolicy.cycleInterval`, `Diagnosis.pacerThrottlesSettings` (TickerCore); `ErrorText` (Task 4); `MenuCommand` (Task 11); `TickerRunner.setUserInterval` (Task 6).
+- Produces:
+  - `Settings.speedRange`, `Settings.widthRange`, `Settings.rowChoices` — the bounds, named
+  - `struct Choice<Value: Equatable>` with `values`, `titles`, `fallback`, `func index(of:) -> Int`, `func value(at:) -> Value`
+  - `enum SettingsForm` with `static let rows/interval/scheme/motion: Choice<…>`
+  - `@MainActor final class SettingsWindowController: NSWindowController` with `init(settings:onChange:)` and `func apply(_ settings: Settings)`
+  - `MenuCommand.settings`
+  - `ErrorText.settingsTitle`, `.rowTitles`, `.intervalTitles`, `.schemeTitles`, `.motionTitles`, the six field labels, and `ErrorText.effectiveInterval(userIntervalSeconds:watchlistCount:)`
+
+### R143 — a slider's bounds are the decoder's clamps, named once
+
+`Store.init(from:)` clamps `scrollPointsPerSecond` to `4...200` and `maxVisibleWidth` to `60...1200`, as literals. A slider built to any other range is a setting that appears to work and then silently reverts: drag the width to 1,400, the strip widens, quit, relaunch, and the decoder hands back 1,200 with nothing anywhere reporting that it moved.
+
+So the bounds get names on `Settings` and the decoder uses them, and the window's sliders take their `minValue` and `maxValue` from the same two properties. This is the `Formatting.change` fix from Task 11 in a different costume — one rule, two call sites, and the failure mode of letting them drift is a user-visible lie.
+
+`rowChoices` joins them for the same reason: `rows` is clamped to 1-or-2 on decode, and a segmented control with a third segment would be a control that cannot be used.
+
+### R144 — the effective-interval line is computed, and the spec's example is stale
+
+Spec §4.1 requires Settings to display the honoured cadence "live beside the choice", and gives an example: "Every 1 minute (10 min with 20 symbols)".
+
+Take the requirement and not the number. That example was written when the cycle floored only at `n × 30s`, which is 600 seconds at twenty symbols. `RefreshPolicy.budgetFloor` landed afterwards and floors the same cycle at `20 × 72 = 1,440` seconds, and `cycleInterval`'s own doc comment now says so in as many words: "a 20-symbol watchlist needs ten minutes per pass whatever the user chose, and the budget floor means it needs twenty-four." The spec's parenthetical is the shape of the sentence, not a value to hard-code — and a hard-coded "10 min" would be this codebase's signature defect written deliberately.
+
+So the window calls `RefreshPolicy.cycleInterval` and `ErrorText` phrases the result. Two further details:
+
+- The parenthetical appears **only when the floor actually binds**, and `Diagnosis.pacerThrottlesSettings` is the existing function that answers exactly that question. Asking it rather than comparing two numbers here keeps the app and `squigglectl doctor` incapable of disagreeing about whether a user is throttled.
+- The number is computed against `.regular` with Low Power Mode off — the same pair `pacerThrottlesSettings` uses, for the same reason it documents: the quiet multiplier scales the cycle without the user having changed anything, and a label that read "24 min" in the session and "72 min" after hours would look like a bug in the control the user was touching.
+
+- [ ] **Step 1: Write the failing form tests**
+
+`Tests/SquiggleTests/SettingsFormTests.swift`:
+
+```swift
+import Foundation
+import TickerCore
+import Testing
+@testable import Squiggle
+
+@Suite("Settings form")
+struct SettingsFormTests {
+
+    // MARK: - Choice
+
+    // The whole point of this type: an off-by-one in a segmented control
+    // silently swaps two schemes, and nothing else in the app would notice.
+    // One round-trip test covers all four controls because there is one
+    // mapping.
+    @Test("every offered value survives a round trip through its index")
+    func valuesRoundTrip() {
+        for (index, value) in SettingsForm.interval.values.enumerated() {
+            #expect(SettingsForm.interval.index(of: value) == index)
+            #expect(SettingsForm.interval.value(at: index) == value)
+        }
+        for (index, value) in SettingsForm.scheme.values.enumerated() {
+            #expect(SettingsForm.scheme.index(of: value) == index)
+        }
+        for (index, value) in SettingsForm.motion.values.enumerated() {
+            #expect(SettingsForm.motion.index(of: value) == index)
+        }
+        for (index, value) in SettingsForm.rows.values.enumerated() {
+            #expect(SettingsForm.rows.index(of: value) == index)
+        }
+    }
+
+    @Test("a value that is not offered selects the fallback's row")
+    func anUnknownValueLandsOnTheFallback() {
+        // The hand-edited-file case. `Settings` carries an unknown scheme
+        // through verbatim (R119), so the window has to be able to show one.
+        let index = SettingsForm.scheme.index(of: "puce")
+        #expect(index == SettingsForm.scheme.index(of: SettingsForm.scheme.fallback))
+    }
+
+    @Test("an index off the end yields the fallback rather than trapping")
+    func anImpossibleIndexIsSurvivable() {
+        #expect(SettingsForm.rows.value(at: 99) == SettingsForm.rows.fallback)
+        #expect(SettingsForm.rows.value(at: -1) == SettingsForm.rows.fallback)
+    }
+
+    // A control whose titles and values have drifted apart shows the wrong
+    // label on the right value, which is worse than either alone.
+    @Test("every control has exactly as many titles as values")
+    func titlesAndValuesAgree() {
+        #expect(SettingsForm.rows.values.count == SettingsForm.rows.titles.count)
+        #expect(SettingsForm.interval.values.count == SettingsForm.interval.titles.count)
+        #expect(SettingsForm.scheme.values.count == SettingsForm.scheme.titles.count)
+        #expect(SettingsForm.motion.values.count == SettingsForm.motion.titles.count)
+    }
+
+    @Test("every fallback is one of the values it falls back to")
+    func theFallbacksAreReachable() {
+        #expect(SettingsForm.rows.values.contains(SettingsForm.rows.fallback))
+        #expect(SettingsForm.interval.values.contains(SettingsForm.interval.fallback))
+        #expect(SettingsForm.scheme.values.contains(SettingsForm.scheme.fallback))
+        #expect(SettingsForm.motion.values.contains(SettingsForm.motion.fallback))
+    }
+
+    // Spec §4.1 names the four; R119 and R120 name the vocabularies. If any
+    // of these drift the control offers something the app cannot honour.
+    @Test("the offered values are the ones the spec and the rulings name")
+    func theMenusAreTheSpecs() {
+        #expect(SettingsForm.interval.values == RateConstants.refreshIntervalChoices)
+        #expect(SettingsForm.rows.values == [1, 2])
+        #expect(SettingsForm.scheme.values == ["monochrome", "classic", "accessible"])
+        #expect(SettingsForm.motion.values == ["scroll", "step"])
+    }
+
+    // R143: a slider that can reach a value the decoder clamps is a setting
+    // that silently reverts on the next launch.
+    @Test("the sliders cannot reach a value the decoder would clamp")
+    func theSliderBoundsAreTheDecodersBounds() {
+        var settings = Settings()
+        settings.scrollPointsPerSecond = Settings.speedRange.upperBound
+        settings.maxVisibleWidth = Settings.widthRange.upperBound
+        let widest = try? roundTrip(settings)
+        #expect(widest?.scrollPointsPerSecond == Settings.speedRange.upperBound)
+        #expect(widest?.maxVisibleWidth == Settings.widthRange.upperBound)
+
+        settings.scrollPointsPerSecond = Settings.speedRange.lowerBound
+        settings.maxVisibleWidth = Settings.widthRange.lowerBound
+        let narrowest = try? roundTrip(settings)
+        #expect(narrowest?.scrollPointsPerSecond == Settings.speedRange.lowerBound)
+        #expect(narrowest?.maxVisibleWidth == Settings.widthRange.lowerBound)
+    }
+
+    private func roundTrip(_ settings: Settings) throws -> Settings {
+        let store = Store(schemaVersion: Store.currentSchemaVersion,
+                          symbols: [], settings: settings, cooldownUntilEpoch: nil)
+        let data = try JSONEncoder().encode(store)
+        return try JSONDecoder().decode(Store.self, from: data).settings
+    }
+
+    // MARK: - The effective-interval line
+
+    // R144. Not "10 min": `budgetFloor(20)` is 1,440 seconds.
+    @Test("twenty symbols on the one-minute setting reports twenty-four minutes")
+    func theFloorIsReportedAtItsRealValue() {
+        let line = ErrorText.effectiveInterval(userIntervalSeconds: 60, watchlistCount: 20)
+        #expect(line.contains("24 min"), line)
+    }
+
+    @Test("the parenthetical is absent when the floor does not bind")
+    func anUnthrottledSettingReadsPlainly() {
+        // One symbol at fifteen minutes: 900s beats both the 30s spacing floor
+        // and the 72s budget floor, so the setting is honoured exactly.
+        let line = ErrorText.effectiveInterval(userIntervalSeconds: 900, watchlistCount: 1)
+        #expect(line.contains("(") == false, line)
+    }
+
+    @Test("an empty watchlist is not described as throttled")
+    func nothingToFetchIsNotAFloor() {
+        let line = ErrorText.effectiveInterval(userIntervalSeconds: 60, watchlistCount: 0)
+        #expect(line.contains("(") == false, line)
+    }
+
+    @Test("the line names the setting the user chose, whatever the floor does")
+    func theChosenIntervalIsAlwaysStated() {
+        let line = ErrorText.effectiveInterval(userIntervalSeconds: 60, watchlistCount: 20)
+        #expect(line.hasPrefix(ErrorText.intervalTitles[0]), line)
+    }
+}
+```
+
+- [ ] **Step 2: Run them and watch them fail**
+
+```bash
+swift test --build-system native --filter SettingsFormTests
+```
+
+Expected: compile failure — `cannot find 'SettingsForm' in scope`.
+
+- [ ] **Step 3: Name the bounds in the core**
+
+In `Sources/TickerCore/Store.swift`, add to `Settings` above `init`:
+
+```swift
+    /// The bounds `init(from:)` clamps to, named so that a control cannot be
+    /// built with a different range (R143). A slider that reaches 1,400 points
+    /// is a width the user sets, sees applied, and loses on the next launch,
+    /// with nothing anywhere reporting the reversal.
+    public static let speedRange: ClosedRange<Double> = 4...200
+    public static let widthRange: ClosedRange<Double> = 60...1200
+    /// Spec §5.1 offers one row or two. Anything else is a hand-edited file.
+    public static let rowChoices: [Int] = [1, 2]
+```
+
+Then in `init(from:)`, replace the three clamping lines so they read from these:
+
+```swift
+        let speed = finiteOrDefault(.scrollPointsPerSecond, defaults.scrollPointsPerSecond)
+        scrollPointsPerSecond = min(max(speed, Settings.speedRange.lowerBound),
+                                    Settings.speedRange.upperBound)
+```
+
+```swift
+        let width = finiteOrDefault(.maxVisibleWidth, defaults.maxVisibleWidth)
+        maxVisibleWidth = min(max(width, Settings.widthRange.lowerBound),
+                              Settings.widthRange.upperBound)
+```
+
+and replace the row clamp, which today reads `rows = (rawRows == 2) ? 2 : 1`:
+
+```swift
+        let rawRows = c.lenient(Int.self, .rows, default: defaults.rows)
+        rows = Settings.rowChoices.contains(rawRows) ? rawRows : defaults.rows
+```
+
+That ternary is not just a hard-coded list — it is a hard-coded *answer*. It sends every unrecognised value to 1, which was the default when it was written and stopped being the default when R118 made it 2. A hand-edited `"rows": 3` therefore decodes to a one-row ticker while `Settings()` gives two, and no test in the suite compares those two paths. Reading the list from `rowChoices` and falling back to `defaults.rows` makes both facts come from one place.
+
+- [ ] **Step 4: Write the form**
+
+`Sources/Squiggle/SettingsForm.swift`:
+
+```swift
+import Foundation
+import TickerCore
+
+/// A control that offers a fixed list of values, and the two-way mapping
+/// between the list and the stored setting.
+///
+/// One type for all four fixed-choice controls, because the bug these have is
+/// always the same bug: an index and a list that disagree by one, which shows
+/// the right label on the wrong value and is invisible until someone notices
+/// their ticker is the wrong colour. Four controls sharing one mapping means
+/// one test finds it.
+struct Choice<Value: Equatable> {
+    let values: [Value]
+    let titles: [String]
+    /// Used in both directions when the other side is unreachable: the row to
+    /// select for a stored value that is not offered, and the value to report
+    /// for an index that does not exist.
+    let fallback: Value
+
+    /// The row to select for a stored value. A value this control does not
+    /// offer selects the fallback's row — `Settings` carries an unknown
+    /// `colorScheme` through verbatim (R119), so the window has to be able to
+    /// show a file it does not fully understand without refusing to open.
+    func index(of value: Value) -> Int {
+        values.firstIndex(of: value) ?? values.firstIndex(of: fallback) ?? 0
+    }
+
+    /// The value for a selected row. Total over every `Int`, including the
+    /// `-1` an `NSSegmentedControl` reports when nothing is selected.
+    func value(at index: Int) -> Value {
+        values.indices.contains(index) ? values[index] : fallback
+    }
+}
+
+/// The four fixed-choice controls in the Settings window, as data.
+///
+/// Each one's values come from the type that owns them — the spec's interval
+/// menu from `RateConstants`, the row count from `Settings` — rather than
+/// being listed again here, so that adding a fifth interval widens the popup
+/// without anyone remembering to.
+enum SettingsForm {
+    static let rows = Choice(values: Settings.rowChoices,
+                             titles: ErrorText.rowTitles,
+                             fallback: 2)
+
+    static let interval = Choice(values: RateConstants.refreshIntervalChoices,
+                                 titles: ErrorText.intervalTitles,
+                                 fallback: RateConstants.defaultRefreshInterval)
+
+    // R119's vocabulary. Strings and not `ColorScheme`, because this is the
+    // mapping to what `Settings` stores, and `Settings` stores a string so
+    // that `TickerCore` never learns what a colour is.
+    static let scheme = Choice(values: ["monochrome", "classic", "accessible"],
+                               titles: ErrorText.schemeTitles,
+                               fallback: "monochrome")
+
+    static let motion = Choice(values: ["scroll", "step"],
+                               titles: ErrorText.motionTitles,
+                               fallback: "scroll")
+}
+```
+
+- [ ] **Step 5: Give `ErrorText` the window's words**
+
+R129: `ErrorText` owns every sentence, including the rounding inside one. Add to `Sources/Squiggle/ErrorText.swift`:
+
+```swift
+    // MARK: - Settings
+
+    static let settingsTitle = "Squiggle Settings"
+
+    static let rowsLabel = "Rows"
+    static let intervalLabel = "Refresh"
+    // The spec spells §5.3 "Colour", and so does the rest of this project's
+    // prose. Deliberate, not an oversight.
+    static let schemeLabel = "Colour"
+    static let motionLabel = "Motion"
+    static let widthLabel = "Width"
+    static let speedLabel = "Speed"
+
+    static let rowTitles = ["One", "Two"]
+    /// In the order of `RateConstants.refreshIntervalChoices`. `SettingsFormTests`
+    /// asserts the two have the same length; nothing can assert they mean the
+    /// same thing, so keep them adjacent in any edit.
+    static let intervalTitles = ["Every minute", "Every 3 minutes",
+                                 "Every 5 minutes", "Every 15 minutes"]
+    static let schemeTitles = ["Monochrome", "Classic", "Accessible"]
+    static let motionTitles = ["Scroll", "Step"]
+
+    /// Spec §4.1: the resulting cadence, live beside the choice, "so the floor
+    /// is never a silent override".
+    ///
+    /// The parenthetical appears only when a floor actually binds, and
+    /// `Diagnosis.pacerThrottlesSettings` is asked rather than re-derived —
+    /// it is the same question `squigglectl doctor` reports on, and two
+    /// answers to it would be one too many.
+    static func effectiveInterval(userIntervalSeconds: Double,
+                                  watchlistCount: Int) -> String {
+        let chosen = intervalTitles[SettingsForm.interval.index(of: userIntervalSeconds)]
+        guard Diagnosis.pacerThrottlesSettings(userIntervalSeconds: userIntervalSeconds,
+                                               watchlistCount: watchlistCount) else {
+            return chosen
+        }
+        // R144: `.regular` and Low Power off, matching `pacerThrottlesSettings`
+        // exactly — a number that changed after hours would read as a fault in
+        // whichever control the user had just touched.
+        let cycle = RefreshPolicy.cycleInterval(userIntervalSeconds: userIntervalSeconds,
+                                                watchlistCount: watchlistCount,
+                                                marketState: .regular,
+                                                lowPowerMode: false)
+        let symbols = watchlistCount == 1 ? "1 symbol" : "\(watchlistCount) symbols"
+        return "\(chosen) (\(minutes(cycle)) with \(symbols))"
+    }
+```
+
+`ErrorText` already has the private `minutes(_:)` helper from Task 4; this is its second caller. The file needs `import TickerCore` if it does not already have it.
+
+- [ ] **Step 6: Run them and watch them pass**
+
+```bash
+swift test --build-system native --filter SettingsFormTests
+```
+
+Expected: 11 tests, 0 failures.
+
+- [ ] **Step 7: Build the window**
+
+`Sources/Squiggle/SettingsWindow.swift`:
+
+```swift
+import AppKit
+import TickerCore
+
+/// Spec build-order step 7, minus launch-at-login (Task 14).
+///
+/// Built in code (R133). Seven controls do not justify a second UI framework
+/// in a menu bar utility, and a storyboard is a file no test can read.
+///
+/// Every control applies immediately: there is no OK and no Cancel. Spec §4.1
+/// requires the effective-interval line to update live beside the choice, and
+/// a window that previewed one setting while queueing six others behind a
+/// button would be lying about which of them had taken effect.
+@MainActor
+final class SettingsWindowController: NSWindowController {
+    /// Called with the edited settings after every change. The controller
+    /// re-renders immediately and persists on a short delay — see
+    /// `StatusItemController.settingsChanged`.
+    private let onChange: (Settings) -> Void
+    private var settings: Settings
+
+    private let rowsControl = NSSegmentedControl()
+    private let intervalPopUp = NSPopUpButton()
+    private let schemePopUp = NSPopUpButton()
+    private let motionControl = NSSegmentedControl()
+    private let widthSlider = NSSlider()
+    private let speedSlider = NSSlider()
+    private let effectiveLabel = NSTextField(labelWithString: "")
+    /// The watchlist size the effective-interval line is computed against.
+    /// Set by the controller, because the window does not own the watchlist
+    /// and the number changes under it when Task 15 adds a symbol.
+    var watchlistCount = 0 { didSet { refreshEffectiveLabel() } }
+
+    init(settings: Settings, onChange: @escaping (Settings) -> Void) {
+        self.settings = settings
+        self.onChange = onChange
+
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 380, height: 0),
+            // No `.resizable`: an `NSGridView` of six rows has one correct
+            // size and dragging its corner can only spoil it.
+            styleMask: [.titled, .closable],
+            backing: .buffered,
+            defer: false)
+        window.title = ErrorText.settingsTitle
+        // The window is closed and reopened from the menu, not destroyed —
+        // `NSWindowController` would otherwise release it out from under the
+        // controller that is still holding this object.
+        window.isReleasedWhenClosed = false
+        super.init(window: window)
+        window.contentView = makeContentView()
+        window.center()
+        apply(settings)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("R133: built in code, not a xib") }
+
+    /// Push a settings value into the controls. Called at init and whenever
+    /// something outside the window changes the document.
+    func apply(_ settings: Settings) {
+        self.settings = settings
+        rowsControl.selectedSegment = SettingsForm.rows.index(of: settings.rows)
+        intervalPopUp.selectItem(at:
+            SettingsForm.interval.index(of: settings.refreshIntervalSeconds))
+        schemePopUp.selectItem(at: SettingsForm.scheme.index(of: settings.colorScheme))
+        motionControl.selectedSegment = SettingsForm.motion.index(of: settings.motionMode)
+        widthSlider.doubleValue = settings.maxVisibleWidth
+        speedSlider.doubleValue = settings.scrollPointsPerSecond
+        refreshEffectiveLabel()
+    }
+
+    // MARK: - Layout
+
+    private func makeContentView() -> NSView {
+        rowsControl.segmentCount = SettingsForm.rows.titles.count
+        rowsControl.segmentStyle = .rounded
+        rowsControl.trackingMode = .selectOne
+        for (index, title) in SettingsForm.rows.titles.enumerated() {
+            rowsControl.setLabel(title, forSegment: index)
+        }
+        rowsControl.target = self
+        rowsControl.action = #selector(controlChanged)
+
+        motionControl.segmentCount = SettingsForm.motion.titles.count
+        motionControl.segmentStyle = .rounded
+        motionControl.trackingMode = .selectOne
+        for (index, title) in SettingsForm.motion.titles.enumerated() {
+            motionControl.setLabel(title, forSegment: index)
+        }
+        motionControl.target = self
+        motionControl.action = #selector(controlChanged)
+
+        for (popUp, titles) in [(intervalPopUp, SettingsForm.interval.titles),
+                                (schemePopUp, SettingsForm.scheme.titles)] {
+            popUp.removeAllItems()
+            popUp.addItems(withTitles: titles)
+            popUp.target = self
+            popUp.action = #selector(controlChanged)
+        }
+
+        for (slider, range) in [(widthSlider, Settings.widthRange),
+                                (speedSlider, Settings.speedRange)] {
+            // R143: the decoder's clamps, not numbers typed again here.
+            slider.minValue = range.lowerBound
+            slider.maxValue = range.upperBound
+            // Continuous so the strip previews as the handle moves. The write
+            // to disk is coalesced by the controller, not by this.
+            slider.isContinuous = true
+            slider.target = self
+            slider.action = #selector(controlChanged)
+        }
+
+        effectiveLabel.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        effectiveLabel.textColor = .secondaryLabelColor
+
+        let grid = NSGridView(views: [
+            [label(ErrorText.rowsLabel), rowsControl],
+            [label(ErrorText.intervalLabel), intervalPopUp],
+            [NSGridCell.emptyContentView, effectiveLabel],
+            [label(ErrorText.schemeLabel), schemePopUp],
+            [label(ErrorText.motionLabel), motionControl],
+            [label(ErrorText.widthLabel), widthSlider],
+            [label(ErrorText.speedLabel), speedSlider],
+        ])
+        grid.column(at: 0).xPlacement = .trailing
+        grid.column(at: 1).width = 220
+        grid.rowSpacing = 10
+        grid.columnSpacing = 12
+        grid.translatesAutoresizingMaskIntoConstraints = false
+
+        let container = NSView()
+        container.addSubview(grid)
+        NSLayoutConstraint.activate([
+            grid.topAnchor.constraint(equalTo: container.topAnchor, constant: 20),
+            grid.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 20),
+            container.trailingAnchor.constraint(equalTo: grid.trailingAnchor, constant: 20),
+            container.bottomAnchor.constraint(equalTo: grid.bottomAnchor, constant: 20),
+        ])
+        return container
+    }
+
+    private func label(_ text: String) -> NSTextField {
+        NSTextField(labelWithString: text)
+    }
+
+    // MARK: - Changes
+
+    /// One action for all six controls. Reading every control on every change
+    /// rather than switching on the sender means a control that is wired up
+    /// but forgotten here does nothing visible, instead of writing a stale
+    /// value over a fresh one.
+    @objc private func controlChanged() {
+        settings.rows = SettingsForm.rows.value(at: rowsControl.selectedSegment)
+        settings.refreshIntervalSeconds =
+            SettingsForm.interval.value(at: intervalPopUp.indexOfSelectedItem)
+        settings.colorScheme = SettingsForm.scheme.value(at: schemePopUp.indexOfSelectedItem)
+        settings.motionMode = SettingsForm.motion.value(at: motionControl.selectedSegment)
+        settings.maxVisibleWidth = widthSlider.doubleValue
+        settings.scrollPointsPerSecond = speedSlider.doubleValue
+        refreshEffectiveLabel()
+        onChange(settings)
+    }
+
+    private func refreshEffectiveLabel() {
+        effectiveLabel.stringValue = ErrorText.effectiveInterval(
+            userIntervalSeconds: settings.refreshIntervalSeconds,
+            watchlistCount: watchlistCount)
+    }
+}
+```
+
+- [ ] **Step 8: Add the menu item**
+
+In `Sources/Squiggle/MenuModel.swift`, add the case and its title:
+
+```swift
+    case settings
+```
+
+```swift
+        case .settings: return ErrorText.settings
+```
+
+and in `build`, between the two existing commands:
+
+```swift
+        items.append(.command(.refreshNow))
+        items.append(.command(.settings))
+```
+
+In `Tests/SquiggleTests/MenuModelTests.swift`, update the one assertion:
+
+```swift
+        #expect(commands == [.refreshNow, .settings, .quit])
+```
+
+and add to `commandTitlesComeFromOnePlace`:
+
+```swift
+        #expect(MenuCommand.settings.title == ErrorText.settings)
+```
+
+- [ ] **Step 9: Open it from the controller**
+
+In `Sources/Squiggle/StatusItemController.swift`:
+
+```swift
+    private var settingsWindow: SettingsWindowController?
+    private var persistTimer: Timer?
+```
+
+Add the selector arm — the `switch` in `selector(for:)` is exhaustive, so it will not build until this is here, which is the point of R130's no-`default:` rule applied to commands:
+
+```swift
+        case .settings: return #selector(openSettings)
+```
+
+```swift
+    @objc private func openSettings() {
+        let controller = settingsWindow ?? SettingsWindowController(
+            settings: document.settings,
+            onChange: { [weak self] edited in self?.settingsChanged(edited) })
+        settingsWindow = controller
+        controller.watchlistCount = document.symbols.count
+        controller.apply(document.settings)
+        // An `LSUIElement` app is not in the Dock and is not activated by a
+        // menu click, so `makeKeyAndOrderFront` alone puts the window behind
+        // whatever the user was working in. This is the one place Squiggle
+        // asks to come forward, and it is in direct response to a click.
+        NSApp.activate(ignoringOtherApps: true)
+        controller.showWindow(nil)
+    }
+
+    private func settingsChanged(_ edited: Settings) {
+        document.settings = edited
+        // The interval is the one setting the engine holds a copy of.
+        runner.setUserInterval(edited.refreshIntervalSeconds)
+        render()
+        schedulePersist()
+    }
+
+    /// A continuous slider fires its action on every pixel of a drag. The JSON
+    /// file is the whole of this app's persistence (spec §6) and rewriting it
+    /// forty times a second for a number the user is still choosing is a lot
+    /// of disk for no benefit — so the write is coalesced to one per gesture.
+    /// Half a second, and `stop()` flushes, so the only way to lose an edit is
+    /// to kill the process mid-drag.
+    private func schedulePersist() {
+        persistTimer?.invalidate()
+        let timer = Timer(timeInterval: 0.5, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated { self?.persist() }
+        }
+        persistTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
+    }
+```
+
+In `stop()`, before the other teardown:
+
+```swift
+        if persistTimer != nil {
+            persistTimer?.invalidate()
+            persistTimer = nil
+            // An edit made in the last half-second is still only in memory.
+            persist()
+        }
+```
+
+- [ ] **Step 10: Drive every control by hand**
+
+```bash
+scripts/package-app.sh && open build/Squiggle.app
+```
+
+Open the menu, choose *Settings…*. The window comes to the front — if it opens behind your editor, `NSApp.activate` is missing.
+
+Then, in order:
+
+1. **Rows** — One, then Two. The strip switches between one 13pt row and two 10pt rows as you click, with no relaunch.
+2. **Refresh** — step through all four. The grey line underneath changes with each. With one or two symbols it reads plainly; add symbols until it reads *Every minute (24 min with 20 symbols)* at the one-minute setting. It must say **24**, not 10 — that is R144, and a 10 means the number was copied from the spec instead of computed.
+3. **Colour** — the three schemes, live, exactly as Task 12's step 8 checked them.
+4. **Motion** — Scroll and Step.
+5. **Width** — drag the slider. The status item's width follows the handle. Release it, wait a second, and `cat ~/Library/Application\ Support/Squiggle/squiggle.json` shows the new value once — not once per pixel.
+6. **Speed** — drag it. The marquee speeds up and slows under the handle; at the far left it is slow but never stopped.
+7. Close the window, reopen it. Every control shows what you last set. Quit and relaunch: the same, out of the file this time.
+
+The reversion check R143 exists for:
+
+```bash
+pkill -x Squiggle
+```
+
+Drag Width fully right, quit the app, relaunch, and open Settings. The handle is still fully right. If it has jumped back a little, the slider's range is wider than the decoder's clamp.
+
+- [ ] **Step 11: Run the whole suite and commit**
+
+```bash
+swift test --build-system native
+```
+
+```bash
+git add Sources/Squiggle/SettingsForm.swift Sources/Squiggle/SettingsWindow.swift Sources/Squiggle/ErrorText.swift Sources/Squiggle/MenuModel.swift Sources/Squiggle/StatusItemController.swift Sources/TickerCore/Store.swift Tests/SquiggleTests/SettingsFormTests.swift Tests/SquiggleTests/MenuModelTests.swift
+git commit -m "feat: a settings window that reports the cadence it will actually keep"
+```
+
+---
+
+## Task 14: Launch at login
+
+The last control in build-order step 7, and the only one whose value this app does not own.
+
+**Files:**
+- Create: `Sources/Squiggle/LaunchAtLogin.swift`
+- Modify: `Sources/TickerCore/Store.swift`
+- Modify: `Tests/TickerCoreTests/WatchlistStoreTests.swift`
+- Modify: `Sources/Squiggle/ErrorText.swift`
+- Modify: `Sources/Squiggle/SettingsWindow.swift`
+- Test: `Tests/SquiggleTests/LaunchAtLoginTests.swift`
+
+**Interfaces:**
+- Consumes: `SettingsWindowController` (Task 13); `ErrorText` (Task 4); the bundle from Task 7.
+- Produces:
+  - `enum LoginItemState: Equatable, Sendable { case on, off, needsApproval, unavailable }` with `init(status: SMAppService.Status)`
+  - `enum LoginItemAction: Equatable { case register, unregister, openSystemSettings, nothing }`
+  - `struct LaunchAtLogin` with `read: () -> LoginItemState`, `apply: (LoginItemAction) -> LoginItemState`, `static let system`, `static func action(desired: Bool, current: LoginItemState) -> LoginItemAction`
+  - `ErrorText.launchAtLoginLabel`, `.openLoginItems`, `.loginItemNote(for:)`
+  - `SettingsWindowController.init(settings:launchAtLogin:onChange:)` — one parameter added
+
+### R145 — `Settings.launchAtLogin` is deleted, not left unwired
+
+Spec §6: launch-at-login "uses `SMAppService`, whose state is owned by the system and read back, not mirrored." `Settings` ships a `launchAtLogin: Bool` that is written to `squiggle.json` and read by nothing.
+
+Leaving it there and simply not reading it is the worse option, because the field is an invitation. It is `Codable`, it is named exactly right, and the next person to touch this window — or this task's implementer on a tired afternoon — will bind the checkbox to it, which works perfectly until the user turns the login item off in System Settings and Squiggle's checkbox goes on claiming it is enabled. The system can change this value without telling the app; a persisted copy is a cache that is never invalidated.
+
+Deleting it is not free, and the cost is worth stating because the implementer will hit it: `launchAtLogin` is the **witness field** in `aWrongTypeInAnySettingCostsThatSettingAndNothingElse`. That test writes one bad setting plus one good one and compares the whole `Settings` value, because without the good one it cannot tell per-field leniency from the container-level leniency wrapping it. Removing the field removes the witness. Use `motionMode` instead — it is orthogonal to every field the table tests, which `colorScheme` is not.
+
+### R146 — the checkbox reports, and re-reports
+
+The control's value is `SMAppService.mainApp.status`, read fresh every time the window becomes key. Not cached in a property, not remembered from what the user clicked.
+
+There is no notification when someone flips Squiggle's switch in System Settings › General › Login Items, so the only honest options are polling and reading on focus. Reading on focus costs one call at the moment the user is looking at the control, and the gap it leaves — the window is already frontmost and they change it in System Settings at the same time — leaves a stale checkbox for as long as it takes to click away and back.
+
+`.requiresApproval` gets its own sentence and its own button rather than being folded into "off". The two states differ in what fixes them: "off" is fixed by clicking the checkbox, and "registered but switched off by the user" is not fixable from inside this app at all — `register()` on an already-registered service does nothing an approval-blocked item needs. A checkbox that silently does nothing when clicked is the specific failure this split prevents.
+
+### R147 — `@unknown default` here is not the banned `default:`
+
+The project rule is no `default:` in a switch over one of this project's own enums, because the compiler should be the exhaustiveness checker when a case is added. `SMAppService.Status` is not ours and is not frozen: Swift *requires* an `@unknown default` arm, and it means the opposite of the banned one — every known case still has to be listed, and the arm catches only values from a future SDK. It is written once, in `LoginItemState.init(status:)`, and maps to `.unavailable`, which is the arm that disables the control rather than guessing.
+
+- [ ] **Step 1: Write the failing tests**
+
+`Tests/SquiggleTests/LaunchAtLoginTests.swift`:
+
+```swift
+import ServiceManagement
+import Testing
+@testable import Squiggle
+
+@Suite("Launch at login")
+struct LaunchAtLoginTests {
+
+    @Test("every status the framework defines maps to a state")
+    func statusesMap() {
+        #expect(LoginItemState(status: .enabled) == .on)
+        #expect(LoginItemState(status: .notRegistered) == .off)
+        #expect(LoginItemState(status: .requiresApproval) == .needsApproval)
+        // No bundle — `swift run`, or a test process. Not an error: the
+        // control is simply not operable here.
+        #expect(LoginItemState(status: .notFound) == .unavailable)
+    }
+
+    // R146: the two off-ish states differ in what fixes them, and the
+    // difference is the whole reason they are separate cases.
+    @Test("wanting it on registers when it is off and opens Settings when it is blocked")
+    func turningItOn() {
+        #expect(LaunchAtLogin.action(desired: true, current: .off) == .register)
+        #expect(LaunchAtLogin.action(desired: true, current: .needsApproval)
+                == .openSystemSettings)
+    }
+
+    @Test("wanting it off unregisters from either registered state")
+    func turningItOff() {
+        #expect(LaunchAtLogin.action(desired: false, current: .on) == .unregister)
+        // Registered but switched off by the user: unchecking the box should
+        // still remove the pending item, not leave it lying in Login Items.
+        #expect(LaunchAtLogin.action(desired: false, current: .needsApproval) == .unregister)
+    }
+
+    // `register()` throws when the service is already registered, so asking
+    // for what is already true has to be a no-op rather than a call.
+    @Test("asking for the state it is already in does nothing")
+    func idempotence() {
+        #expect(LaunchAtLogin.action(desired: true, current: .on) == .nothing)
+        #expect(LaunchAtLogin.action(desired: false, current: .off) == .nothing)
+    }
+
+    @Test("nothing is attempted when there is no bundle to register")
+    func unavailableIsInert() {
+        #expect(LaunchAtLogin.action(desired: true, current: .unavailable) == .nothing)
+        #expect(LaunchAtLogin.action(desired: false, current: .unavailable) == .nothing)
+    }
+
+    // The checkbox shows what the system will actually do at the next login.
+    // `.needsApproval` means it will not launch, so the box is not ticked —
+    // the note and the button are what explain the difference.
+    @Test("only the enabled state ticks the box")
+    func theBoxFollowsTheSystem() {
+        #expect(LoginItemState.on.isOn)
+        #expect(!LoginItemState.off.isOn)
+        #expect(!LoginItemState.needsApproval.isOn)
+        #expect(!LoginItemState.unavailable.isOn)
+    }
+
+    @Test("the control is operable in every state but the one with no bundle")
+    func onlyAMissingBundleDisablesIt() {
+        #expect(LoginItemState.on.isEnabled)
+        #expect(LoginItemState.off.isEnabled)
+        #expect(LoginItemState.needsApproval.isEnabled)
+        #expect(!LoginItemState.unavailable.isEnabled)
+    }
+
+    // R146: a state whose fix lives outside this app has to say so.
+    @Test("the states that need explaining carry a sentence, and the plain ones do not")
+    func onlyTheConfusingStatesExplainThemselves() {
+        #expect(ErrorText.loginItemNote(for: .on) == nil)
+        #expect(ErrorText.loginItemNote(for: .off) == nil)
+        #expect(ErrorText.loginItemNote(for: .needsApproval) != nil)
+        #expect(ErrorText.loginItemNote(for: .unavailable) != nil)
+    }
+
+    @Test("the button appears exactly where clicking the box cannot help")
+    func theButtonIsWhereTheAppIsPowerless() {
+        #expect(LoginItemState.needsApproval.showsSystemSettingsButton)
+        #expect(!LoginItemState.on.showsSystemSettingsButton)
+        #expect(!LoginItemState.off.showsSystemSettingsButton)
+        #expect(!LoginItemState.unavailable.showsSystemSettingsButton)
+    }
+}
+```
+
+- [ ] **Step 2: Run them and watch them fail**
+
+```bash
+swift test --build-system native --filter LaunchAtLoginTests
+```
+
+Expected: compile failure — `cannot find 'LoginItemState' in scope`.
+
+- [ ] **Step 3: Write the type**
+
+`Sources/Squiggle/LaunchAtLogin.swift`:
+
+```swift
+import AppKit
+import ServiceManagement
+
+/// What the system will do at the next login, as this app is allowed to see it.
+///
+/// Four states and not a `Bool`, because two of them are not "off": one is
+/// "registered, and the user has switched it off in System Settings", which
+/// this app cannot change, and one is "there is no bundle to register", which
+/// is what `swift run` gives you.
+enum LoginItemState: Equatable, Sendable {
+    case on
+    case off
+    /// Registered, but switched off by the user in System Settings. It will
+    /// not launch, and no API here can change that.
+    case needsApproval
+    /// No bundle — running from `.build`, or a test process.
+    case unavailable
+
+    /// R147: `SMAppService.Status` is an imported, non-frozen enum, so Swift
+    /// requires the `@unknown default`. It is the opposite of the `default:`
+    /// this project bans: every known case is still listed by name, and this
+    /// arm catches only values from an SDK that does not exist yet — for which
+    /// "disable the control" is the honest answer.
+    init(status: SMAppService.Status) {
+        switch status {
+        case .enabled: self = .on
+        case .notRegistered: self = .off
+        case .requiresApproval: self = .needsApproval
+        case .notFound: self = .unavailable
+        @unknown default: self = .unavailable
+        }
+    }
+
+    /// Ticked only when the app will actually launch. See R146.
+    var isOn: Bool { self == .on }
+
+    var isEnabled: Bool { self != .unavailable }
+
+    var showsSystemSettingsButton: Bool { self == .needsApproval }
+}
+
+enum LoginItemAction: Equatable {
+    case register
+    case unregister
+    case openSystemSettings
+    case nothing
+}
+
+/// The seam between the window and `SMAppService`.
+///
+/// A struct of closures rather than a protocol: there is exactly one real
+/// implementation and the tests do not need a fake — every decision worth
+/// testing is in `action(desired:current:)`, which is pure. This exists so
+/// that the window never touches `SMAppService` directly, which keeps the
+/// registration calls in one file next to the reasons they can fail.
+struct LaunchAtLogin {
+    var read: () -> LoginItemState
+    /// Performs the action and returns the state afterwards, read back from
+    /// the system rather than assumed from what was asked (spec §6).
+    var apply: (LoginItemAction) -> LoginItemState
+
+    static let system = LaunchAtLogin(
+        read: { LoginItemState(status: SMAppService.mainApp.status) },
+        apply: { action in
+            switch action {
+            case .register:
+                // Throwing here is not exceptional: an unsigned bundle, a
+                // translocated copy running from a quarantined download, or a
+                // daemon that is already registered all land here. There is no
+                // alert to show (spec §7 allows none), and the state read back
+                // below is what the user sees — an unchanged checkbox, which
+                // is the truth.
+                try? SMAppService.mainApp.register()
+            case .unregister:
+                try? SMAppService.mainApp.unregister()
+            case .openSystemSettings:
+                SMAppService.openSystemSettingsLoginItems()
+            case .nothing:
+                break
+            }
+            return LoginItemState(status: SMAppService.mainApp.status)
+        })
+
+    /// What clicking the checkbox should do, given what the system currently
+    /// says. Pure, and the only place the four states turn into calls.
+    static func action(desired: Bool, current: LoginItemState) -> LoginItemAction {
+        switch current {
+        case .unavailable:
+            return .nothing
+        case .on:
+            return desired ? .nothing : .unregister
+        case .off:
+            return desired ? .register : .nothing
+        case .needsApproval:
+            // `register()` on an already-registered service throws, and would
+            // not clear the user's own switch even if it did not. The only
+            // thing that helps is showing them where the switch is.
+            return desired ? .openSystemSettings : .unregister
+        }
+    }
+}
+```
+
+- [ ] **Step 4: Add the words**
+
+In `Sources/Squiggle/ErrorText.swift`, below the Settings block from Task 13:
+
+```swift
+    static let launchAtLoginLabel = "Open at Login"
+    static let openLoginItems = "Open Login Items…"
+
+    /// `nil` for the two states a checkbox already explains. The other two
+    /// need a sentence because their fix is not in this window (R146).
+    static func loginItemNote(for state: LoginItemState) -> String? {
+        switch state {
+        case .on, .off:
+            return nil
+        case .needsApproval:
+            return "Turned off in System Settings."
+        case .unavailable:
+            return "Available when Squiggle is running from an app bundle."
+        }
+    }
+```
+
+- [ ] **Step 5: Run them and watch them pass**
+
+```bash
+swift test --build-system native --filter LaunchAtLoginTests
+```
+
+Expected: 9 tests, 0 failures.
+
+- [ ] **Step 6: Take the field out of the store**
+
+In `Sources/TickerCore/Store.swift`, delete all four lines that mention `launchAtLogin` — the stored property, the `init` parameter, the assignment, and the `lenient` decode. `CodingKeys` is synthesised, so the key goes with the property.
+
+An existing `squiggle.json` keeps working untouched: `init(from:)` reads named keys and ignores everything else, so an old file's `"launchAtLogin": true` is skipped, and the key disappears the next time the file is written. This is the same property R120 relied on to add `motionMode` without bumping the schema version, running in the other direction — so **do not** bump `Store.currentSchemaVersion` here either.
+
+- [ ] **Step 7: Move the witness**
+
+In `Tests/TickerCoreTests/WatchlistStoreTests.swift`, `aWrongTypeInAnySettingCostsThatSettingAndNothingElse` loses its witness field. Replace the table with:
+
+```swift
+    // `motionMode` is the witness: it is orthogonal to every field under test
+    // here, which `colorScheme` is not, and unlike the `launchAtLogin` this
+    // replaces (R145) it is a field the app actually reads.
+    let witness = #""motionMode":"step""#
+    let cases: [(String, String, Settings)] = [
+        (#""refreshIntervalSeconds":"fast""#, witness, Settings(motionMode: "step")),
+        (#""rows":"one""#, witness, Settings(motionMode: "step")),
+        (#""scrollPointsPerSecond":"quick""#, witness, Settings(motionMode: "step")),
+        (#""colorScheme":7"#, witness, Settings(motionMode: "step")),
+        (#""maxVisibleWidth":"wide""#, witness, Settings(motionMode: "step")),
+        // `motionMode` is the one under test here, so something else
+        // witnesses for it.
+        (#""motionMode":7"#, #""colorScheme":"classic""#, Settings(colorScheme: "classic")),
+    ]
+```
+
+The comment above the table explaining what a witness is for stays exactly as it is — it is still true, and it is the reason this table cannot simply drop a column.
+
+Then fix the two remaining constructions that name the field, at roughly `WatchlistStoreTests.swift:33` and `:186`: delete `launchAtLogin: true` from both argument lists. Both are round-trip tests where the field was only ever a non-default value to carry; `motionMode: "step"` does the same job:
+
+```bash
+grep -rn "launchAtLogin" Sources/ Tests/ ; echo "(empty is the goal)"
+```
+
+- [ ] **Step 8: Run the whole suite**
+
+```bash
+swift test --build-system native
+```
+
+Expected: PASS. A failure in `SettingsWindow` or `StatusItemController` means a positional `Settings(...)` construction, which is the hazard Task 1 flagged for the same reason — read every hit of `grep -rn "Settings(" Sources/ Tests/` rather than trusting the compiler, since a call passing only leading arguments still type-checks.
+
+- [ ] **Step 9: Put the row in the window**
+
+In `Sources/Squiggle/SettingsWindow.swift`, add the stored properties:
+
+```swift
+    private let launchAtLogin: LaunchAtLogin
+    private let loginCheckbox = NSButton(checkboxWithTitle: ErrorText.launchAtLoginLabel,
+                                         target: nil, action: nil)
+    private let loginNote = NSTextField(labelWithString: "")
+    private let loginSettingsButton = NSButton(title: ErrorText.openLoginItems,
+                                               target: nil, action: nil)
+```
+
+Widen `init` to take it, defaulting to the real one so the tests and any future caller are not forced to supply it:
+
+```swift
+    init(settings: Settings,
+         launchAtLogin: LaunchAtLogin = .system,
+         onChange: @escaping (Settings) -> Void) {
+        self.launchAtLogin = launchAtLogin
+```
+
+In `makeContentView()`, wire the two controls and append the rows:
+
+```swift
+        loginCheckbox.target = self
+        loginCheckbox.action = #selector(loginCheckboxChanged)
+        loginNote.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        loginNote.textColor = .secondaryLabelColor
+        loginSettingsButton.target = self
+        loginSettingsButton.action = #selector(openLoginItems)
+        loginSettingsButton.bezelStyle = .inline
+```
+
+```swift
+            [label(ErrorText.speedLabel), speedSlider],
+            [NSGridCell.emptyContentView, loginCheckbox],
+            [NSGridCell.emptyContentView, loginNote],
+            [NSGridCell.emptyContentView, loginSettingsButton],
+```
+
+and the behaviour:
+
+```swift
+    /// R146: read, never remember. The user can change this in System
+    /// Settings while the window is open and nothing tells us.
+    private func refreshLoginItem() {
+        show(launchAtLogin.read())
+    }
+
+    private func show(_ state: LoginItemState) {
+        loginCheckbox.state = state.isOn ? .on : .off
+        loginCheckbox.isEnabled = state.isEnabled
+        let note = ErrorText.loginItemNote(for: state)
+        loginNote.stringValue = note ?? ""
+        loginNote.isHidden = note == nil
+        loginSettingsButton.isHidden = !state.showsSystemSettingsButton
+    }
+
+    @objc private func loginCheckboxChanged() {
+        // The state is re-read rather than taken from the checkbox, because
+        // the checkbox is a report and this is the moment it is most likely
+        // to be out of date.
+        let current = launchAtLogin.read()
+        let wanted = loginCheckbox.state == .on
+        show(launchAtLogin.apply(LaunchAtLogin.action(desired: wanted, current: current)))
+    }
+
+    @objc private func openLoginItems() {
+        show(launchAtLogin.apply(.openSystemSettings))
+    }
+```
+
+`show(_:)` runs at the end of `apply(_:)` in the same file, so opening the window paints the real state; and in `init`, after `apply(settings)`, add `refreshLoginItem()`.
+
+Finally, re-read on focus. In `init`, after `window.center()`:
+
+```swift
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(windowBecameKey),
+            name: NSWindow.didBecomeKeyNotification, object: window)
+```
+
+```swift
+    @objc private func windowBecameKey() { refreshLoginItem() }
+```
+
+The observer needs no `removeObserver`: the controller outlives the window for the life of the process, and `NotificationCenter` on macOS 11+ releases the registration when the observer deallocates. Filtering on `object: window` matters — without it every window in the app, including the symbol picker Task 15 adds, wakes this handler.
+
+- [ ] **Step 10: Verify it against the real system**
+
+This is the one control that cannot be proven by a test, so it gets the long check. Do it in order.
+
+```bash
+scripts/package-app.sh
+cp -R build/Squiggle.app /Applications/
+open /Applications/Squiggle.app
+```
+
+**Run it from `/Applications`, not from `build/`.** A bundle launched from a quarantined download is path-randomised by App Translocation and registers a login item pointing at a path that will not exist next time — the registration appears to succeed and silently never launches anything.
+
+1. Open Settings. The checkbox is unticked and there is no note — status `.notRegistered`.
+2. Tick it. Open System Settings › General › Login Items. **Squiggle** is listed under "Open at Login".
+3. In System Settings, switch Squiggle **off**. Click back to Squiggle's Settings window. The checkbox is now unticked and the note reads *Turned off in System Settings.* with an *Open Login Items…* button underneath. That is `.requiresApproval`, and it is the state R146 exists for — if the checkbox still shows ticked, `refreshLoginItem()` is not running on focus.
+4. Click the checkbox while it is in that state. System Settings comes forward at the Login Items pane. Nothing else changes, which is correct.
+5. Untick it from Squiggle. The Login Items entry disappears.
+6. Tick it again, then log out and log back in. Squiggle's ticker is in the menu bar without you launching it.
+
+```bash
+swift run --build-system native squigglectl doctor
+```
+
+7. Run the app from the command line instead of the bundle (`swift run --build-system native Squiggle`). The checkbox is greyed out with *Available when Squiggle is running from an app bundle.* — status `.notFound`. This is the state every developer on this project sees, and it must not look like a bug.
+
+Finally, before deleting the bundle, untick the box. An unregistered-but-deleted login item leaves a ghost entry in System Settings that macOS cannot resolve and the user cannot easily remove.
+
+- [ ] **Step 11: Commit**
+
+```bash
+git add Sources/Squiggle/LaunchAtLogin.swift Sources/Squiggle/ErrorText.swift Sources/Squiggle/SettingsWindow.swift Sources/TickerCore/Store.swift Tests/SquiggleTests/LaunchAtLoginTests.swift Tests/TickerCoreTests/WatchlistStoreTests.swift
+git commit -m "feat: launch at login, owned by the system and read back"
+```
+
+---
+
+## Task 15: The symbol picker
+
+Build-order step 8: "Search-only symbol picker, falling back to trying the typed text as a literal symbol when search returns nothing." Task 11 gave the dropdown a *Remove*; this is the other half.
+
+**Files:**
+- Create: `Sources/Squiggle/SymbolPickerModel.swift`
+- Create: `Sources/Squiggle/SymbolPickerWindow.swift`
+- Modify: `Sources/Squiggle/ErrorText.swift`
+- Modify: `Sources/Squiggle/MenuModel.swift`
+- Modify: `Sources/Squiggle/StatusItemController.swift`
+- Modify: `Sources/Squiggle/AppDelegate.swift`
+- Test: `Tests/SquiggleTests/SymbolPickerTests.swift`
+- Test: `Tests/SquiggleTests/MenuModelTests.swift`
+
+**Interfaces:**
+- Consumes: `SearchResult`, `Symbol`, `TickerError`, `RateConstants.maxWatchlistCount`, `RateConstants.maxSearchResultCount` (TickerCore); `YahooClient.searchResults(query:limit:)` (YahooFeed); `ErrorText.message(for:)` (Task 4 — this task drops its `private`); `MenuCommand` (Task 11); `StatusItemController.document` / `persist()` (R139).
+- Produces:
+  - `struct SearchSession` with `mutating func begin() -> Int` and `func accepts(_ generation: Int) -> Bool`
+  - `struct SymbolPickerModel: Equatable` with `Row`, `rows`, `message`, `isFull`, and `static func build(query:results:error:watchlist:)`
+  - `typealias SymbolSearch = @Sendable (String) async throws -> [SearchResult]`
+  - `@MainActor final class SymbolPickerWindowController: NSWindowController` with `init(search:watchlist:onAdd:)` and `func setWatchlist(_:)`
+  - `MenuCommand.addSymbol`
+  - `ErrorText.searchPlaceholder`, `.searchRow(_:)`, `.literalRow(_:)`, `.alreadyWatching`, `.watchlistFull`, `.noMatches`, `.notASymbol`, and `message(for:)` made non-`private`
+  - `ErrorText.addSymbol` is **not** new — Task 4 wrote the whole menu vocabulary in one go, this task finally uses it
+
+### R148 — one search per pause, and the newest answer wins
+
+Two rules, both about a text field that fires on every keystroke.
+
+A search per keystroke turns "AAPL" into four requests against an endpoint that has rate-limited this project six times in one day. The field waits 300ms after the last keystroke before searching.
+
+The second rule is the one that is easy to skip and impossible to see in testing: responses can arrive out of order. Type `AA`, then `AAPL`; if the `AA` request is slower, its results land last and the list fills with matches for a query the user has already finished changing. So every search takes a generation number, and a response is applied only if its generation is still the current one. `SearchSession` is that counter, and it is a separate type with its own tests because the bug it prevents shows up perhaps one time in fifty by hand.
+
+The search itself reaches the window as a closure, `SymbolSearch`, not as a `YahooClient`. That keeps `SymbolPickerModel` testable with no transport at all, and it makes the tests structurally incapable of touching Yahoo — which this project's standing rule requires and which a concrete client in the initialiser would leave to the implementer's discipline.
+
+### R149 — the literal candidate is the typed text, verbatim
+
+Symbols are stored and transmitted exactly as Yahoo spells them: `^GSPC`, `BRK-B`, `VOD.L`, `EURUSD=X`. Never upper-cased, never normalised, never trimmed. That rule holds here with no exception, including the whitespace one an implementer will be tempted to carve out.
+
+The temptation is that a pasted `" AAPL "` would become a symbol with spaces in it, which is certainly dead. It cannot happen. `YahooClient.searchResults(query:limit:)` trims the *query* before searching, so a padded `" AAPL "` searches for `AAPL` and comes back with results — and the literal row only appears when search comes back with **none**. Reaching the literal row at all means the trimmed text already matched nothing, so what remains is not a padded real symbol; it is something the user made up, and the honest thing is to try exactly what they typed.
+
+Verbatim is not the same as unvalidated. `Symbol.init?` is failable, and its rejections are the validation: the empty string, anything over 32 characters, anything carrying whitespace, control characters or the URL-unsafe set, and the bare `.` and `..` — because a symbol is interpolated straight into a request path. So the literal row appears only when the typed text can be a symbol at all, and that judgement is the type's rather than a second opinion written here. Typing a company name in full therefore gets no literal row and a different sentence, `ErrorText.notASymbol`: telling someone to try their text as a symbol and then refusing to add it is worse than saying so in the first place.
+
+Trimming the candidate would also break the case it exists for. The literal fallback is for instruments Yahoo's search index does not surface but its quote endpoint answers — index and FX tickers, mostly — and those are precisely the symbols with punctuation that a "clean it up first" step would eat.
+
+### R150 — a full watchlist refuses; a duplicate is shown and inert
+
+The cap is 20 and `Store.init(from:)` enforces it with `.prefix(RateConstants.maxWatchlistCount)`. So a 21st symbol added here would work, render, persist — and vanish at the next launch, silently, with the store deciding which twenty survived. Refusing the add is the only version of this that does not lie.
+
+A symbol already on the watchlist is shown in the results and marked, not filtered out. Hiding it is indistinguishable from search being broken: the user searches for the symbol they are looking at in their own menu bar and gets an empty list.
+
+Both refusals are states of the list, not alerts. Spec §7 allows zero alerts and zero notifications, and that applies to a picker window as much as to the strip.
+
+- [ ] **Step 1: Write the failing tests**
+
+`Tests/SquiggleTests/SymbolPickerTests.swift`:
+
+```swift
+import Foundation
+import TickerCore
+import Testing
+@testable import Squiggle
+
+@Suite("Symbol picker")
+struct SymbolPickerTests {
+
+    // `Symbol.init?` is failable. Force-unwrapped here and nowhere in the
+    // app: every argument below is a literal this file controls, so a `nil`
+    // is a typo in the test, and a crash names the line.
+    private func result(_ symbol: String, _ name: String = "Some Company",
+                        exchange: String = "NMS", kind: String = "EQUITY") -> SearchResult {
+        SearchResult(symbol: Symbol(symbol)!, name: name, exchange: exchange, kind: kind)
+    }
+
+    // MARK: - SearchSession (R148)
+
+    @Test("a response from the current search is applied")
+    func theCurrentGenerationIsAccepted() {
+        var session = SearchSession()
+        let generation = session.begin()
+        #expect(session.accepts(generation))
+    }
+
+    // The out-of-order case: `AA` is still in flight when `AAPL` starts, and
+    // then answers second. Its results are for a query the user has already
+    // moved past.
+    @Test("a response from a superseded search is dropped")
+    func anOlderGenerationIsRejected() {
+        var session = SearchSession()
+        let stale = session.begin()
+        let current = session.begin()
+        #expect(!session.accepts(stale))
+        #expect(session.accepts(current))
+    }
+
+    // MARK: - Rows
+
+    @Test("results become rows, in the order the search returned them")
+    func resultsAreRows() {
+        let found = [result("AAPL"), result("AAPU")]
+        let model = SymbolPickerModel.build(query: "aap", results: found,
+                                            error: nil, watchlist: [])
+        #expect(model.rows == [.result(found[0], isAdded: false),
+                               .result(found[1], isAdded: false)])
+        #expect(model.message == nil)
+    }
+
+    // R150: shown, marked, and not addable.
+    @Test("a symbol already being watched is listed and flagged")
+    func aDuplicateIsVisibleButMarked() {
+        let found = [result("AAPL")]
+        let model = SymbolPickerModel.build(query: "aapl", results: found,
+                                            error: nil, watchlist: [Symbol("AAPL")!])
+        #expect(model.rows == [.result(found[0], isAdded: true)])
+    }
+
+    // R149. `Symbol` is not upper-cased, not trimmed, not touched.
+    @Test("no matches offers the typed text exactly as typed")
+    func theLiteralFallbackIsVerbatim() {
+        let model = SymbolPickerModel.build(query: "eurusd=x", results: [],
+                                            error: nil, watchlist: [])
+        #expect(model.rows == [.literal(Symbol("eurusd=x")!)])
+    }
+
+    @Test("punctuation in the typed text survives")
+    func theLiteralFallbackKeepsPunctuation() {
+        let carets = SymbolPickerModel.build(query: "^GSPC", results: [],
+                                             error: nil, watchlist: [])
+        #expect(carets.rows == [.literal(Symbol("^GSPC")!)])
+        let dotted = SymbolPickerModel.build(query: "VOD.L", results: [],
+                                             error: nil, watchlist: [])
+        #expect(dotted.rows == [.literal(Symbol("VOD.L")!)])
+    }
+
+    // `Symbol.init?` rejects whitespace, so a company name typed out in full
+    // has no literal to fall back to.
+    @Test("text that cannot be a symbol is not offered as one")
+    func theLiteralFallbackRespectsSymbolValidation() {
+        let model = SymbolPickerModel.build(query: "apple inc", results: [],
+                                            error: nil, watchlist: [])
+        #expect(model.rows.isEmpty)
+        #expect(model.message == ErrorText.notASymbol)
+    }
+
+    @Test("an empty field offers nothing at all")
+    func nothingTypedIsNotASymbol() {
+        let model = SymbolPickerModel.build(query: "", results: [],
+                                            error: nil, watchlist: [])
+        #expect(model.rows.isEmpty)
+        #expect(model.message == nil)
+    }
+
+    // Offline is exactly when a user who knows their symbol should still be
+    // able to add it — the strip renders a dead symbol as `——` and recovers on
+    // its own when the network comes back.
+    @Test("a failed search says so and still offers the literal")
+    func anErrorDoesNotBlockTheFallback() {
+        let model = SymbolPickerModel.build(query: "AAPL", results: [],
+                                            error: .offline, watchlist: [])
+        #expect(model.rows == [.literal(Symbol("AAPL")!)])
+        #expect(model.message == ErrorText.message(for: .offline))
+    }
+
+    @Test("no matches and no error says no matches")
+    func anEmptyResultSetExplainsItself() {
+        let model = SymbolPickerModel.build(query: "zzzz", results: [],
+                                            error: nil, watchlist: [])
+        #expect(model.message == ErrorText.noMatches)
+    }
+
+    // MARK: - The cap (R150)
+
+    @Test("a full watchlist refuses, and says why")
+    func twentyIsTheLimit() {
+        let full = (0..<RateConstants.maxWatchlistCount).map { Symbol("S\($0)")! }
+        let model = SymbolPickerModel.build(query: "aapl", results: [result("AAPL")],
+                                            error: nil, watchlist: full)
+        #expect(model.isFull)
+        #expect(model.message == ErrorText.watchlistFull)
+    }
+
+    @Test("a full watchlist still shows what was searched for")
+    func refusingIsNotHiding() {
+        let full = (0..<RateConstants.maxWatchlistCount).map { Symbol("S\($0)")! }
+        let found = [result("AAPL")]
+        let model = SymbolPickerModel.build(query: "aapl", results: found,
+                                            error: nil, watchlist: full)
+        #expect(model.rows == [.result(found[0], isAdded: false)])
+    }
+
+    @Test("a watchlist below the cap is not full")
+    func nineteenIsFine() {
+        let nearly = (0..<(RateConstants.maxWatchlistCount - 1)).map { Symbol("S\($0)")! }
+        let model = SymbolPickerModel.build(query: "aapl", results: [result("AAPL")],
+                                            error: nil, watchlist: nearly)
+        #expect(!model.isFull)
+        #expect(model.message == nil)
+    }
+}
+```
+
+- [ ] **Step 2: Run them and watch them fail**
+
+```bash
+swift test --build-system native --filter SymbolPickerTests
+```
+
+Expected: compile failure — `cannot find 'SearchSession' in scope`.
+
+- [ ] **Step 3: Write the model**
+
+`Sources/Squiggle/SymbolPickerModel.swift`:
+
+```swift
+import Foundation
+import TickerCore
+
+/// Every search the window issues, so a slow old one cannot overwrite a fast
+/// new one (R148).
+///
+/// Its own type rather than an `Int` on the window, because the rule is worth
+/// a name and the race is worth a test: out-of-order responses reproduce by
+/// hand perhaps one time in fifty, and never on a fast connection.
+struct SearchSession {
+    private var current = 0
+
+    mutating func begin() -> Int {
+        current += 1
+        return current
+    }
+
+    func accepts(_ generation: Int) -> Bool { generation == current }
+}
+
+/// What the picker shows, given what the search returned.
+///
+/// Pure, so the whole of the picker's behaviour can be tested without a
+/// window, a run loop, or a network — which is also why `SymbolPickerWindow`
+/// takes its search as a closure rather than a client.
+struct SymbolPickerModel: Equatable {
+    enum Row: Equatable {
+        case result(SearchResult, isAdded: Bool)
+        /// Spec §9 step 8: the typed text, tried as a symbol. Verbatim (R149).
+        case literal(Symbol)
+    }
+
+    let rows: [Row]
+    /// The one line under the list. `nil` when the list speaks for itself.
+    let message: String?
+    /// The watchlist is at `RateConstants.maxWatchlistCount`; nothing can be
+    /// added until something is removed.
+    let isFull: Bool
+
+    static func build(query: String,
+                      results: [SearchResult],
+                      error: TickerError?,
+                      watchlist: [Symbol]) -> SymbolPickerModel {
+        let full = watchlist.count >= RateConstants.maxWatchlistCount
+
+        // Nothing typed is not a query, is not a symbol, and is not an error.
+        guard !query.isEmpty else {
+            return SymbolPickerModel(rows: [], message: full ? ErrorText.watchlistFull : nil,
+                                     isFull: full)
+        }
+
+        if results.isEmpty {
+            // R149: exactly what was typed. The trimming happened to the
+            // query inside `searchResults`, and reaching here means that
+            // trimmed query matched nothing.
+            //
+            // `Symbol.init?` is failable, and that failure is the whole
+            // validation step: text with a space in it is not offered as a
+            // symbol, because it cannot be one.
+            let candidate = Symbol(query)
+            let rows: [Row] = candidate.map { [Row.literal($0)] } ?? []
+            let message: String?
+            if full {
+                message = ErrorText.watchlistFull
+            } else if let error {
+                // Not "no matches" — the search never ran to completion, and
+                // saying otherwise would send the user hunting for a typo.
+                message = ErrorText.message(for: error)
+            } else {
+                message = candidate == nil ? ErrorText.notASymbol : ErrorText.noMatches
+            }
+            return SymbolPickerModel(rows: rows, message: message, isFull: full)
+        }
+
+        let watched = Set(watchlist)
+        let rows = results.map { Row.result($0, isAdded: watched.contains($0.symbol)) }
+        return SymbolPickerModel(rows: rows,
+                                 message: full ? ErrorText.watchlistFull : nil,
+                                 isFull: full)
+    }
+}
+```
+
+`Symbol` must be `Hashable` for the `Set` — it is; `Store` already keys dictionaries by it in `WatchLoop.Calendars`.
+
+- [ ] **Step 4: Add the words**
+
+First, drop one keyword. `message(for:)` is `private`, and the picker needs exactly the sentence it produces — the error line without the footer's retry clause bolted on. Do **not** reach for `Rendering.diagnosis(_:)` to avoid this: that is `squigglectl`'s wording, it lives in a different target, and spec §7 gives the app one vocabulary file.
+
+```swift
+    static func message(for error: TickerError) -> String {
+```
+
+Then add the picker's own words. `addSymbol` is already there from Task 4 — this is the task that finally uses it.
+
+```swift
+    // MARK: - Symbol picker
+
+    static let searchPlaceholder = "Company or symbol"
+    static let alreadyWatching = "Already watching"
+    static let noMatches = "No matches. You can still try it as a symbol."
+    /// The sibling of `noMatches` for text `Symbol.init?` refuses outright.
+    /// Offering "try it as a symbol" here would be an instruction the Add
+    /// button then declines to carry out.
+    static let notASymbol = "No matches, and that isn't a symbol Yahoo would accept."
+    static let watchlistFull =
+        "Watching \(RateConstants.maxWatchlistCount) symbols — remove one to add another."
+
+    /// `AAPL — Apple Inc. (NASDAQ)`. The exchange is dropped rather than shown
+    /// empty: Yahoo returns a blank one for some instruments and " ()" reads
+    /// as a rendering fault.
+    static func searchRow(_ result: SearchResult) -> String {
+        let head = "\(result.symbol.raw) — \(result.name)"
+        return result.exchange.isEmpty ? head : "\(head) (\(result.exchange))"
+    }
+
+    /// The typed text, quoted so its spacing and punctuation are visible —
+    /// which is the point, since it is about to be used exactly as written.
+    static func literalRow(_ symbol: Symbol) -> String {
+        "Try “\(symbol.raw)” as a symbol"
+    }
+```
+
+- [ ] **Step 5: Run them and watch them pass**
+
+```bash
+swift test --build-system native --filter SymbolPickerTests
+```
+
+Expected: 14 tests, 0 failures.
+
+- [ ] **Step 6: Build the window**
+
+`Sources/Squiggle/SymbolPickerWindow.swift`:
+
+```swift
+import AppKit
+import TickerCore
+
+/// The search seam (R148). A closure, so the picker can be built and tested
+/// with no transport behind it.
+typealias SymbolSearch = @Sendable (String) async throws -> [SearchResult]
+
+/// Search-only, with a literal fallback. Built in code (R133).
+@MainActor
+final class SymbolPickerWindowController: NSWindowController,
+                                          NSTableViewDataSource, NSTableViewDelegate,
+                                          NSTextFieldDelegate {
+    private let search: SymbolSearch
+    private let onAdd: (Symbol) -> Void
+    private var watchlist: [Symbol]
+
+    private var session = SearchSession()
+    private var debounce: Timer?
+    private var model = SymbolPickerModel(rows: [], message: nil, isFull: false)
+
+    private let field = NSTextField()
+    private let table = NSTableView()
+    private let messageLabel = NSTextField(labelWithString: "")
+    private let addButton = NSButton(title: "Add", target: nil, action: nil)
+
+    init(search: @escaping SymbolSearch,
+         watchlist: [Symbol],
+         onAdd: @escaping (Symbol) -> Void) {
+        self.search = search
+        self.watchlist = watchlist
+        self.onAdd = onAdd
+
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 420, height: 320),
+                              styleMask: [.titled, .closable, .resizable],
+                              backing: .buffered, defer: false)
+        window.title = ErrorText.addSymbol
+        window.isReleasedWhenClosed = false
+        super.init(window: window)
+        window.contentView = makeContentView()
+        window.center()
+        render()
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("R133: built in code, not a xib") }
+
+    /// The watchlist changes under this window — Task 11's *Remove* is two
+    /// clicks away in the dropdown — and the cap and the "already watching"
+    /// marks both depend on it.
+    func setWatchlist(_ symbols: [Symbol]) {
+        watchlist = symbols
+        rebuild(results: lastResults, error: lastError)
+    }
+
+    private var lastResults: [SearchResult] = []
+    private var lastError: TickerError?
+
+    // MARK: - Layout
+
+    private func makeContentView() -> NSView {
+        field.placeholderString = ErrorText.searchPlaceholder
+        field.delegate = self
+
+        table.headerView = nil
+        table.rowHeight = 22
+        table.dataSource = self
+        table.delegate = self
+        table.addTableColumn(NSTableColumn(identifier: NSUserInterfaceItemIdentifier("row")))
+        table.target = self
+        table.doubleAction = #selector(addSelected)
+
+        let scroll = NSScrollView()
+        scroll.documentView = table
+        scroll.hasVerticalScroller = true
+        scroll.borderType = .bezelBorder
+
+        messageLabel.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        messageLabel.textColor = .secondaryLabelColor
+        addButton.target = self
+        addButton.action = #selector(addSelected)
+        addButton.keyEquivalent = "\r"
+
+        let footer = NSStackView(views: [messageLabel, NSView(), addButton])
+        footer.orientation = .horizontal
+
+        let stack = NSStackView(views: [field, scroll, footer])
+        stack.orientation = .vertical
+        stack.spacing = 10
+        stack.edgeInsets = NSEdgeInsets(top: 16, left: 16, bottom: 16, right: 16)
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        // Without this the scroll view collapses to its intrinsic height,
+        // which for an empty table is zero.
+        scroll.setContentHuggingPriority(.defaultLow, for: .vertical)
+
+        let container = NSView()
+        container.addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.topAnchor.constraint(equalTo: container.topAnchor),
+            stack.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            stack.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+        ])
+        return container
+    }
+
+    // MARK: - Searching
+
+    func controlTextDidChange(_ notification: Notification) {
+        // R148: one search per pause in typing, not one per keystroke.
+        debounce?.invalidate()
+        let timer = Timer(timeInterval: 0.3, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated { self?.runSearch() }
+        }
+        debounce = timer
+        RunLoop.main.add(timer, forMode: .common)
+    }
+
+    private func runSearch() {
+        let query = field.stringValue
+        guard !query.isEmpty else {
+            rebuild(results: [], error: nil)
+            return
+        }
+        let generation = session.begin()
+        Task { [weak self] in
+            guard let self else { return }
+            var found: [SearchResult] = []
+            var failure: TickerError?
+            do {
+                found = try await self.search(query)
+            } catch let error as TickerError {
+                failure = error
+            } catch {
+                failure = .offline
+            }
+            // R148: the query may have moved on while this was in flight.
+            guard self.session.accepts(generation) else { return }
+            self.rebuild(results: found, error: failure)
+        }
+    }
+
+    private func rebuild(results: [SearchResult], error: TickerError?) {
+        lastResults = results
+        lastError = error
+        model = SymbolPickerModel.build(query: field.stringValue, results: results,
+                                        error: error, watchlist: watchlist)
+        render()
+    }
+
+    private func render() {
+        table.reloadData()
+        messageLabel.stringValue = model.message ?? ""
+        addButton.isEnabled = addableSymbol() != nil
+    }
+
+    /// The symbol the Add button would add, or `nil` when there is nothing to
+    /// add — no selection, the cap is reached, or it is already watched.
+    private func addableSymbol() -> Symbol? {
+        guard !model.isFull else { return nil }
+        guard model.rows.indices.contains(table.selectedRow) else { return nil }
+        switch model.rows[table.selectedRow] {
+        case .result(let found, let isAdded):
+            return isAdded ? nil : found.symbol
+        case .literal(let symbol):
+            return watchlist.contains(symbol) ? nil : symbol
+        }
+    }
+
+    @objc private func addSelected() {
+        guard let symbol = addableSymbol() else { return }
+        onAdd(symbol)
+    }
+
+    // MARK: - Table
+
+    func numberOfRows(in tableView: NSTableView) -> Int { model.rows.count }
+
+    func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?,
+                   row: Int) -> NSView? {
+        let text: String
+        let dimmed: Bool
+        switch model.rows[row] {
+        case .result(let found, let isAdded):
+            text = isAdded ? "\(ErrorText.searchRow(found)) — \(ErrorText.alreadyWatching)"
+                           : ErrorText.searchRow(found)
+            dimmed = isAdded
+        case .literal(let symbol):
+            text = ErrorText.literalRow(symbol)
+            dimmed = false
+        }
+        let label = NSTextField(labelWithString: text)
+        label.lineBreakMode = .byTruncatingTail
+        label.textColor = dimmed ? .tertiaryLabelColor : .labelColor
+        return label
+    }
+
+    func tableViewSelectionDidChange(_ notification: Notification) {
+        addButton.isEnabled = addableSymbol() != nil
+    }
+}
+```
+
+- [ ] **Step 7: Hang it off the menu**
+
+In `Sources/Squiggle/MenuModel.swift`, add the case, its title, and the item:
+
+```swift
+    case addSymbol
+```
+
+```swift
+        case .addSymbol: return ErrorText.addSymbol
+```
+
+```swift
+        items.append(.command(.addSymbol))
+        items.append(.command(.refreshNow))
+```
+
+In `Tests/SquiggleTests/MenuModelTests.swift`:
+
+```swift
+        #expect(commands == [.addSymbol, .refreshNow, .settings, .quit])
+```
+
+```swift
+        #expect(MenuCommand.addSymbol.title == ErrorText.addSymbol)
+```
+
+In `Sources/Squiggle/StatusItemController.swift`, the selector arm and the handler:
+
+```swift
+        case .addSymbol: return #selector(openSymbolPicker)
+```
+
+```swift
+    private var pickerWindow: SymbolPickerWindowController?
+```
+
+```swift
+    @objc private func openSymbolPicker() {
+        let controller = pickerWindow ?? SymbolPickerWindowController(
+            search: search,
+            watchlist: document.symbols,
+            onAdd: { [weak self] symbol in self?.add(symbol) })
+        pickerWindow = controller
+        controller.setWatchlist(document.symbols)
+        NSApp.activate(ignoringOtherApps: true)
+        controller.showWindow(nil)
+    }
+
+    private func add(_ symbol: Symbol) {
+        // The cap is enforced in the picker (R150), and again here, because
+        // this is the method that writes the file and the store would
+        // otherwise truncate at the next launch and pick the survivors itself.
+        guard document.symbols.count < RateConstants.maxWatchlistCount,
+              !document.symbols.contains(symbol) else { return }
+        document.symbols.append(symbol)
+        runner.replaceWatchlist(document.symbols)
+        persist()
+        pickerWindow?.setWatchlist(document.symbols)
+        // A new symbol has no quote yet, so this repaints the strip with its
+        // dead-symbol placeholder immediately rather than leaving a gap until
+        // the next cycle.
+        render()
+        // R140's path: ask for a cycle now so the price arrives in seconds
+        // rather than at the next deadline, which at 20 symbols is 24 minutes.
+        runner.requestImmediateCycle()
+        scheduleStep(after: 0)
+    }
+```
+
+`removeSymbol` (Task 11) gains one line, so the open picker learns about it:
+
+```swift
+        pickerWindow?.setWatchlist(document.symbols)
+```
+
+The controller needs the search closure. Add `private let search: SymbolSearch` and a parameter on `init`, and in `AppDelegate.applicationDidFinishLaunching` build it from the client the runner already uses:
+
+```swift
+        let client = YahooClient()
+        let runner = TickerRunner(symbols: document.symbols,
+                                  userIntervalSeconds: document.settings.refreshIntervalSeconds,
+                                  fetcher: client)
+        let controller = StatusItemController(
+            runner: runner, store: store, storeURL: url,
+            document: document, storeFault: storeFault,
+            search: { try await client.searchResults(query: $0,
+                                                     limit: RateConstants.maxSearchResultCount) })
+```
+
+- [ ] **Step 8: Run the whole suite**
+
+```bash
+swift test --build-system native
+```
+
+Expected: PASS.
+
+- [ ] **Step 9: Check it by hand**
+
+```bash
+scripts/package-app.sh && open build/Squiggle.app
+```
+
+This is the one task whose manual check makes real requests, so keep it short and deliberate — Yahoo has rate-limited this project six times in one day, and the debounce is the thing under test as much as the picker is.
+
+1. Open the menu, choose *Add Symbol…*. The window comes forward with an empty list and no message.
+2. Type `apple`, slowly. Results appear about a third of a second after you stop typing — **not** after each letter. Select `AAPL` and click *Add*. It appears in the strip within a few seconds, and in `squiggle.json`.
+3. Open the picker again and search `apple` again. The `AAPL` row is dimmed and reads *— Already watching*, and *Add* stays disabled while it is selected. This is R150: visible and inert, not hidden.
+4. Type `^GSPC`. Yahoo's search may return nothing for it; if so the single row reads *Try “^GSPC” as a symbol*. Add it. The S&P index price appears in the strip — which is the whole reason the literal fallback exists.
+5. Type `zzzzqqq`. The message reads *No matches. You can still try it as a symbol.* and the literal row is offered anyway.
+6. Turn Wi-Fi off and type something. The message is *No network connection.* and the literal row is still there. Turn Wi-Fi back on.
+7. Add symbols until there are twenty. The message becomes *Watching 20 symbols — remove one to add another.*, *Add* is disabled, and searching still lists results. Remove one from the dropdown with the picker still open: the message clears without reopening the window — that is `setWatchlist` being called from `removeSymbol`.
+
+Type quickly into the field and watch the list while you do. It must never flicker back to results for a prefix of what you typed; if it does, `SearchSession` is not being consulted.
+
+- [ ] **Step 10: Commit**
+
+```bash
+git add Sources/Squiggle/SymbolPickerModel.swift Sources/Squiggle/SymbolPickerWindow.swift Sources/Squiggle/ErrorText.swift Sources/Squiggle/MenuModel.swift Sources/Squiggle/StatusItemController.swift Sources/Squiggle/AppDelegate.swift Tests/SquiggleTests/SymbolPickerTests.swift Tests/SquiggleTests/MenuModelTests.swift
+git commit -m "feat: a search-only symbol picker that still lets you type a symbol"
+```
+
+---
+
+## Task 16: Coming back
+
+The obligation ruling R117 carried out of plan 1, discharged: **verify there is no request burst on wake from sleep.** The verification comes first, because what it finds decides whether the second half of this task is a fix or a feature.
+
+**Files:**
+- Create: `Tests/TickerCoreTests/MonotonicClockTests.swift`
+- Create: `Tests/SquiggleTests/WakeTests.swift`
+- Create: `docs/wake-from-sleep-log.md`
+- Modify: `Sources/Squiggle/StatusItemController.swift`
+
+**Interfaces:**
+- Consumes: `SystemClock`, `RefreshPolicy.isStale`, `RateConstants` (TickerCore); `PauseConditions` (Task 10); `StatusItemController.isStale(atEpoch:)` (Task 12); `TickerRunner.requestImmediateCycle` (Task 11).
+- Produces: `StatusItemController.catchUpIfStale()`, called from `applyPause`. No new public types.
+
+### R151 — coming back is one question, and the dim already asks it
+
+Four things put the ticker to sleep and four things wake it: the lid, the lock screen, the screensaver, the notch. Writing a wake-specific handler would be writing one of four, badly — the machine that slept nine hours and the status item that spent nine hours behind the notch present the app with the same problem, which is a price on screen that is older than it should be.
+
+So the rule is: whenever `PauseConditions` stops being paused, ask whether the strip is stale, and if it is, ask for one cycle now. The predicate is `isStale(atEpoch:)` — the *same* call the colour resolver makes to decide whether to dim (Task 12). That identity is the point of the ruling and not an implementation detail. With one predicate the app cannot dim a price it is not also trying to replace, and cannot spend a request behind a strip that looks perfectly live. With two, it can do both, and the second one is invisible: nobody notices a request that did not need making.
+
+It also defuses the objection `applyPause`'s own doc comment raises today, verbatim: *"forcing a step now would turn every unlock into an unscheduled request."* That was correct about an unconditional step and stops being correct here. Unlocking ten seconds after locking finds a strip that is not stale and forces nothing. Only an unlock that finds an already-dimmed strip spends anything, and at that point the user is looking at a number the app has itself marked as one it cannot vouch for. Step 5 rewrites that comment; leaving it to contradict the code beneath it is the single most reliable defect signature this codebase has.
+
+One guard sits in front of the predicate: `lastSuccessEpoch == nil` returns early. `isStale` answers `true` when nothing has ever succeeded, which is true and useless — the ordinary schedule is already retrying as fast as the ladder allows, and a catch-up there would spend tokens against an endpoint that is not answering.
+
+### R152 — the absence of a burst is a property of the clock, and it gets a test
+
+The reason there is no wake burst is one line in `MonotonicClock.swift`:
+
+```swift
+    public var nowSeconds: Double { ProcessInfo.processInfo.systemUptime }
+```
+
+`systemUptime` stops while the machine is suspended. Everything that could burst is measured against it:
+
+- `RequestPacer.refill()` credits `elapsed / spacing` tokens. Across a nine-hour sleep `elapsed` is a fraction of a second, so both buckets come back holding what they held going in — at most `bucketCapacity` (5) and `dailyBucketCapacity` (20).
+- `FeedEngine.cycleDeadline` is a `clock.nowSeconds` value. It does not expire during the sleep, so the engine's first decision on wake is `.sleep`, not `.fetch`.
+- `BackoffLadder` and both `CircuitBreaker`s run on the same clock, so a cooldown in force at sleep is still in force at wake. That is the conservative direction and needs no defence.
+
+`RequestPacer`'s own doc comment already records the measurement this rests on, taken on 2026-09-08: across 14.37 hours of real sleep, `ProcessInfo.systemUptime` and `mach_absolute_time` both read 596,619s where `mach_continuous_time` read 648,346s. The clock stopped; the continuous counter did not.
+
+A unit test cannot suspend a machine, so it cannot distinguish `systemUptime` from a `mach_continuous_time` reading — that stays Step 7's job. What a unit test *can* do is fail the day someone swaps the implementation for `Date()`, which is the substitution that actually turns up in a refactor, and which would make every one of the three bullets above false at once. That test is cheap and it is written below.
+
+### R153 — the wake check is instrumented, and its log carries no prices
+
+`squigglectl watch` prints `Rendering.stateLine` on every iteration: `requests N  tokens X.X  network …  contract …  cooldown Ns`. That running request total is exactly the instrument this verification needs, and it exists because plan 1's re-review made `watch` report its own total instead of leaving a reader counting arrow glyphs in the log.
+
+So the check is: leave `watch` running, sleep the Mac, wake it, and read the two `requests` numbers either side of the gap. No new tooling, no new flag, no debug build.
+
+The log file it produces is `docs/wake-from-sleep-log.md`, and it is governed by the same rule as `docs/fixture-capture-log.md`: **no prices, no request bodies, no URL with a query string.** What gets written down is the two request totals, the wall-clock gap, and the verdict. A log that recorded what the ticker was showing at the time would be a persisted quote, which this project does not do anywhere, for any reason.
+
+- [ ] **Step 1: Write the clock test**
+
+`SystemClock` has no test file of its own — plan 1 exercised it only indirectly,
+through `RenderingTests`. Create `Tests/TickerCoreTests/MonotonicClockTests.swift`
+whole. Free `@Test func`s at file scope, no `@Suite` wrapper: that is what every
+one of the twenty-two existing test files in this target does, and a lone suite
+struct here would be a new convention introduced by a two-test file.
+
+```swift
+import Foundation
+import Testing
+@testable import TickerCore
+
+// R152. The whole no-burst-on-wake property rests on this clock being the
+// one that stops while the machine is suspended. A unit test cannot sleep
+// a Mac, so it pins the two things it can: that this is uptime, and that
+// it is emphatically not the wall clock.
+@Test("the system clock reads uptime, not the wall clock")
+func theClockIsNotTheWallClock() {
+    let reading = SystemClock().nowSeconds
+    #expect(abs(reading - ProcessInfo.processInfo.systemUptime) < 1)
+    // Unix epoch seconds are past 1.7 × 10⁹. Uptime reaching that would
+    // be 54 years without a reboot.
+    #expect(reading < 1_000_000_000)
+}
+
+@Test("the system clock moves forward")
+func theClockAdvances() {
+    let first = SystemClock().nowSeconds
+    var spin = 0.0
+    for i in 1...200_000 { spin += Double(i) }
+    let second = SystemClock().nowSeconds
+    #expect(second >= first)
+    #expect(spin > 0)   // keeps the loop from being optimised away
+}
+```
+
+- [ ] **Step 2: Write the catch-up test**
+
+`Tests/SquiggleTests/WakeTests.swift`:
+
+```swift
+import Foundation
+import TickerCore
+import Testing
+@testable import Squiggle
+
+// R151's rule, tested where it lives: in `RefreshPolicy`, against the same
+// arguments `StatusItemController.isStale(atEpoch:)` passes it.
+//
+// The controller itself needs a status bar and a run loop, so the assertion
+// here is on the predicate rather than on the call — and that is the right
+// place for it anyway, because the ruling is that the catch-up and the dim
+// share one predicate. A test of the controller could show the catch-up
+// firing; only this one shows the two agreeing.
+
+private func wakeStale(agoSeconds: Double, symbols: Int,
+                       marketState: MarketState = .regular) -> Bool {
+    RefreshPolicy.isStale(lastSuccessEpoch: 10_000 - agoSeconds,
+                          nowEpoch: 10_000,
+                          userIntervalSeconds: RateConstants.defaultRefreshInterval,
+                          watchlistCount: symbols,
+                          marketState: marketState,
+                          lowPowerMode: false)
+}
+
+// A lid closed over lunch. The strip is dimmed, so the catch-up fires.
+@Test("an hour asleep leaves a one-symbol strip stale")
+func anHourIsStaleAtOneSymbol() {
+    #expect(wakeStale(agoSeconds: 3_600, symbols: 1))
+}
+
+// The unlock-ten-seconds-later case `applyPause`'s old comment worried about.
+// Nothing is dimmed, so nothing is fetched. Negated with `!`, never
+// `== false`: `#expect(x == false)` passes whatever `x` is (`ExpectMacroTests`).
+@Test("a brief lock leaves nothing stale")
+func tenSecondsIsNotStale() {
+    #expect(!wakeStale(agoSeconds: 10, symbols: 1))
+    #expect(!wakeStale(agoSeconds: 10, symbols: RateConstants.maxWatchlistCount))
+}
+
+// Three cycles, not three intervals. At twenty symbols the cycle floors at
+// 1,440s, so the threshold is 72 minutes there and nine at one symbol — which
+// is why the controller must never compute an age of its own.
+@Test("the threshold is three cycles, so it moves with the watchlist")
+func theThresholdScalesWithTheWatchlist() {
+    #expect(wakeStale(agoSeconds: 1_800, symbols: 1))
+    #expect(!wakeStale(agoSeconds: 1_800, symbols: RateConstants.maxWatchlistCount))
+    #expect(wakeStale(agoSeconds: 5_000, symbols: RateConstants.maxWatchlistCount))
+}
+
+// Overnight, the last close is the right number however old it is — so a
+// machine woken at 03:00 fetches nothing.
+@Test("a closed market is never stale, however long the sleep")
+func aClosedMarketWakesQuietly() {
+    #expect(!wakeStale(agoSeconds: 50_000, symbols: 5, marketState: .closed))
+}
+
+// The R151 guard. Nothing has ever succeeded, so `isStale` says yes and the
+// controller must still not ask for a cycle — the ordinary schedule is already
+// retrying as fast as the ladder allows.
+@Test("never having succeeded is stale, and is the case the guard catches")
+func nothingFetchedYetIsStale() {
+    let never = RefreshPolicy.isStale(lastSuccessEpoch: nil,
+                                      nowEpoch: 10_000,
+                                      userIntervalSeconds: RateConstants.defaultRefreshInterval,
+                                      watchlistCount: 1,
+                                      marketState: .regular,
+                                      lowPowerMode: false)
+    #expect(never)
+}
+```
+
+- [ ] **Step 3: Run both and watch them fail**
+
+Both files hold free `@Test func`s, so `--filter` matches function names rather than a suite name — filter on the names themselves:
+
+```bash
+swift test --build-system native --filter "theClock|Stale|Threshold|WakesQuietly"
+```
+
+Expected: all seven pass on the first run. Nothing here is red-first, and that is deliberate — both files assert on code plan 1 already built (`SystemClock`, `RefreshPolicy.isStale`), not on anything Step 4 adds.
+
+That makes them characterisation tests rather than TDD, which is the right shape for this task and worth being explicit about: this is a *verification* task whose fix (Step 4) is one guard, and the guard is only safe because these thresholds are what they are. Pinning them first means a later change to `RateConstants.stalenessMultiplier`, `RefreshPolicy.budgetFloor`, or `SystemClock`'s backing call fails here, by name, instead of silently turning every unlock into a fetch.
+
+If any of the seven fails on a clean tree, stop — plan 1 is not in the state this task assumes, and Step 4's guard is unsafe until it is.
+
+- [ ] **Step 4: Write the catch-up**
+
+In `Sources/Squiggle/StatusItemController.swift`, beside `isStale(atEpoch:)`:
+
+```swift
+    /// R151. Anything that un-pauses the strip asks the same question: is what
+    /// is on screen older than the dim threshold? If it is, take one cycle
+    /// now rather than waiting out a deadline measured on a clock that stopped
+    /// while the machine was suspended.
+    ///
+    /// Deliberately the same predicate `colorResolver()` dims with. Two
+    /// predicates would let the app dim a price it is not replacing, or fetch
+    /// behind a strip that looks live — and the second of those is invisible,
+    /// because nobody notices a request that did not need making.
+    private func catchUpIfStale() {
+        // `isStale` answers `true` when nothing has ever succeeded. True, and
+        // useless: the ordinary schedule is already retrying at whatever pace
+        // the ladder permits, and a second request would only spend a token.
+        guard runner.lastSuccessEpoch != nil else { return }
+        guard isStale(atEpoch: Date().timeIntervalSince1970) else { return }
+        runner.requestImmediateCycle()
+        scheduleStep(after: 0)
+    }
+```
+
+- [ ] **Step 5: Call it, and rewrite the comment that says not to**
+
+Task 10 gave `applyPause` a doc comment whose second paragraph reads, verbatim:
+
+```
+    /// The refresh side needs nothing here. `visibility()` reads
+    /// `pauseConditions` on the next scheduled step, and forcing a step now
+    /// would turn every unlock into an unscheduled request.
+```
+
+That paragraph is now false, and a doc comment contradicting the code beneath it is this codebase's most reliable defect signature — so it is replaced, not appended to. Its *argument* survives intact; what changes is that the argument no longer reaches an unconditional step:
+
+```swift
+    /// Spec §5.2: pausing is `speed = 0` with the offset captured, never a
+    /// removal — removing and re-adding makes the strip jump.
+    ///
+    /// Un-pausing also asks the refresh side one question (R151): has the
+    /// price on screen outlived the dim threshold? An *unconditional* step
+    /// here would turn every unlock into an unscheduled request, which is why
+    /// the step sits behind `isStale` rather than behind `isPaused` alone. A
+    /// lock and an unlock ten seconds apart find nothing stale and cost
+    /// nothing; only an unlock onto an already-dimmed strip spends a request,
+    /// and there the app is looking at a number it has itself marked as one
+    /// it cannot vouch for.
+    private func applyPause(_ conditions: PauseConditions) {
+        pauseConditions = conditions
+        if conditions.isPaused {
+            tickerView.pause()
+        } else {
+            tickerView.resume()
+            catchUpIfStale()
+        }
+    }
+```
+
+- [ ] **Step 6: Run the whole suite**
+
+```bash
+swift test --build-system native
+```
+
+Expected: PASS.
+
+- [ ] **Step 7: Sleep the machine and count the requests**
+
+This is the verification ruling R117 deferred, and it is the deliverable of this task. It makes real requests, so run it once and write down what it says.
+
+```bash
+swift run --build-system native squigglectl watch --interval 60 2>&1 | tee /tmp/wake-audit.log
+```
+
+1. Let it run five minutes with a watchlist of three or more symbols. Note the last `requests N` figure and the wall-clock time.
+2. Sleep the Mac — the Apple menu's *Sleep*, not just the display. Leave it asleep at least thirty minutes; an hour is better, and overnight is best because it crosses a market-state boundary.
+3. Wake it. Do not touch the terminal for two minutes.
+4. Read the log across the gap. Four things to check, in order:
+
+   - **The request total.** It must rise by no more than one full pass over the watchlist — three symbols, at most three requests — in the first minute after wake. A jump of dozens is the burst this task exists to rule out, and it would mean the clock assumption in R152 is wrong on this hardware.
+   - **The token line.** `tokens` must come back at or below what it read going into the sleep. A bucket that reads full after an hour asleep is `refill()` having credited time that did not pass, and it is the burst's direct cause.
+   - **The iteration count.** Expect exactly one extra loop iteration at the moment of wake, and then normal spacing. `Task.sleep(for:)` measures on `ContinuousClock`, which *does* count through a suspend, while `FeedEngine.cycleDeadline` measures on `systemUptime`, which does not — so the sleep returns early, the engine says `.sleep` again for the time genuinely remaining, and the loop settles. One extra `sleep Ns` line is that, and is correct. A tight spin of them is not, and would mean `cycleDeadline` is being reset somewhere it should not be.
+   - **The cooldown.** If a cooldown was in force going in, it must still be counting down coming out.
+
+5. Now the app, which uses `Timer` rather than `Task.sleep` and so has the same shape for a different reason — a `Timer` whose fire date passed during the suspend fires once on wake, not once per interval missed. Run the bundle, note the dropdown's footer line, sleep the Mac for an hour, wake it, and open the dropdown immediately:
+
+   - With one symbol the strip is dimmed on wake (an hour is past three cycles) and R151 fires: within a few seconds the dim clears and the footer's "updated" figure resets.
+   - With twenty symbols an hour is *not* stale — three cycles is 72 minutes there — so nothing is dimmed and nothing is fetched. That is the ruling working, not a failure. Sleeping for two hours dims it and makes it fetch.
+   - Sleep overnight and wake before the open: nothing dims and nothing fetches, because a closed market's last close is the right number however old it is.
+
+- [ ] **Step 8: Write the log**
+
+`docs/wake-from-sleep-log.md`. No prices, no bodies, no URLs with query strings (R153) — the same rule `docs/fixture-capture-log.md` keeps.
+
+```markdown
+# Wake-from-sleep audit
+
+Discharges ruling R117's carried obligation: verify no request burst on wake.
+
+## Run 1
+
+- Date: <YYYY-MM-DD>
+- Hardware / macOS: <model, version>
+- Watchlist size: <n>
+- `--interval`: 60
+
+| | Before sleep | After wake |
+|---|---|---|
+| `requests` | | |
+| `tokens` | | |
+| `cooldown` | | |
+
+- Wall-clock asleep: <h:mm>
+- Extra loop iterations at wake: <count>
+- Requests in the first minute after wake: <count>
+
+**Verdict:** <no burst / burst observed — detail>
+
+**App check (R151):** <what the strip and footer did on wake, at what
+watchlist size>
+```
+
+Fill it in from the run. If the verdict is anything but "no burst", stop and say so — that finding outranks the rest of this plan, because every budget number in plan 1 assumes a clock that stops.
+
+- [ ] **Step 9: Commit**
+
+```bash
+git add Sources/Squiggle/StatusItemController.swift Tests/SquiggleTests/WakeTests.swift Tests/TickerCoreTests/MonotonicClockTests.swift docs/wake-from-sleep-log.md
+git commit -m "feat: catch up on wake, and prove there is no burst when we do"
 ```
 
 ---
