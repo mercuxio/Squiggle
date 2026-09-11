@@ -14,25 +14,15 @@ private func symbol(_ raw: String) throws -> Symbol {
     try #require(Symbol(raw))
 }
 
-// DEVIATION FROM THE BRIEF: the brief's `quote(...)` helper calls
-// `Quote(symbol:shortName:price:previousClose:change:changePercent:currency:
-// direction:asOfEpoch:)` — an initialiser that does not exist. The real
-// `Quote` (TickerCore, already committed) only accepts
-// `(symbol:shortName:price:previousClose:currency:asOfEpoch:)` and derives
-// `change`, `changePercent` and `direction` itself from `previousClose`
-// (Sources/TickerCore/Quote.swift:37). The brief's own test file cannot
-// compile against the dependency it consumes.
-//
-// Rather than edit TickerCore's already-shipped, public initialiser to match
-// a test helper (out of scope for this task, and risking the 420 passing
-// tests that already depend on that initialiser), this helper reconstructs
-// an equivalent `previousClose` from `price` and `change` so the derived
-// fields land on the same values the brief's literal test bodies assert:
-// `previousClose = price - change`, which makes `Quote`'s own
-// `change = price - previousClose` equal the requested `change`, and its
-// `direction` fall out of the same sign `change`'s caller intended.
-private func quote(_ raw: String, price: Double, change: Double?,
-                   percent: Double?, direction: Direction) throws -> Quote {
+// DEVIATION FROM THE BRIEF: `Quote`'s real initialiser
+// (Sources/TickerCore/Quote.swift:37) takes `previousClose`, not
+// `change`/`changePercent`/`direction` directly — it derives all three
+// itself. This helper reconstructs `previousClose = price - change` so
+// `Quote` derives the same `change` (and the `direction` its sign implies).
+// `percent` and `direction` are not parameters here: nothing downstream
+// reads them, and every test that cares about either already pins them in
+// its expected segment text or role, not in how the fixture is built.
+private func quote(_ raw: String, price: Double, change: Double?) throws -> Quote {
     let previousClose = change.map { price - $0 }
     return Quote(symbol: try symbol(raw), shortName: nil, price: price,
                  previousClose: previousClose, currency: "USD", asOfEpoch: nil)
@@ -42,8 +32,7 @@ private func quote(_ raw: String, price: Double, change: Double?,
     let aapl = try symbol("AAPL")
     let layout = StripLayout.build(
         symbols: [aapl],
-        quotes: [aapl: try quote("AAPL", price: 232.1, change: -1.1,
-                                 percent: -0.47, direction: .down)],
+        quotes: [aapl: try quote("AAPL", price: 232.1, change: -1.1)],
         dead: [], rows: 1, gap: 20, locale: posix, measure: tenPerCharacter)
 
     let texts = layout.rows[0].segments.map(\.text)
@@ -56,8 +45,7 @@ private func quote(_ raw: String, price: Double, change: Double?,
     let aapl = try symbol("AAPL")
     let layout = StripLayout.build(
         symbols: [aapl],
-        quotes: [aapl: try quote("AAPL", price: 232.1, change: 1.1,
-                                 percent: 0.47, direction: .up)],
+        quotes: [aapl: try quote("AAPL", price: 232.1, change: 1.1)],
         dead: [], rows: 1, gap: 20, locale: posix, measure: tenPerCharacter)
 
     #expect(layout.rows[0].segments.map(\.role)
@@ -92,8 +80,7 @@ private func quote(_ raw: String, price: Double, change: Double?,
     let btc = try symbol("BTC-USD")
     let layout = StripLayout.build(
         symbols: [btc],
-        quotes: [btc: try quote("BTC-USD", price: 64000, change: nil,
-                                percent: nil, direction: .unknown)],
+        quotes: [btc: try quote("BTC-USD", price: 64000, change: nil)],
         dead: [], rows: 1, gap: 20, locale: posix, measure: tenPerCharacter)
 
     #expect(layout.rows[0].segments.map(\.text) == ["BTC-USD ", "64,000.00"])
@@ -104,8 +91,7 @@ private func quote(_ raw: String, price: Double, change: Double?,
     let aapl = try symbol("AAPL")
     let layout = StripLayout.build(
         symbols: [aapl],
-        quotes: [aapl: try quote("AAPL", price: 232.1, change: -1.1,
-                                 percent: -0.47, direction: .down)],
+        quotes: [aapl: try quote("AAPL", price: 232.1, change: -1.1)],
         dead: [], rows: 1, gap: 20, locale: posix, measure: tenPerCharacter)
 
     let segments = layout.rows[0].segments
@@ -121,8 +107,7 @@ private func quote(_ raw: String, price: Double, change: Double?,
     let aapl = try symbol("AAPL")
     let layout = StripLayout.build(
         symbols: [aapl],
-        quotes: [aapl: try quote("AAPL", price: 1.0, change: nil,
-                                 percent: nil, direction: .flat)],
+        quotes: [aapl: try quote("AAPL", price: 1.0, change: nil)],
         dead: [], rows: 1, gap: 20, locale: posix, measure: tenPerCharacter)
 
     let row = layout.rows[0]
@@ -137,6 +122,9 @@ private func quote(_ raw: String, price: Double, change: Double?,
     let names = ["A", "B", "LONGLONGLONGLONG"]
     let symbols = try names.map { try symbol($0) }
     var quotes: [Symbol: Quote] = [:]
+    // `previousClose: nil` makes every fixture here direction-less
+    // (`.unknown`, no change/percent) on purpose: this test measures row
+    // widths only, never role or direction.
     for s in symbols {
         quotes[s] = Quote(symbol: s, shortName: nil, price: 1, previousClose: nil,
                           currency: nil, asOfEpoch: nil)
