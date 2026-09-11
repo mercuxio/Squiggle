@@ -162,3 +162,53 @@ private let permittedModules: Set<String> = ["Foundation"]
     #expect(!modules.contains("SwiftUI"))
     #expect(modules.count == 3)
 }
+
+/// F15. The clock and randomness rules name their sanctioned exceptions by
+/// call site — "that call is the module's only clock read... adding a second
+/// one is a defect" — and there were two clock reads, not one.
+/// `FileWatchlistStore.freshStamp()` calls `Date()`, and the rule as written
+/// said flatly that there is no `Date()` anywhere in the module. The ruling on
+/// this review is that the stamp is a sanctioned exception rather than a
+/// breach: it names a quarantine file and is never a value the app computes
+/// with, `setAside(stamp:)` takes it as a parameter so every test supplies its
+/// own, and the default argument exists only because `load()`'s quarantine
+/// path has no clock to reach for. The plan and the spec now say so.
+///
+/// This is the sentence that made the omission survivable, so this is the
+/// sentence that gets an executable form. A census, not a ban: the three call
+/// sites are listed by name, and *both* directions fail — a fourth impure call
+/// site appears in the diff, and a listed one that goes away stops being
+/// listed. Line comments are stripped first, because `RequestPacer` discusses
+/// `ProcessInfo.systemUptime` in prose and a scan that counted that would be
+/// measuring the documentation it exists to hold honest.
+@Test func theOnlyImpureCallSitesInTickerCoreAreTheOnesTheRulesName() throws {
+    let names = try FileManager.default
+        .contentsOfDirectory(atPath: TickerCoreSource.directory.path)
+        .filter { $0.hasSuffix(".swift") }
+        .sorted()
+
+    // `Date()` is the wall clock, `systemUptime` the monotonic one,
+    // `Double.random` the randomness. Each is the exact spelling the rules
+    // quote, which is what keeps this a check on the rules rather than a
+    // second opinion about them.
+    let impureCalls = ["Date()", "systemUptime", "Double.random("]
+
+    var offenders: [String: [String]] = [:]
+    for name in names {
+        let text = try String(contentsOf: TickerCoreSource.directory
+            .appendingPathComponent(name), encoding: .utf8)
+        let code = text.split(separator: "\n", omittingEmptySubsequences: false)
+            .map { $0.components(separatedBy: "//").first ?? "" }
+            .joined(separator: "\n")
+        let found = impureCalls.filter { code.contains($0) }
+        if !found.isEmpty { offenders[name] = found }
+    }
+
+    #expect(offenders["MonotonicClock.swift"] == ["systemUptime"])
+    #expect(offenders["Randomizing.swift"] == ["Double.random("])
+    #expect(offenders["WatchlistStore.swift"] == ["Date()"])
+    #expect(Set(offenders.keys) == ["MonotonicClock.swift",
+                                    "Randomizing.swift",
+                                    "WatchlistStore.swift"],
+            "clock or randomness call sites TickerCore's rules do not sanction: \(offenders)")
+}

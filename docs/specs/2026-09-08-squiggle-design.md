@@ -38,7 +38,13 @@ Three targets, mirroring Pitch's layering.
 
 - No AppKit, SwiftUI, `UserDefaults`, `URLSession`, or user-facing strings.
 - No timers and no clocks. Time enters through an injected `MonotonicClock`
-  so every scheduling decision is testable in microseconds.
+  so every scheduling decision is testable in microseconds. Two call sites are
+  sanctioned exceptions and nothing else is: `SystemClock`, the production
+  conformer the protocol needs, and `FileWatchlistStore.freshStamp()`, which
+  reads the wall clock to build the timestamp in a quarantine file's *name*.
+  The stamp is never a value the app computes with, and `setAside(stamp:)`
+  takes it as a parameter, so it is out of every asserted path — the rule is
+  about scheduling reading a clock, and naming a file is not scheduling.
 - Networking enters through a `QuoteFetching` seam that returns bytes. The
   core parses; it never fetches.
 

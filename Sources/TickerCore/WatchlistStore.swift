@@ -216,6 +216,22 @@ public struct FileWatchlistStore: WatchlistStore {
     /// Colons are legal in HFS+ paths but Finder renders them as slashes,
     /// which makes the saved file confusing to find and to describe over
     /// email.
+    ///
+    /// **This is one of `TickerCore`'s two sanctioned clock reads** (the other
+    /// is `SystemClock`, under controller ruling R10), and the module's only
+    /// `Date()`. The plan's Global Constraints and spec §2 both name it. What
+    /// makes it an exception rather than a breach of "reads no clock": the
+    /// stamp becomes part of a *file name* and is never a value the app
+    /// computes with — nothing schedules on it, compares it, or shows it — and
+    /// `setAside(stamp:)` takes it as a parameter, so every test supplies its
+    /// own and the clock is out of every asserted path. The default argument
+    /// exists only because `load()`'s quarantine branch has no clock to reach
+    /// for; giving `FileWatchlistStore` an injected clock would push one into
+    /// the app and the CLI in order to serve a filename.
+    ///
+    /// A third such call site anywhere in the module is a defect, and
+    /// `theOnlyImpureCallSitesInTickerCoreAreTheOnesTheRulesName` fails when
+    /// one appears.
     private static func freshStamp() -> String {
         ISO8601DateFormatter()
             .string(from: Date())
