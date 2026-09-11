@@ -57,6 +57,13 @@ private func labelExists(_ text: String, in controller: NSWindowController) -> B
 }
 
 @MainActor
+private func label(_ text: String, in controller: NSWindowController) -> NSTextField? {
+    guard let content = controller.window?.contentView else { return nil }
+    let fields = everyView(in: content).compactMap { $0 as? NSTextField }
+    return fields.first { $0.stringValue == text }
+}
+
+@MainActor
 private func window(settings: Settings = Settings(),
                     launchAtLogin: LaunchAtLogin) -> SettingsWindowController {
     SettingsWindowController(settings: settings,
@@ -114,6 +121,34 @@ private func window(settings: Settings = Settings(),
     // Hoisted: `??` is kept out of the macro's argument rewrite.
     let note = try #require(ErrorText.loginItemNote(for: .unavailable))
     #expect(labelExists(note, in: controller))
+}
+
+/// The user's report: the note read "…running from ar" and stopped.
+///
+/// It is a one-line `NSTextField` in a grid column pinned to 220pt, so any
+/// note longer than that column loses its ending — and the ending is the half
+/// that says what to do about it. The sentence has to wrap instead.
+///
+/// Asserted against the window's own column width rather than a number typed
+/// here, so widening the column cannot quietly turn this into a test of
+/// nothing.
+@MainActor
+@Test func aLongNoteWrapsInsteadOfLosingItsEnding() throws {
+    let spy = LoginItemSpy(state: .unavailable, result: .unavailable)
+    let controller = window(launchAtLogin: spy.seam)
+    let text = try #require(ErrorText.loginItemNote(for: .unavailable))
+    let note = try #require(label(text, in: controller))
+
+    controller.window?.layoutIfNeeded()
+    // Wide enough to hold this sentence on one line, and the column is not.
+    let huge = CGFloat(100_000)
+    let oneLine = note.cell?.cellSize(forBounds: NSRect(x: 0, y: 0, width: huge, height: huge))
+    let unwrapped = try #require(oneLine)
+    #expect(Double(unwrapped.width) > Double(note.frame.width))
+
+    // So it must be taller than a single line — which is the whole claim.
+    #expect(Double(note.frame.height) > Double(unwrapped.height))
+    #expect(note.maximumNumberOfLines != 1)
 }
 
 @MainActor

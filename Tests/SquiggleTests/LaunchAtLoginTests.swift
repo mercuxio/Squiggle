@@ -5,12 +5,42 @@ import Testing
 
 // every status the framework defines maps to a state
 @Test func statusesMap() {
-    #expect(LoginItemState(status: .enabled) == .on)
-    #expect(LoginItemState(status: .notRegistered) == .off)
-    #expect(LoginItemState(status: .requiresApproval) == .needsApproval)
-    // No bundle — `swift run`, or a test process. Not an error: the
-    // control is simply not operable here.
-    #expect(LoginItemState(status: .notFound) == .unavailable)
+    #expect(LoginItemState(status: .enabled, bundled: true) == .on)
+    #expect(LoginItemState(status: .notRegistered, bundled: true) == .off)
+    #expect(LoginItemState(status: .requiresApproval, bundled: true) == .needsApproval)
+}
+
+/// The defect behind the user's "why is the open at login checkbox disabled?".
+///
+/// `.notFound` was read as "there is no bundle" and mapped to `.unavailable`,
+/// which greys the checkbox out. It is also what a perfectly good, correctly
+/// signed, freshly installed bundle reports before it has ever been
+/// registered — measured on a throwaway `.app`, which prints `notFound` on its
+/// first run. So the one state where ticking the box would have worked was the
+/// state that disabled the box.
+///
+/// No `SMAppService.Status` value distinguishes the two. Only `Bundle` knows.
+@Test func notFoundInsideARealBundleIsJustNotRegisteredYet() {
+    #expect(LoginItemState(status: .notFound, bundled: true) == .off)
+    #expect(LaunchAtLogin.action(desired: true,
+                                 current: LoginItemState(status: .notFound, bundled: true))
+            == .register)
+}
+
+/// The genuine no-bundle case: `swift run`, or this test process. There is
+/// nothing to register, and the control says so by being dead.
+@Test func withoutABundleEveryStatusIsUnavailable() {
+    for status in [SMAppService.Status.enabled, .notRegistered,
+                   .requiresApproval, .notFound] {
+        #expect(LoginItemState(status: status, bundled: false) == .unavailable)
+    }
+}
+
+/// Whether this process has a bundle to register is a question about the
+/// executable's own home, and `swift run` answers it honestly: the binary
+/// sits in `.build`, and a test process in an `.xctest`. Neither is an `.app`.
+@Test func theBundleCheckIsAboutTheExtensionNotTheStatus() {
+    #expect(!LaunchAtLogin.isBundledApp(Bundle.main))
 }
 
 // R146: the two off-ish states differ in what fixes them, and the

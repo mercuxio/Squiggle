@@ -16,17 +16,34 @@ enum LoginItemState: Equatable, Sendable {
     /// No bundle — running from `.build`, or a test process.
     case unavailable
 
+    /// - Parameter bundled: whether this process has an `.app` to register at
+    ///   all. It is a separate argument because no `SMAppService.Status` value
+    ///   answers it — see the `.notFound` arm.
+    ///
     /// R147: `SMAppService.Status` is an imported, non-frozen enum, so Swift
     /// requires the `@unknown default`. It is the opposite of the `default:`
     /// this project bans: every known case is still listed by name, and this
     /// arm catches only values from an SDK that does not exist yet — for which
     /// "disable the control" is the honest answer.
-    init(status: SMAppService.Status) {
+    init(status: SMAppService.Status, bundled: Bool) {
+        guard bundled else {
+            self = .unavailable
+            return
+        }
         switch status {
         case .enabled: self = .on
         case .notRegistered: self = .off
+        // `.off`, not `.unavailable`. This arm used to read `.notFound` as
+        // "there is no bundle", and that was the defect behind the user's
+        // "why is the open at login checkbox disabled?": a correctly signed
+        // bundle in /Applications reports `.notFound` until the first
+        // successful registration, so the one state where ticking the box
+        // would have worked was the state that greyed the box out.
+        //
+        // Pitch never hit this because it disables its item for
+        // `.requiresApproval` only and otherwise just tries.
+        case .notFound: self = .off
         case .requiresApproval: self = .needsApproval
-        case .notFound: self = .unavailable
         @unknown default: self = .unavailable
         }
     }
@@ -105,7 +122,8 @@ struct LaunchAtLogin {
 
     @MainActor
     static let system = LaunchAtLogin(
-        read: { LoginItemState(status: SMAppService.mainApp.status) },
+        read: { LoginItemState(status: SMAppService.mainApp.status,
+                               bundled: isBundledApp(.main)) },
         apply: { action in
             // Throwing here is not exceptional: an unsigned bundle, a
             // translocated copy running from a quarantined download, or a
@@ -131,9 +149,21 @@ struct LaunchAtLogin {
             case .nothing:
                 break
             }
-            return LoginItemOutcome(LoginItemState(status: SMAppService.mainApp.status),
-                                    failure: failure)
+            return LoginItemOutcome(
+                LoginItemState(status: SMAppService.mainApp.status,
+                               bundled: isBundledApp(.main)),
+                failure: failure)
         })
+
+    /// Is there an `.app` here to register?
+    ///
+    /// The question `SMAppService` cannot answer. `swift run` puts the binary
+    /// in `.build` and a test process puts it in an `.xctest`; neither is an
+    /// app bundle, and neither can be a login item. Asked of `Bundle` rather
+    /// than inferred from a status code, which is what got this wrong before.
+    static func isBundledApp(_ bundle: Bundle) -> Bool {
+        bundle.bundleURL.pathExtension == "app"
+    }
 
     /// What clicking the checkbox should do, given what the system currently
     /// says. Pure, and the only place the four states turn into calls.

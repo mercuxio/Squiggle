@@ -29,6 +29,10 @@ final class SettingsWindowController: NSWindowController {
     private let loginCheckbox = NSButton(checkboxWithTitle: ErrorText.launchAtLoginLabel,
                                          target: nil, action: nil)
     private let loginNote = NSTextField(labelWithString: "")
+
+    /// The width of the grid's control column, and so the width any note in it
+    /// has to wrap inside. Named because two places have to agree on it.
+    private static let columnWidth: CGFloat = 220
     private let loginSettingsButton = NSButton(title: ErrorText.openLoginItems,
                                                target: nil, action: nil)
     /// The watchlist size the effective-interval line is computed against.
@@ -133,6 +137,15 @@ final class SettingsWindowController: NSWindowController {
         loginCheckbox.action = #selector(loginCheckboxChanged)
         loginNote.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
         loginNote.textColor = .secondaryLabelColor
+        // The user's report: "Available when Squiggle is running from an app
+        // bundle." arrived as "…running from ar". A `labelWithString:` field is
+        // single-line and truncating, and column 1 is pinned to `columnWidth` —
+        // so every note longer than that lost the half that says what to do.
+        // These four together are what makes it grow downwards instead.
+        loginNote.maximumNumberOfLines = 0
+        loginNote.lineBreakMode = .byWordWrapping
+        loginNote.cell?.wraps = true
+        loginNote.preferredMaxLayoutWidth = Self.columnWidth
         loginSettingsButton.target = self
         loginSettingsButton.action = #selector(openLoginItems)
         loginSettingsButton.bezelStyle = .inline
@@ -150,7 +163,7 @@ final class SettingsWindowController: NSWindowController {
             [NSGridCell.emptyContentView, loginSettingsButton],
         ])
         grid.column(at: 0).xPlacement = .trailing
-        grid.column(at: 1).width = 220
+        grid.column(at: 1).width = Self.columnWidth
         grid.rowSpacing = 10
         grid.columnSpacing = 12
         grid.translatesAutoresizingMaskIntoConstraints = false
