@@ -190,11 +190,18 @@ struct WatchLoop {
                 }
             }
 
-            // Spec §7's live diagnosis: tokens available, both circuit
-            // states, and the ladder's remaining cooldown. Free — the loop
-            // already holds the engine that knows these, and this makes no
-            // request of its own.
-            log(Rendering.stateLine(engine.diagnosticSnapshot))
+            // Spec §7's live diagnosis: the running request total, tokens
+            // available, both circuit states, and the ladder's remaining
+            // cooldown. Free — the loop already holds the engine that knows
+            // these, and this makes no request of its own.
+            //
+            // `fetches` was previously the `maxCycles` bound and nothing else,
+            // so the only way to learn what a day cost was to count arrow
+            // glyphs in the log — which counts renderings, not requests, and
+            // misses every failure. It is reported here, last in the
+            // iteration, so the log's final line always carries the total
+            // however the run ends.
+            log(Rendering.stateLine(engine.diagnosticSnapshot, requests: fetches))
         }
         return 0
     }

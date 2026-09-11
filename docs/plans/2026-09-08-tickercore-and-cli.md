@@ -7799,10 +7799,19 @@ the only ones later tests look for. The file lands at
 swift run --build-system native squigglectl probe AAPL --record pre-market
 ```
 
-`--record` refuses only when that exact file already exists, so several
-scenarios captured on one day are several files, not a collision — which is
-what makes the 05:00, 10:30 and 17:00 AAPL captures possible at all. The name
-is the **scenario**, never the symbol.
+`--record` refuses on an existing file — that exact file, not the day's
+directory, so several scenarios captured on one day are several files rather
+than a collision, which is what makes the 05:00, 10:30 and 17:00 AAPL captures
+possible at all. The name is the **scenario**, never the symbol.
+
+It refuses on one other thing, and it is the one that bites in this task: the
+write paths are relative, so **run it from the repository root**. `probe
+--record` started anywhere else would once have created a `Tests/Fixtures/`
+tree wherever the terminal happened to be standing and written a live response
+— prices included — into it, reporting success either way. It now checks that
+`Tests/Fixtures/` is there before it fetches anything, and says so instead.
+Step 1's watch loop is holding one terminal; the second terminal is the easy
+one to open somewhere else.
 
 `probe` fetches the chart endpoint and nothing else, so `--record` can produce
 every fixture in the table above but **cannot** produce `search-apple.json`,
@@ -7824,19 +7833,46 @@ During the day, do each of these and note the timestamp in the log:
    why `refill()` clamps elapsed time to be non-negative.
 3. **Enable Low Power Mode for an hour.** Expected: request spacing widens by
    roughly the quiet multiplier.
-4. **Add a deliberately bad symbol** (`NOTAREALTICKER`). Expected: one
-   `symbolNotFound`, then silence about it — and the other four keep updating.
+4. **Restart the watch with a deliberately bad symbol** appended:
+   `... BRK-B BTC-USD EURUSD=X NOTAREALTICKER`. Expected: one
+   `symbolNotFound`, then silence about it — and the other five keep updating.
+
+   It has to be a restart. `watch` takes its symbols from the command line
+   once, at parse time, and the loop never re-reads them; editing the
+   watchlist file underneath a running loop changes nothing. Note the
+   restart's timestamp, and carry the old log's last request total forward by
+   hand — Step 4's counter starts again at zero.
 
 - [ ] **Step 4: Count what it actually cost**
 
+`watch` reports its own request total. Every loop iteration ends with a state
+line, and the total leads it, so the last line of the log carries the final
+count:
+
 ```bash
-grep -c '▲\|▼\|–' docs/trading-day-$(date +%F).log
+tail -n 1 docs/trading-day-$(date +%F).log
 ```
 
-Expected: **under 1,200**. This is the number the whole design exists to
-control, and it is the first time it has been measured rather than simulated.
+Read the `requests` field. Expected: **under 1,200**. This is the number the
+whole design exists to control, and it is the first time it has been measured
+rather than simulated.
 
-If it exceeds 1,200, do not adjust the budget. Compare the count against
+This step used to read `grep -c '▲\|▼\|–'` over the same log, and that
+counted the wrong thing in three separate ways: a *failed* request prints a
+diagnosis and no arrow, so every failure — the expensive half of a bad day —
+was invisible; a symbol with no previous close renders `.unknown` and no arrow
+either; and a `–` occurring in any other line counted as a request. It measured
+renderings, not requests. The counter it now reads is `WatchLoop`'s own
+`fetches`, incremented in the engine's `.fetch` arm, which is the request
+itself.
+
+Two things the count does **not** include, both deliberate. Step 2's manual
+`probe --record` captures spend from the same daily budget and are not in this
+log — add them by hand, one per fixture captured. And a run restarted
+mid-day starts the counter at zero; if you restart, add the last line of the
+previous log.
+
+If the total exceeds 1,200, do not adjust the budget. Compare it against
 Task 12's simulation for the same settings; the simulation and reality have
 diverged, and finding out where is the point of this task.
 

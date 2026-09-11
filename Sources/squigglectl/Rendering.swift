@@ -244,14 +244,30 @@ public enum Rendering {
         }
     }
 
-    /// `WatchLoop`'s live diagnostic line (spec §7): tokens available, both
-    /// circuit states, and the ladder's remaining cooldown. Printed after
-    /// every event rather than persisted — this state lives only in the
-    /// running process's memory, and the store file must stay safe to email.
-    public static func stateLine(_ snapshot: FeedEngine.DiagnosticSnapshot) -> String {
+    /// `WatchLoop`'s live diagnostic line (spec §7): the requests spent so far,
+    /// tokens available, both circuit states, and the ladder's remaining
+    /// cooldown. Printed after every event rather than persisted — this state
+    /// lives only in the running process's memory, and the store file must
+    /// stay safe to email.
+    ///
+    /// `requests` leads the line, and it is `WatchLoop`'s own fetch counter —
+    /// the one the engine's `.fetch` arm increments, so it counts requests
+    /// issued and not lines printed. Task 19 Step 4's question is "what did the
+    /// day actually cost", and it used to be answered by
+    /// `grep -c '▲\|▼\|–'` over the log: that counts *glyphs*, so it missed
+    /// every failed request (which prints a diagnosis, not an arrow), counted
+    /// nothing at all for a symbol whose direction was `.unknown`, and would
+    /// have counted a `–` appearing in any other line. The measurement the
+    /// whole design exists to control cannot be a side effect of how prices
+    /// happen to render. Because this line is printed last in every loop
+    /// iteration, the running total is on the log's final line, and Step 4
+    /// reads it there.
+    public static func stateLine(_ snapshot: FeedEngine.DiagnosticSnapshot,
+                                 requests: Int) -> String {
         let tokens = String(format: "%.1f", snapshot.tokensAvailable)
         let cooldown = Int(snapshot.cooldownRemainingSeconds.rounded(.up))
-        return "tokens \(tokens)  network \(describe(snapshot.networkCircuit))"
+        return "requests \(requests)  tokens \(tokens)"
+            + "  network \(describe(snapshot.networkCircuit))"
             + "  contract \(describe(snapshot.contractCircuit))  cooldown \(cooldown)s"
     }
 
