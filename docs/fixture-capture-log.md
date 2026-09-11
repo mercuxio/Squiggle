@@ -73,7 +73,7 @@ Captured:
 - [ ] 401-body.json — RECONSTRUCTED, not captured
 
 Still owed (rate-limit-gated, NOT clock-gated — retry it on its own):
-- [ ] search-apple.json — `v1/finance/search?q=apple`, hand-captured (`squigglectl probe --record`
+- [ ] search-apple.json — `v1/finance/search`, term *apple*, hand-captured (`squigglectl probe --record`
       only fetches `v8/finance/chart` — see "squigglectl probe --record"
       below — so it cannot produce a search response). Six attempts across
       2026-09-08 returned 429 (see the retry log below); the endpoint
