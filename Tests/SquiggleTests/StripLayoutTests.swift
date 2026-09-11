@@ -116,31 +116,40 @@ private func quote(_ raw: String, price: Double, change: Double?) throws -> Quot
 }
 
 @Test func twoRowsAreBalancedByRenderedWidthNotByCount() throws {
-    // Spec §5.1: `RowSplitter` balances by rendered width. With the fake
-    // measurement one long symbol outweighs two short ones, so a
-    // count-based split would put two in each row and this would fail.
-    let names = ["A", "B", "LONGLONGLONGLONG"]
+    // Spec §5.1: `RowSplitter` balances by rendered width, and this fixture is
+    // chosen so that the two strategies disagree — which the old three-symbol
+    // fixture did not, leaving the rule with no app-layer guard.
+    //
+    // Four entries at ten points per character, each `SYMBOL ` + `——` + a
+    // 20-point trailing gap, so an entry costs `name.count * 10 + 50`:
+    // `LONGLONGLONGLONG` is 210 and each of `A`, `B`, `C` is 60.
+    //
+    // Width-based (greedy least-loaded, in order): the long one takes row 0 at
+    // 210, and every short one then goes to whichever row is narrower — all
+    // three land in row 1, which ends at 180. One entry against three.
+    //
+    // Count-based: two and two, whichever two it picks — 270 against 120 for a
+    // first-half/second-half split, the same for an alternating one. Both fail
+    // the segment-count assertions below, which is the point.
+    let names = ["LONGLONGLONGLONG", "A", "B", "C"]
     let symbols = try names.map { try symbol($0) }
-    var quotes: [Symbol: Quote] = [:]
-    // `previousClose: nil` makes every fixture here direction-less
-    // (`.unknown`, no change/percent) on purpose: this test measures row
+    // No quotes and nothing dead: every entry renders as `SYMBOL ` + `——`,
+    // which keeps the arithmetic above readable. This test measures row
     // widths only, never role or direction.
-    for s in symbols {
-        quotes[s] = Quote(symbol: s, shortName: nil, price: 1, previousClose: nil,
-                          currency: nil, asOfEpoch: nil)
-    }
-    let layout = StripLayout.build(symbols: symbols, quotes: quotes, dead: [],
+    let layout = StripLayout.build(symbols: symbols, quotes: [:], dead: [],
                                    rows: 2, gap: 20, locale: posix,
                                    measure: tenPerCharacter)
 
     #expect(layout.rows.count == 2)
+    // Two segments per entry. One entry in row 0, three in row 1 — a
+    // count-based splitter would put two entries (four segments) in each.
+    #expect(layout.rows[0].segments.count == 2)
+    #expect(layout.rows[1].segments.count == 6)
+    // And the partition is the one the widths argue for, not merely some
+    // one-against-three split.
+    #expect(layout.rows[0].segments[0].text == "LONGLONGLONGLONG ")
     let widths = layout.rows.map(\.contentWidth)
-    // Neither row is empty, and the long symbol is alone in its own row.
-    // Hoisted out of `#expect`: the macro re-writes its argument expression,
-    // and this codebase keeps trailing closures out of that rewrite.
-    let bothRowsUsed = layout.rows.allSatisfy { !$0.segments.isEmpty }
-    #expect(bothRowsUsed)
-    #expect(abs(widths[0] - widths[1]) < max(widths[0], widths[1]))
+    #expect(widths == [210, 180])
 }
 
 @Test func askingForOneRowGivesOneRowAndEveryEntryIsInIt() throws {

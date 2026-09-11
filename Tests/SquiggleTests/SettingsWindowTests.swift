@@ -1,0 +1,165 @@
+import AppKit
+import Testing
+import TickerCore
+@testable import Squiggle
+
+// `SettingsWindowController` builds its window in code (R133) and takes its
+// `LaunchAtLogin` as a struct of closures, so the whole window is reachable
+// from a test: no status bar, no run loop, and nothing that touches
+// `SMAppService` or the user's real Login Items.
+//
+// The controls themselves are private, which is right — nothing outside the
+// window should be able to poke them — so these tests find them the way a
+// user does, by what they say.
+
+private final class LoginItemSpy: @unchecked Sendable {
+    var state: LoginItemState
+    var applied: [LoginItemAction] = []
+    /// What `apply` reports back afterwards. The real one re-reads the system
+    /// rather than assuming the action worked (spec §6), and R146 turns on
+    /// the window believing that answer over the checkbox it came from.
+    var result: LoginItemState
+
+    init(state: LoginItemState, result: LoginItemState) {
+        self.state = state
+        self.result = result
+    }
+
+    var seam: LaunchAtLogin {
+        LaunchAtLogin(read: { [self] in state },
+                      apply: { [self] action in
+                          applied.append(action)
+                          return result
+                      })
+    }
+}
+
+@MainActor
+private func everyView(in root: NSView) -> [NSView] {
+    root.subviews.reduce([root]) { $0 + everyView(in: $1) }
+}
+
+@MainActor
+private func button(titled title: String, in controller: NSWindowController) -> NSButton? {
+    guard let content = controller.window?.contentView else { return nil }
+    let buttons = everyView(in: content).compactMap { $0 as? NSButton }
+    return buttons.first { $0.title == title }
+}
+
+@MainActor
+private func labelExists(_ text: String, in controller: NSWindowController) -> Bool {
+    guard let content = controller.window?.contentView else { return false }
+    let fields = everyView(in: content).compactMap { $0 as? NSTextField }
+    return fields.contains { $0.stringValue == text }
+}
+
+@MainActor
+private func window(settings: Settings = Settings(),
+                    launchAtLogin: LaunchAtLogin) -> SettingsWindowController {
+    SettingsWindowController(settings: settings,
+                             launchAtLogin: launchAtLogin,
+                             onChange: { _ in })
+}
+
+// MARK: - The effective-interval line (spec §4.1)
+
+@MainActor
+@Test func theEffectiveIntervalLineFollowsTheWatchlistCount() {
+    // The defect: with the settings window open, adding symbols left this
+    // line quoting the old watchlist's cadence — "Every 1 min" where the app
+    // would actually honour 24. The `didSet` was always there; nothing was
+    // assigning to it after `openSettings`.
+    let spy = LoginItemSpy(state: .off, result: .off)
+    var settings = Settings()
+    settings.refreshIntervalSeconds = 60
+    let controller = window(settings: settings, launchAtLogin: spy.seam)
+
+    controller.watchlistCount = 1
+    let one = ErrorText.effectiveInterval(userIntervalSeconds: 60, watchlistCount: 1)
+    #expect(labelExists(one, in: controller))
+
+    controller.watchlistCount = RateConstants.maxWatchlistCount
+    let twenty = ErrorText.effectiveInterval(
+        userIntervalSeconds: 60, watchlistCount: RateConstants.maxWatchlistCount)
+    // The two are different strings, or this test would pass on a window that
+    // never recomputed anything.
+    #expect(one != twenty)
+    #expect(labelExists(twenty, in: controller))
+    #expect(!labelExists(one, in: controller))
+}
+
+// MARK: - Launch at login (R146)
+
+@MainActor
+@Test func theCheckboxOpensShowingWhatTheSystemSays() throws {
+    let spy = LoginItemSpy(state: .on, result: .on)
+    let controller = window(launchAtLogin: spy.seam)
+    let box = try #require(button(titled: ErrorText.launchAtLoginLabel, in: controller))
+    #expect(box.state == .on)
+    #expect(box.isEnabled)
+}
+
+@MainActor
+@Test func noBundleLeavesTheCheckboxVisibleButDead() throws {
+    // What every developer on this project sees: `.notFound`, because a test
+    // process has no bundle to register. It must not look like a bug.
+    let spy = LoginItemSpy(state: .unavailable, result: .unavailable)
+    let controller = window(launchAtLogin: spy.seam)
+    let box = try #require(button(titled: ErrorText.launchAtLoginLabel, in: controller))
+    #expect(box.state == .off)
+    #expect(!box.isEnabled)
+    // Hoisted: `??` is kept out of the macro's argument rewrite.
+    let note = try #require(ErrorText.loginItemNote(for: .unavailable))
+    #expect(labelExists(note, in: controller))
+}
+
+@MainActor
+@Test func tickingTheBoxRegisters() throws {
+    let spy = LoginItemSpy(state: .off, result: .on)
+    let controller = window(launchAtLogin: spy.seam)
+    let box = try #require(button(titled: ErrorText.launchAtLoginLabel, in: controller))
+
+    // `performClick` toggles the checkbox and fires its action, which is the
+    // wiring under test — the window reads the system again at that moment
+    // rather than trusting the box it was just handed.
+    spy.state = .off
+    box.performClick(nil)
+
+    #expect(spy.applied == [.register])
+    #expect(box.state == .on)
+}
+
+@MainActor
+@Test func untickingTheBoxUnregisters() throws {
+    let spy = LoginItemSpy(state: .on, result: .off)
+    let controller = window(launchAtLogin: spy.seam)
+    let box = try #require(button(titled: ErrorText.launchAtLoginLabel, in: controller))
+
+    box.performClick(nil)
+
+    #expect(spy.applied == [.unregister])
+    #expect(box.state == .off)
+}
+
+@MainActor
+@Test func theBlockedStateSendsTheUserToSystemSettingsInsteadOfRegistering() throws {
+    // R146's whole reason for existing: `register()` on an already-registered
+    // service throws and would not clear the user's own switch anyway. The
+    // window must offer the button, and clicking the box must open Settings
+    // rather than attempt a registration that cannot help.
+    let spy = LoginItemSpy(state: .needsApproval, result: .needsApproval)
+    let controller = window(launchAtLogin: spy.seam)
+    let box = try #require(button(titled: ErrorText.launchAtLoginLabel, in: controller))
+    let settingsButton = try #require(button(titled: ErrorText.openLoginItems,
+                                             in: controller))
+    let hidden = settingsButton.isHidden
+    #expect(!hidden)
+    // `.needsApproval` will not launch, so the box is not ticked — the note
+    // and the button are what explain the difference.
+    #expect(box.state == .off)
+    let note = try #require(ErrorText.loginItemNote(for: .needsApproval))
+    #expect(labelExists(note, in: controller))
+
+    box.performClick(nil)
+    #expect(spy.applied == [.openSystemSettings])
+}

@@ -128,3 +128,46 @@ private func result(_ symbol: String, _ name: String = "Some Company",
     #expect(!model.isFull)
     #expect(model.message == nil)
 }
+
+// MARK: - The cap against the other three inputs
+
+// Every combination below reaches the same rule from a different arm of
+// `build`: the cap outranks whatever else the picker would have said. It has
+// to, because the cap is the one message that names something the user can
+// act on — an error or a "no matches" shown instead would send them typing
+// again at a list that will refuse them either way.
+
+// The window opens on a full watchlist with nothing typed yet: no query is
+// not a query, but the cap still has to announce itself before the user
+// spends a search finding out.
+@Test func nothingTypedAgainstAFullWatchlistStillSaysWhyNothingCanBeAdded() {
+    let full = (0..<RateConstants.maxWatchlistCount).map { Symbol("S\($0)")! }
+    let model = SymbolPickerModel.build(query: "", results: [],
+                                        error: nil, watchlist: full)
+    #expect(model.rows.isEmpty)
+    #expect(model.isFull)
+    #expect(model.message == ErrorText.watchlistFull)
+}
+
+// Offline *and* full. The literal fallback is still offered as a row — the
+// cap is about adding, not about showing — but the line reports the cap
+// rather than the network, because the network is not what is in the way.
+@Test func theCapOutranksASearchFailure() {
+    let full = (0..<RateConstants.maxWatchlistCount).map { Symbol("S\($0)")! }
+    let model = SymbolPickerModel.build(query: "AAPL", results: [],
+                                        error: .offline, watchlist: full)
+    #expect(model.rows == [.literal(Symbol("AAPL")!)])
+    #expect(model.isFull)
+    #expect(model.message == ErrorText.watchlistFull)
+}
+
+// Offline, full, and what was typed cannot be a symbol either. Three reasons
+// to say no and only one line to say it in; the cap is the one that survives.
+@Test func theCapOutranksASearchFailureOverUnparseableText() {
+    let full = (0..<RateConstants.maxWatchlistCount).map { Symbol("S\($0)")! }
+    let model = SymbolPickerModel.build(query: "apple inc", results: [],
+                                        error: .offline, watchlist: full)
+    #expect(model.rows.isEmpty)
+    #expect(model.isFull)
+    #expect(model.message == ErrorText.watchlistFull)
+}

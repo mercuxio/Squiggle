@@ -34,6 +34,7 @@ import Testing
     #expect(LaunchAtLogin.action(desired: false, current: .off) == .nothing)
 }
 
+// nothing is attempted when there is no bundle to register
 @Test func unavailableIsInert() {
     #expect(LaunchAtLogin.action(desired: true, current: .unavailable) == .nothing)
     #expect(LaunchAtLogin.action(desired: false, current: .unavailable) == .nothing)
@@ -49,6 +50,7 @@ import Testing
     #expect(!LoginItemState.unavailable.isOn)
 }
 
+// the control is operable in every state but the one with no bundle
 @Test func onlyAMissingBundleDisablesIt() {
     #expect(LoginItemState.on.isEnabled)
     #expect(LoginItemState.off.isEnabled)
@@ -64,6 +66,7 @@ import Testing
     #expect(ErrorText.loginItemNote(for: .unavailable) != nil)
 }
 
+// the button appears exactly where clicking the box cannot help
 @Test func theButtonIsWhereTheAppIsPowerless() {
     #expect(LoginItemState.needsApproval.showsSystemSettingsButton)
     #expect(!LoginItemState.on.showsSystemSettingsButton)

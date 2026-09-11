@@ -9,7 +9,7 @@ typealias SymbolSearch = @Sendable (String) async throws -> [SearchResult]
 @MainActor
 final class SymbolPickerWindowController: NSWindowController,
                                           NSTableViewDataSource, NSTableViewDelegate,
-                                          NSTextFieldDelegate {
+                                          NSTextFieldDelegate, NSWindowDelegate {
     private let search: SymbolSearch
     private let onAdd: (Symbol) -> Void
     private var watchlist: [Symbol]
@@ -36,9 +36,20 @@ final class SymbolPickerWindowController: NSWindowController,
         window.title = ErrorText.addSymbol
         window.isReleasedWhenClosed = false
         super.init(window: window)
+        window.delegate = self
         window.contentView = makeContentView()
         window.center()
         render()
+    }
+
+    /// The window is closed and reopened rather than destroyed, so a debounce
+    /// timer still on the run loop outlives the close and fires a search for
+    /// text nobody is looking at any more. Invalidated here — the same shape
+    /// `StatusItemController.schedulePersist` uses, a `Timer` holding a weak
+    /// self and torn down by whoever owns it rather than left to the run loop.
+    func windowWillClose(_ notification: Notification) {
+        debounce?.invalidate()
+        debounce = nil
     }
 
     @available(*, unavailable)

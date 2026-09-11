@@ -32,7 +32,8 @@ import Testing
     #expect(index == SettingsForm.scheme.index(of: SettingsForm.scheme.fallback))
 }
 
-// An index off the end yields the fallback rather than trapping.
+// An index outside the range at either end — past the last item or negative —
+// yields the fallback rather than trapping.
 @Test func anImpossibleIndexIsSurvivable() {
     #expect(SettingsForm.rows.value(at: 99) == SettingsForm.rows.fallback)
     #expect(SettingsForm.rows.value(at: -1) == SettingsForm.rows.fallback)

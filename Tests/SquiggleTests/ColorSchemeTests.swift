@@ -50,6 +50,9 @@ private func color(_ role: ColorRole, _ scheme: ColorScheme,
 
 // Spec §5.3: "the symbol is the anchor the eye lands on and must not move
 // in the colour space."
+//
+// Symbol and price alike: `.label` is the role both of them carry, so this
+// one assertion covers the two segments a scheme must never touch.
 @Test func theLabelRoleIsAlwaysTheLabelColour() {
     for scheme in everyScheme {
         #expect(color(.label, scheme) == NSColor.labelColor, "\(scheme)")

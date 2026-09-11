@@ -407,6 +407,11 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         runner.replaceWatchlist(document.symbols)
         persist()
         pickerWindow?.setWatchlist(document.symbols)
+        // Spec §4.1: the effective-interval line is computed against the
+        // watchlist size, and the settings window does not own the watchlist.
+        // Optional-chained because the window is nil until it has been opened
+        // once, and closed is not the same as gone — it keeps reporting.
+        settingsWindow?.watchlistCount = document.symbols.count
         // A new symbol has no quote yet, so this repaints the strip with its
         // dead-symbol placeholder immediately rather than leaving a gap until
         // the next cycle.
@@ -446,6 +451,9 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         runner.replaceWatchlist(document.symbols)
         persist()
         pickerWindow?.setWatchlist(document.symbols)
+        // The other half of the same rule: removing a symbol can lower the
+        // effective interval just as adding one raises it.
+        settingsWindow?.watchlistCount = document.symbols.count
         render()
     }
 

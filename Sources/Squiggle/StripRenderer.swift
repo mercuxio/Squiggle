@@ -72,9 +72,10 @@ enum StripRenderer {
     /// animated, so a second copy there would just be duplicate text sitting
     /// in the strip with nothing to wrap into.
     ///
-    /// `copies` is decided once, by `TickerView.apply`, from the same `fits`
-    /// check `TickerView.animate` uses — so the tiling here and the decision
-    /// to animate can never disagree about whether this row moves.
+    /// `copies` is not a second opinion: `TickerView.apply` runs the `fits`
+    /// check once and hands the answer to both this function and `animate`,
+    /// which does not re-check it. So the tiling here and the decision to
+    /// animate cannot disagree about whether this row moves.
     ///
     /// `Row.contentWidth` already includes the trailing gap (Task 5), which
     /// is what keeps the join from butting the last symbol against the first.

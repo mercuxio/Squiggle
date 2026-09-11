@@ -33,7 +33,10 @@ final class SettingsWindowController: NSWindowController {
                                                target: nil, action: nil)
     /// The watchlist size the effective-interval line is computed against.
     /// Set by the controller, because the window does not own the watchlist
-    /// and the number changes under it when Task 15 adds a symbol.
+    /// and the number changes under it: `StatusItemController.openSettings`
+    /// seeds it, and `add` and `removeSymbol` push every later change. Spec
+    /// §4.1 put this line here to stop the app quoting a cadence it will not
+    /// keep, which it would do the moment the count moved without it.
     var watchlistCount = 0 { didSet { refreshEffectiveLabel() } }
 
     init(settings: Settings,
