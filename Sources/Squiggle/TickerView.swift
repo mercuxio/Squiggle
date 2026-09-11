@@ -57,6 +57,14 @@ final class TickerView: NSView {
         // after installation corrects it either way.
         let scale = Double(window?.backingScaleFactor ?? 2)
 
+        // Read before the teardown, because afterwards there is nothing left
+        // to ask. A rebuilt row that starts at phase zero snaps the marquee
+        // back to its first character — and `apply` runs on every refresh,
+        // every appearance change, every Reduce Motion toggle and every
+        // settings edit, which is what the user sees as the strip skipping.
+        let key = Self.animationKey(for: mode)
+        let carried = rowLayers.map { phase(of: $0, key: key) }
+
         for existing in rowLayers { existing.removeFromSuperlayer() }
         rowLayers = []
         isPaused = paused
@@ -75,8 +83,12 @@ final class TickerView: NSView {
             host.addSublayer(rowLayer)
             rowLayers.append(rowLayer)
 
+            // A row that has no predecessor — first render, or a switch from
+            // one row to two — starts at the beginning of its lap, which is
+            // the only honest answer when there is nothing to inherit.
+            let inherited = index < carried.count ? carried[index] : 0
             animate(rowLayer, row: row, animated: animated, visibleWidth: visibleWidth,
-                    mode: mode, pointsPerSecond: pointsPerSecond)
+                    mode: mode, pointsPerSecond: pointsPerSecond, startingAt: inherited)
             // Frozen here rather than after the loop, so a row is never live
             // for even the remainder of this rebuild. The animation stays
             // attached — spec §5.2 is `speed = 0`, never a removal — so the
@@ -91,21 +103,33 @@ final class TickerView: NSView {
     /// here: `apply` already used it to decide how many copies `rowLayer`
     /// drew, and a second `fits` call here could only ever agree or disagree
     /// with that, never usefully override it.
+    ///
+    /// - Parameter startingAt: the fraction of a lap the row this one replaces
+    ///   had already run. Both branches set `beginTime` explicitly rather than
+    ///   leaving it at zero: an unset begin time means "now" to Core Animation
+    ///   but reads back as `0`, and `phase(of:key:)` has to read it back on
+    ///   the next rebuild.
     private func animate(_ rowLayer: CALayer,
                          row: StripLayout.Row,
                          animated: Bool,
                          visibleWidth: Double,
                          mode: MotionMode,
-                         pointsPerSecond: Double) {
+                         pointsPerSecond: Double,
+                         startingAt phase: Double) {
         guard animated else { return }
+        let now = rowLayer.convertTime(CACurrentMediaTime(), from: nil)
 
         switch mode {
         case .scroll:
             let slide = CABasicAnimation(keyPath: "position.x")
             slide.fromValue = 0
             slide.toValue = -row.contentWidth
-            slide.duration = StripRenderer.duration(contentWidth: row.contentWidth,
-                                                    pointsPerSecond: pointsPerSecond)
+            let lap = StripRenderer.duration(contentWidth: row.contentWidth,
+                                             pointsPerSecond: pointsPerSecond)
+            slide.duration = lap
+            slide.beginTime = StripRenderer.rebuiltBeginTime(nowInLayerTime: now,
+                                                             phase: phase,
+                                                             duration: lap)
             slide.repeatCount = .infinity
             // Linear, and it has to be: the default ease-in-out would make the
             // strip visibly accelerate and brake once per lap.
@@ -146,10 +170,43 @@ final class TickerView: NSView {
             let both = CAAnimationGroup()
             both.animations = [move, fade]
             both.duration = total
+            both.beginTime = StripRenderer.rebuiltBeginTime(nowInLayerTime: now,
+                                                            phase: phase,
+                                                            duration: total)
             both.repeatCount = .infinity
             both.preferredFrameRateRange = StripRenderer.frameRate
             rowLayer.add(both, forKey: "step")
         }
+    }
+
+    /// The key each mode's animation is filed under. One function rather than
+    /// two string literals at opposite ends of the file: `animate` adds under
+    /// this key and `phase(of:key:)` looks it up, and a typo in either would
+    /// show only as a strip that silently stopped carrying its place.
+    private static func animationKey(for mode: MotionMode) -> String {
+        switch mode {
+        case .scroll: return "scroll"
+        case .step: return "step"
+        }
+    }
+
+    /// How far through its lap `rowLayer` is, or zero if it is not running the
+    /// animation we are about to replace.
+    ///
+    /// The key has to match: a rebuild that switches Scroll to Step finds no
+    /// `scroll` animation and starts the new one from the beginning, which is
+    /// right — a phase measured in laps of a marquee means nothing to a
+    /// sequence of discrete pages.
+    ///
+    /// `convertTime` is correct for a frozen row too: a layer at `speed = 0`
+    /// converts every wall-clock time to its stored `timeOffset`, so a strip
+    /// rebuilt behind a locked screen keeps the place it was paused at.
+    private func phase(of rowLayer: CALayer, key: String) -> Double {
+        guard let animation = rowLayer.animation(forKey: key) else { return 0 }
+        return StripRenderer.phase(
+            localTime: rowLayer.convertTime(CACurrentMediaTime(), from: nil),
+            beginTime: animation.beginTime,
+            duration: animation.duration)
     }
 
     /// The ticker is a picture, not a control.

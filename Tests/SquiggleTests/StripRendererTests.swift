@@ -138,3 +138,40 @@ private let barHeight = 22.0
     #expect(container.sublayers?.count == row.segments.count)
     #expect(Double(container.bounds.width) == row.contentWidth)
 }
+
+// MARK: - Carrying the scroll phase across a rebuild
+
+@Test func phaseIsTheFractionOfALapAnAnimationHasRun() {
+    #expect(StripRenderer.phase(localTime: 5, beginTime: 0, duration: 20) == 0.25)
+    #expect(StripRenderer.phase(localTime: 105, beginTime: 100, duration: 20) == 0.25)
+}
+
+@Test func phaseWrapsRatherThanGrowingPastOne() {
+    // `repeatCount = .infinity` means elapsed time runs away without bound.
+    // A phase of 3.25 laps is a phase of 0.25, and anything using the
+    // unwrapped value would push the rebuilt row's begin time arbitrarily far
+    // into the past.
+    #expect(StripRenderer.phase(localTime: 65, beginTime: 0, duration: 20) == 0.25)
+}
+
+@Test func phaseIsZeroWhereThereIsNoLapToBeFractionOf() {
+    // A zero duration cannot be divided into, and a local time before the
+    // animation began has not started its first lap. Both mean "start at the
+    // beginning", which is what a rebuild did anyway — so the caller needs no
+    // special case of its own.
+    #expect(StripRenderer.phase(localTime: 5, beginTime: 0, duration: 0) == 0)
+    #expect(StripRenderer.phase(localTime: 0, beginTime: 5, duration: 20) == 0)
+}
+
+@Test func aRebuiltRowBeginsInThePastByExactlyThePhaseItInherited() {
+    // The whole fix in one line: the replacement animation is told it started
+    // a quarter of a lap ago, so its first drawn frame is the frame the strip
+    // was already showing.
+    #expect(StripRenderer.rebuiltBeginTime(nowInLayerTime: 100,
+                                           phase: 0.25, duration: 20) == 95)
+}
+
+@Test func aRebuiltRowAtPhaseZeroBeginsExactlyNow() {
+    #expect(StripRenderer.rebuiltBeginTime(nowInLayerTime: 100,
+                                           phase: 0, duration: 20) == 100)
+}

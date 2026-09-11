@@ -9,12 +9,20 @@ import QuartzCore
 /// draws a `CATextLayer` where it was told to is not this project's problem;
 /// whether a 480pt strip at 24pt/s takes 20 seconds to cross is.
 enum StripRenderer {
-    /// Capped at 30 fps by spec §5.1. The minimum is deliberately far below
-    /// it: on a ProMotion display an unconstrained range lets Core Animation
-    /// choose 120, and the floor lets it choose *less* than 30 when the
-    /// system is busy, which for scrolling text nobody is reading is a
-    /// trade the app should take every time.
-    static let frameRate = CAFrameRateRange(minimum: 8, maximum: 30, preferred: 30)
+    /// Capped at 30 fps by spec §5.1 — on a ProMotion display an unconstrained
+    /// range lets Core Animation choose 120, which this exists to prevent.
+    ///
+    /// The floor is 30 as well, and that is a change from the original 8. A
+    /// low floor is licence for the compositor to drop frames under load, and
+    /// dropped frames in a linear marquee read as a stutter rather than as a
+    /// smooth slowdown — the user reported the strip "jerks". That diagnosis
+    /// is *suspected and unmeasured*: the frame pacing was never instrumented,
+    /// and the separate, certain defect (the rebuild snapping the strip back
+    /// to its first character, fixed by `phase`/`rebuiltBeginTime` above) may
+    /// account for the whole report on its own. 30 fps of text that moves a
+    /// pixel a frame costs little enough that removing the licence is the
+    /// cheaper bet either way.
+    static let frameRate = CAFrameRateRange(minimum: 30, maximum: 30, preferred: 30)
 
     struct Metrics {
         let rowCount: Int
@@ -62,6 +70,35 @@ enum StripRenderer {
     /// backwards jump in the media clock, which is not worth a blank menu bar.
     static func resumedBeginTime(nowInLayerTime: Double, pausedOffset: Double) -> Double {
         max(0, nowInLayerTime - pausedOffset)
+    }
+
+    /// How far through its lap a repeating animation is, as a fraction in
+    /// `[0, 1)`. `TickerView.apply` reads this from the row it is about to
+    /// discard and hands it to the row that replaces it.
+    ///
+    /// A *fraction*, not an offset in seconds, because the strip it is carried
+    /// onto is rarely the same width: a price gaining a digit changes
+    /// `contentWidth` and so changes the lap. The fraction keeps the strip in
+    /// the same proportional place; an absolute offset would land somewhere
+    /// arbitrary on the new one.
+    static func phase(localTime: Double, beginTime: Double, duration: Double) -> Double {
+        guard duration > 0, localTime.isFinite, beginTime.isFinite else { return 0 }
+        let elapsed = localTime - beginTime
+        guard elapsed > 0 else { return 0 }
+        return elapsed.truncatingRemainder(dividingBy: duration) / duration
+    }
+
+    /// The begin time a rebuilt row needs so it picks up its lap where the row
+    /// it replaces left off: far enough in the past that its first drawn frame
+    /// is the frame already on screen.
+    ///
+    /// Not clamped at zero, unlike `resumedBeginTime`. The media clock is
+    /// uptime in seconds, so a phase worth less than one lap cannot push this
+    /// negative on any machine awake long enough to have launched the app.
+    static func rebuiltBeginTime(nowInLayerTime: Double,
+                                 phase: Double,
+                                 duration: Double) -> Double {
+        nowInLayerTime - phase * duration
     }
 
     /// One row's text, laid out once if the row fits its window and twice if

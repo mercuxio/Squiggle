@@ -52,6 +52,69 @@ private func everyRowStillCarriesItsAnimation(_ view: TickerView) -> Bool {
     return !rows.isEmpty && rows.allSatisfy { !($0.animationKeys() ?? []).isEmpty }
 }
 
+// How far through its lap each row's animation is, read back the same way
+// `TickerView` reads it.
+@MainActor
+private func rowPhases(_ view: TickerView) -> [Double] {
+    (view.layer?.sublayers ?? []).map { rowLayer in
+        guard let animation = rowLayer.animation(forKey: "scroll") else { return 0 }
+        let local = rowLayer.convertTime(CACurrentMediaTime(), from: nil)
+        return StripRenderer.phase(localTime: local,
+                                   beginTime: animation.beginTime,
+                                   duration: animation.duration)
+    }
+}
+
+// Winds each row on so it reads as part of a lap in, without waiting for real
+// time to pass. `beginTime` is an absolute layer time, so moving it into the
+// past is exactly equivalent to the animation having run that much longer.
+@MainActor
+private func windForward(_ view: TickerView, laps: Double) {
+    for rowLayer in view.layer?.sublayers ?? [] {
+        guard let animation = rowLayer.animation(forKey: "scroll") else { continue }
+        guard let wound = animation.copy() as? CABasicAnimation else { continue }
+        wound.beginTime = animation.beginTime - laps * animation.duration
+        rowLayer.removeAnimation(forKey: "scroll")
+        rowLayer.add(wound, forKey: "scroll")
+    }
+}
+
+@MainActor
+@Test func rebuildingTheStripKeepsItsPlaceInTheLapInsteadOfSnappingToTheStart() throws {
+    // The skip the user reported: every refresh, appearance change, Reduce
+    // Motion toggle and settings edit calls `apply`, which tears every row
+    // layer down and builds a new one. A new animation starting at phase zero
+    // puts the strip back at its first character, mid-scroll, several times a
+    // minute. `pause()` one function away already carries its offset across
+    // (spec §5.2) — this makes the rebuild do the same.
+    let view = TickerView()
+    let layout = try wideLayout()
+    apply(view, layout: layout, paused: false)
+    windForward(view, laps: 0.25)
+
+    apply(view, layout: layout, paused: false)
+
+    // Not exactly 0.25: the media clock advances between winding the old row
+    // and reading the new one. A snap to the start would read as ~0.
+    for phase in rowPhases(view) {
+        #expect(phase > 0.2)
+        #expect(phase < 0.3)
+    }
+}
+
+@MainActor
+@Test func aFirstApplyStartsAtTheBeginningOfTheLap() throws {
+    // There is no previous row to inherit from, so phase zero is the honest
+    // answer — and it is what makes the test above a real assertion rather
+    // than one that would pass on any input.
+    let view = TickerView()
+    apply(view, layout: try wideLayout(), paused: false)
+
+    for phase in rowPhases(view) {
+        #expect(phase < 0.01)
+    }
+}
+
 @MainActor
 @Test func applyingWhilePausedLeavesTheStripStopped() throws {
     // The defect this exists for: a refresh tick, an appearance change or a
