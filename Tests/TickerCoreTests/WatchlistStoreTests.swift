@@ -73,7 +73,7 @@ private func write(_ json: String, to url: URL) throws {
         schemaVersion: 1,
         symbols: [try #require(Symbol("AAPL")), try #require(Symbol("BTC-USD"))],
         settings: Settings(refreshIntervalSeconds: 300, rows: 2, scrollPointsPerSecond: 24,
-                           colorScheme: "monochrome", maxVisibleWidth: 320, launchAtLogin: true),
+                           colorScheme: "monochrome", motionMode: "step", maxVisibleWidth: 320),
         cooldownUntilEpoch: 1_757_000_000)
 
     try fileStore.save(original)
@@ -122,7 +122,7 @@ private func write(_ json: String, to url: URL) throws {
 
     #expect(topLevel == ["cooldownUntilEpoch", "schemaVersion", "settings", "symbols"],
             "top-level keys are not sorted: \(topLevel)")
-    #expect(settingsKeys.count == 7, "did not find the settings keys: \(settingsKeys)")
+    #expect(settingsKeys.count == 6, "did not find the settings keys: \(settingsKeys)")
     #expect(settingsKeys == settingsKeys.sorted(),
             "settings keys are not sorted: \(settingsKeys)")
 }
@@ -225,8 +225,8 @@ private func write(_ json: String, to url: URL) throws {
                     symbols: symbols,
                     settings: Settings(refreshIntervalSeconds: 900, rows: 2,
                                        scrollPointsPerSecond: 24,
-                                       colorScheme: "monochrome", maxVisibleWidth: 320,
-                                       launchAtLogin: true),
+                                       colorScheme: "monochrome", motionMode: "step",
+                                       maxVisibleWidth: 320),
                     cooldownUntilEpoch: 1_757_000_000)
 
     let url = tempURL()
@@ -795,17 +795,19 @@ private func write(_ json: String, to url: URL) throws {
     // a strict field throws out of `Settings.init(from:)`, `settings` as a
     // whole degrades to its default, and the watchlist survives anyway. The
     // witness is what says only the one field was lost.
-    let witness = #""launchAtLogin":true"#
+    // `motionMode` is the witness: it is orthogonal to every field under test
+    // here, which `colorScheme` is not, and unlike the `launchAtLogin` this
+    // replaces (R145) it is a field the app actually reads.
+    let witness = #""motionMode":"step""#
     let cases: [(String, String, Settings)] = [
-        (#""refreshIntervalSeconds":"fast""#, witness, Settings(launchAtLogin: true)),
-        (#""rows":"one""#, witness, Settings(launchAtLogin: true)),
-        (#""scrollPointsPerSecond":"quick""#, witness, Settings(launchAtLogin: true)),
-        (#""colorScheme":7"#, witness, Settings(launchAtLogin: true)),
-        (#""maxVisibleWidth":"wide""#, witness, Settings(launchAtLogin: true)),
-        // `launchAtLogin` is the one under test here, so something else
+        (#""refreshIntervalSeconds":"fast""#, witness, Settings(motionMode: "step")),
+        (#""rows":"one""#, witness, Settings(motionMode: "step")),
+        (#""scrollPointsPerSecond":"quick""#, witness, Settings(motionMode: "step")),
+        (#""colorScheme":7"#, witness, Settings(motionMode: "step")),
+        (#""maxVisibleWidth":"wide""#, witness, Settings(motionMode: "step")),
+        // `motionMode` is the one under test here, so something else
         // witnesses for it.
-        (#""launchAtLogin":"yes""#, #""colorScheme":"monochrome""#,
-         Settings(colorScheme: "monochrome")),
+        (#""motionMode":7"#, #""colorScheme":"classic""#, Settings(colorScheme: "classic")),
     ]
 
     for (bad, good, expected) in cases {

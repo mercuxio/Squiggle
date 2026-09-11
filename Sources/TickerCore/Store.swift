@@ -67,7 +67,6 @@ public struct Settings: Codable, Equatable, Sendable {
     /// overrode it with.
     public var motionMode: String
     public var maxVisibleWidth: Double
-    public var launchAtLogin: Bool
 
     /// The bounds `init(from:)` clamps to, named so that a control cannot be
     /// built with a different range (R143). A slider that reaches 1,400 points
@@ -83,15 +82,13 @@ public struct Settings: Codable, Equatable, Sendable {
                 scrollPointsPerSecond: Double = 24,
                 colorScheme: String = "monochrome",
                 motionMode: String = "scroll",
-                maxVisibleWidth: Double = 260,
-                launchAtLogin: Bool = false) {
+                maxVisibleWidth: Double = 260) {
         self.refreshIntervalSeconds = refreshIntervalSeconds
         self.rows = rows
         self.scrollPointsPerSecond = scrollPointsPerSecond
         self.colorScheme = colorScheme
         self.motionMode = motionMode
         self.maxVisibleWidth = maxVisibleWidth
-        self.launchAtLogin = launchAtLogin
     }
 
     /// Every number here is hostile input: the file is user-editable by
@@ -143,8 +140,6 @@ public struct Settings: Codable, Equatable, Sendable {
         let width = finiteOrDefault(.maxVisibleWidth, defaults.maxVisibleWidth)
         maxVisibleWidth = min(max(width, Settings.widthRange.lowerBound),
                               Settings.widthRange.upperBound)
-
-        launchAtLogin = c.lenient(Bool.self, .launchAtLogin, default: defaults.launchAtLogin)
     }
 }
 

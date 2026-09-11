@@ -163,4 +163,20 @@ enum ErrorText {
         let symbols = watchlistCount == 1 ? "1 symbol" : "\(watchlistCount) symbols"
         return "\(chosen) (\(minutes(cycle)) min with \(symbols))"
     }
+
+    static let launchAtLoginLabel = "Open at Login"
+    static let openLoginItems = "Open Login Items…"
+
+    /// `nil` for the two states a checkbox already explains. The other two
+    /// need a sentence because their fix is not in this window (R146).
+    static func loginItemNote(for state: LoginItemState) -> String? {
+        switch state {
+        case .on, .off:
+            return nil
+        case .needsApproval:
+            return "Turned off in System Settings."
+        case .unavailable:
+            return "Available when Squiggle is running from an app bundle."
+        }
+    }
 }

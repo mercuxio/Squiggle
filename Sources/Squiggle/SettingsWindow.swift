@@ -1,7 +1,7 @@
 import AppKit
 import TickerCore
 
-/// Spec build-order step 7, minus launch-at-login (Task 14).
+/// Spec build-order step 7, including launch-at-login (Task 14).
 ///
 /// Built in code (R133). Seven controls do not justify a second UI framework
 /// in a menu bar utility, and a storyboard is a file no test can read.
@@ -25,13 +25,22 @@ final class SettingsWindowController: NSWindowController {
     private let widthSlider = NSSlider()
     private let speedSlider = NSSlider()
     private let effectiveLabel = NSTextField(labelWithString: "")
+    private let launchAtLogin: LaunchAtLogin
+    private let loginCheckbox = NSButton(checkboxWithTitle: ErrorText.launchAtLoginLabel,
+                                         target: nil, action: nil)
+    private let loginNote = NSTextField(labelWithString: "")
+    private let loginSettingsButton = NSButton(title: ErrorText.openLoginItems,
+                                               target: nil, action: nil)
     /// The watchlist size the effective-interval line is computed against.
     /// Set by the controller, because the window does not own the watchlist
     /// and the number changes under it when Task 15 adds a symbol.
     var watchlistCount = 0 { didSet { refreshEffectiveLabel() } }
 
-    init(settings: Settings, onChange: @escaping (Settings) -> Void) {
+    init(settings: Settings,
+         launchAtLogin: LaunchAtLogin = .system,
+         onChange: @escaping (Settings) -> Void) {
         self.settings = settings
+        self.launchAtLogin = launchAtLogin
         self.onChange = onChange
 
         let window = NSWindow(
@@ -49,7 +58,11 @@ final class SettingsWindowController: NSWindowController {
         super.init(window: window)
         window.contentView = makeContentView()
         window.center()
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(windowBecameKey),
+            name: NSWindow.didBecomeKeyNotification, object: window)
         apply(settings)
+        refreshLoginItem()
     }
 
     @available(*, unavailable)
@@ -113,6 +126,14 @@ final class SettingsWindowController: NSWindowController {
         effectiveLabel.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
         effectiveLabel.textColor = .secondaryLabelColor
 
+        loginCheckbox.target = self
+        loginCheckbox.action = #selector(loginCheckboxChanged)
+        loginNote.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        loginNote.textColor = .secondaryLabelColor
+        loginSettingsButton.target = self
+        loginSettingsButton.action = #selector(openLoginItems)
+        loginSettingsButton.bezelStyle = .inline
+
         let grid = NSGridView(views: [
             [label(ErrorText.rowsLabel), rowsControl],
             [label(ErrorText.intervalLabel), intervalPopUp],
@@ -121,6 +142,9 @@ final class SettingsWindowController: NSWindowController {
             [label(ErrorText.motionLabel), motionControl],
             [label(ErrorText.widthLabel), widthSlider],
             [label(ErrorText.speedLabel), speedSlider],
+            [NSGridCell.emptyContentView, loginCheckbox],
+            [NSGridCell.emptyContentView, loginNote],
+            [NSGridCell.emptyContentView, loginSettingsButton],
         ])
         grid.column(at: 0).xPlacement = .trailing
         grid.column(at: 1).width = 220
@@ -166,4 +190,36 @@ final class SettingsWindowController: NSWindowController {
             userIntervalSeconds: settings.refreshIntervalSeconds,
             watchlistCount: watchlistCount)
     }
+
+    // MARK: - Launch at login
+
+    /// R146: read, never remember. The user can change this in System
+    /// Settings while the window is open and nothing tells us.
+    private func refreshLoginItem() {
+        show(launchAtLogin.read())
+    }
+
+    private func show(_ state: LoginItemState) {
+        loginCheckbox.state = state.isOn ? .on : .off
+        loginCheckbox.isEnabled = state.isEnabled
+        let note = ErrorText.loginItemNote(for: state)
+        loginNote.stringValue = note ?? ""
+        loginNote.isHidden = note == nil
+        loginSettingsButton.isHidden = !state.showsSystemSettingsButton
+    }
+
+    @objc private func loginCheckboxChanged() {
+        // The state is re-read rather than taken from the checkbox, because
+        // the checkbox is a report and this is the moment it is most likely
+        // to be out of date.
+        let current = launchAtLogin.read()
+        let wanted = loginCheckbox.state == .on
+        show(launchAtLogin.apply(LaunchAtLogin.action(desired: wanted, current: current)))
+    }
+
+    @objc private func openLoginItems() {
+        show(launchAtLogin.apply(.openSystemSettings))
+    }
+
+    @objc private func windowBecameKey() { refreshLoginItem() }
 }
