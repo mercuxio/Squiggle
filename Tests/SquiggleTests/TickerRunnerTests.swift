@@ -60,19 +60,24 @@ private final class FakeClock: MonotonicClock, @unchecked Sendable {
     let clock = FakeClock()
     let runner = TickerRunner(symbols: [aapl], userIntervalSeconds: 180,
                               fetcher: fetcher, clock: clock)
-    _ = await runner.step(nowEpoch: 1_000, visibility: .visible, lowPowerMode: false)
+    // Both epochs below sit inside regular-session.json's recorded regular
+    // session (1_788_874_200..<1_788_897_600) on purpose: a nowEpoch outside
+    // it makes the aggregate calendar read `.closed` once that period has
+    // been recorded, and the engine then sleeps instead of ever fetching
+    // again.
+    _ = await runner.step(nowEpoch: 1_788_880_000, visibility: .visible, lowPowerMode: false)
 
     fetcher.error = TickerError.offline
     // Far enough ahead that the pacer's spacing floor has expired.
     clock.nowSeconds = 10_000
     var later = 0.0
     for _ in 0..<40 where runner.lastError == nil {
-        later = await runner.step(nowEpoch: 11_000, visibility: .visible, lowPowerMode: false)
+        later = await runner.step(nowEpoch: 1_788_881_000, visibility: .visible, lowPowerMode: false)
         clock.nowSeconds += max(later, 1)
     }
 
     #expect(runner.lastError == .offline)
-    #expect(runner.lastSuccessEpoch == 1_000)
+    #expect(runner.lastSuccessEpoch == 1_788_880_000)
     #expect(runner.quotes[aapl] != nil)
 }
 

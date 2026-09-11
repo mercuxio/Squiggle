@@ -25,24 +25,6 @@ final class TickerRunner {
     var deadSymbols: Set<Symbol> { engine.deadSymbols }
     var diagnosticSnapshot: FeedEngine.DiagnosticSnapshot { engine.diagnosticSnapshot }
 
-    /// The longest gap between `nowEpoch` and a calendar's reported next open
-    /// that `step` will still treat as a real market closure.
-    ///
-    /// No real Yahoo instrument closes longer than this — the longest US
-    /// holiday weekend is a few days — so a computed gap past it means
-    /// `nowEpoch` and the trading period on file are not describing the same
-    /// moment (a corrected system clock, or a caller that deliberately holds
-    /// `nowEpoch` far from the epoch a payload described) rather than an
-    /// instrument that will not reopen for years. `RefreshPolicy` already
-    /// clamps the closed-market *wait* to twelve hours
-    /// (`RateConstants.maxClosedMarketWait`), but nothing clamps how many
-    /// times in a row that twelve-hour wait can be reissued from the same
-    /// stale inputs — and a caller that never revisits a symbol stuck this
-    /// way would spin on it forever, with no fetch ever attempted and so no
-    /// failure ever recorded. Trusting the calendar past this bound instead
-    /// of falling back to "assume open" is what one wasted request buys.
-    private static let calendarSanityWindow: Double = 7 * 24 * 3600
-
     init(symbols: [Symbol], userIntervalSeconds: Double,
          fetcher: any QuoteFetching, clock: any MonotonicClock = SystemClock()) {
         self.symbols = symbols
@@ -62,25 +44,14 @@ final class TickerRunner {
     @discardableResult
     func step(nowEpoch: Double, visibility: Visibility, lowPowerMode: Bool) async -> Double {
         calendars.retain(Set(symbols).subtracting(engine.deadSymbols))
-
-        // Before the first successful quote, assume the market is open: one
-        // wasted request beats a ticker that never starts.
-        let rawMarketState = calendars.aggregateState(atEpoch: nowEpoch) ?? .regular
-        let rawNextOpen = calendars.earliestSessionOpenEpoch(after: nowEpoch)
-
-        // See `calendarSanityWindow`. Scoped to exactly the pathological
-        // case — closed, with a next open implausibly far away — so a
-        // genuine `.pre`/`.regular`/`.post` reading, or a closed reading
-        // with no known next open, is untouched.
-        let closedGapImplausible = rawMarketState == .closed
-            && (rawNextOpen.map { $0 - nowEpoch > Self.calendarSanityWindow } ?? false)
-
         let context = EngineContext(
             nowEpoch: nowEpoch,
-            marketState: closedGapImplausible ? .regular : rawMarketState,
+            // Before the first successful quote, assume the market is open:
+            // one wasted request beats a ticker that never starts.
+            marketState: calendars.aggregateState(atEpoch: nowEpoch) ?? .regular,
             visibility: visibility,
             lowPowerMode: lowPowerMode,
-            nextSessionOpenEpoch: closedGapImplausible ? nil : rawNextOpen)
+            nextSessionOpenEpoch: calendars.earliestSessionOpenEpoch(after: nowEpoch))
 
         switch engine.next(context) {
         case .sleep(let seconds):
