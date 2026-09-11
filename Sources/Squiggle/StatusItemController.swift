@@ -16,9 +16,10 @@ final class StatusItemController: NSObject {
     /// The dropdown. One panel for the life of the app, its contents rebuilt
     /// on every open — see `presentDropdown`.
     private let dropdown = StatusPanel()
-    /// The footer's coffee button. The one URL in the app that is not Yahoo's,
-    /// and the only one a click opens in a browser.
-    private let coffeeURL = URL(string: "https://buymeacoffee.com/benjamintan")!
+    /// The footer's coffee button. The address itself lives in `ErrorText`
+    /// with the rest of the copy; force-unwrapped because a constant that
+    /// fails to parse is a build-time mistake, not a runtime condition.
+    private let coffeeURL = URL(string: ErrorText.coffeeURL)!
     // Retained by `NotificationCenter` until removed, same as `timer` is
     // retained by the run loop until invalidated — `stop()` tears both down
     // for the same reason.
@@ -177,6 +178,13 @@ final class StatusItemController: NSObject {
                                      visibility: visibility(),
                                      lowPowerMode: ProcessInfo.processInfo.isLowPowerModeEnabled)
         render()
+        // The strip is not the only thing showing these numbers. An `NSMenu`
+        // closed itself on almost any stray click, so a dropdown that never
+        // updated was a dropdown alive for a second; this panel stays up until
+        // it is dismissed, and *Refresh Now* is a footer button, so the one
+        // control whose whole purpose is "show me new numbers" has to actually
+        // show them.
+        if dropdown.isShowing { rebuildDropdownContent() }
         scheduleStep(after: wait)
     }
 
@@ -315,10 +323,10 @@ final class StatusItemController: NSObject {
         }
     }
 
-    // R132: rebuilt every time it opens rather than kept in sync. A dropdown
-    // that is only visible for the second it is being read has no state worth
-    // maintaining, and the timer is on `.common` (Task 6), so the prices
-    // behind it keep arriving while it is up.
+    // R132 said this was rebuilt only on open, because a dropdown visible for
+    // the second it is being read has no state worth maintaining. That was
+    // true of `NSMenu` and its modal tracking loop; it is false of a panel the
+    // user can leave open indefinitely, so `stepOnce` rebuilds it too.
     private func presentDropdown() {
         guard let button = statusItem.button else { return }
         rebuildDropdownContent()

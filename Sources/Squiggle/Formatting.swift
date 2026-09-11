@@ -69,8 +69,9 @@ enum Formatting {
     /// Derived by splitting `change`'s own output rather than rebuilding it,
     /// because the two must never disagree — the dropdown row renders the
     /// whole string and the strip renders these two halves, and a reader
-    /// comparing them would see any difference at once. `glyph` is empty for
-    /// `.unknown`, which makes `body` the whole string.
+    /// comparing them would see any difference at once. For `.unknown` both
+    /// halves are empty, because `Quote` only reaches `.unknown` where it also
+    /// has no `change` to format — so the strip shows the price alone.
     static func changeParts(_ quote: Quote,
                             locale: Locale = .autoupdatingCurrent)
     -> (glyph: String, body: String) {

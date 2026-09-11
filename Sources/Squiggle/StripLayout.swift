@@ -121,9 +121,12 @@ struct StripLayout: Equatable {
 
         // The glyph is its own segment so that it, and nothing else, carries
         // `.direction` — the delta and the percentage read as label text in
-        // every scheme. A `.unknown` quote has no glyph at all, and an empty
-        // segment is one every later stage would have to remember to skip,
-        // so it is left out rather than emitted at zero width.
+        // every scheme. The two `isEmpty` guards below are independent on
+        // purpose even though no `Quote` can currently trip only one of them:
+        // `.unknown` empties both halves at once and is caught by the guard
+        // above, so a half-empty pair could only come from a future change to
+        // `changeParts`, and emitting a zero-width segment is the failure mode
+        // every later stage would have to remember to skip.
         var pieces = [name, Piece(text: price + " ", role: .label)]
         if !change.glyph.isEmpty {
             pieces.append(Piece(text: change.glyph, role: .direction(quote.direction)))

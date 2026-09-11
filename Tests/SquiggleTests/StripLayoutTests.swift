@@ -70,18 +70,29 @@ private func quote(_ raw: String, price: Double, change: Double?) throws -> Quot
     #expect(segments[2].text == "–")
 }
 
-@Test func anUnknownDirectionEmitsNoGlyphSegmentAtAll() throws {
-    // `Direction.unknown`'s glyph is the empty string. A zero-width segment
-    // would measure to nothing and draw nothing, so it is not emitted: an
-    // empty segment is one every later stage has to remember to skip.
+/// A quote with no change at all — the first print of a new listing.
+///
+/// `Quote.init` sets `.unknown` only where it also nils `change`, so this is
+/// the *whole* of what `.unknown` looks like on the strip: no glyph, no delta,
+/// no brackets, just a name and a price. Asserted as the complete segment list
+/// rather than as "no `.direction(.unknown)` anywhere", which was the shape
+/// this test had first — and which passes just as well on a build that emits
+/// an empty glyph segment, because an empty segment carries `.direction(.flat)`
+/// or nothing at all depending on how it breaks.
+@Test func aQuoteWithNoChangeYetIsJustANameAndAPrice() throws {
     let ipo = try symbol("IPO")
     let layout = StripLayout.build(
         symbols: [ipo],
         quotes: [ipo: try quote("IPO", price: 12.5, change: nil)],
         dead: [], rows: 1, gap: 20, locale: posix, measure: tenPerCharacter)
 
-    let roles = layout.rows[0].segments.map(\.role)
-    #expect(!roles.contains(.direction(.unknown)))
+    let segments = layout.rows[0].segments
+    #expect(segments.map(\.role) == [.label, .label])
+    #expect(segments.count == 2)
+    let text = segments.map(\.text).joined()
+    #expect(text.contains("IPO"))
+    #expect(text.contains("12.5"))
+    #expect(!text.contains("("))
 }
 
 @Test func aDeadSymbolKeepsItsSlotAndCarriesNoDirection() throws {

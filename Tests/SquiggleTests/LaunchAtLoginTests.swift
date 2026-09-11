@@ -127,6 +127,29 @@ import Testing
     #expect(plain != failed)
 }
 
+/// A refusal is news, but it is not the whole story. `.needsApproval`'s own
+/// sentence is the only thing that tells the user the fix is in System
+/// Settings rather than in this window, and a domain/code pair in its place
+/// leaves them with a number and nowhere to take it. Now that the note wraps,
+/// there is room for both.
+@Test func aRefusalIsAddedToTheStateNoteRatherThanReplacingIt() throws {
+    let refused = LoginItemFailure(domain: "SMAppServiceErrorDomain", code: 1)
+    let plain = try #require(ErrorText.loginItemNote(for: .needsApproval))
+    let failed = try #require(ErrorText.loginItemNote(for: .needsApproval,
+                                                     failure: refused))
+    #expect(failed.contains(plain))
+    #expect(failed.contains("1"))
+}
+
+/// `.on` and `.off` have no sentence of their own, so a refusal is all there
+/// is to say — and it must not arrive with stray punctuation from a note that
+/// was never there.
+@Test func aRefusalOnASilentStateStandsAlone() throws {
+    let refused = LoginItemFailure(domain: "SMAppServiceErrorDomain", code: 1)
+    let failed = try #require(ErrorText.loginItemNote(for: .off, failure: refused))
+    #expect(failed.hasPrefix("macOS"))
+}
+
 @Test func withNothingRefusedTheStateSpeaksForItself() {
     for state in [LoginItemState.on, .off, .needsApproval, .unavailable] {
         #expect(ErrorText.loginItemNote(for: state, failure: nil)

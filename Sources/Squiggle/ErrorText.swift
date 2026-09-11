@@ -19,6 +19,13 @@ enum ErrorText {
     static let quit = "Quit Squiggle"
     static let buyCoffee = "Buy me a coffee"
 
+    /// The one address in this app that is not Yahoo's, and the only one a
+    /// click opens in a browser. Here rather than in the controller because it
+    /// is user-facing copy by the same argument the titles above are: it is a
+    /// thing the user reads, in their browser's address bar, after clicking a
+    /// button in Squiggle.
+    static let coffeeURL = "https://buymeacoffee.com/benjamintan"
+
     /// The trash button's only label. Icon-only controls are invisible to
     /// VoiceOver otherwise, and twenty rows of "Remove" would leave a screen
     /// reader user counting to work out which one they were on.
@@ -217,7 +224,12 @@ enum ErrorText {
     static func loginItemNote(for state: LoginItemState,
                               failure: LoginItemFailure?) -> String? {
         guard let failure else { return Self.loginItemNote(for: state) }
-        return "macOS refused the change (\(failure.domain) \(failure.code))."
+        let refusal = "macOS refused the change (\(failure.domain) \(failure.code))."
+        // Joined, not replaced. `.needsApproval`'s sentence is the only thing
+        // pointing at System Settings, and a domain and a code leave the user
+        // holding a number with nowhere to take it.
+        guard let existing = Self.loginItemNote(for: state) else { return refusal }
+        return "\(refusal) \(existing)"
     }
 
     /// `nil` for the two states a checkbox already explains. The other two

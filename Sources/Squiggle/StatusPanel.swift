@@ -22,7 +22,9 @@ final class StatusPanel: NSPanel {
     }
 
     private var outsideClicks: Any?
+    private var ownClicks: Any?
     private var keys: Any?
+    private var deactivation: (any NSObjectProtocol)?
     /// The status item this panel is hanging under. Weak: the status bar owns
     /// its button, and a panel that outlived it would be holding a corpse.
     private weak var anchor: NSStatusBarButton?
@@ -42,6 +44,10 @@ final class StatusPanel: NSPanel {
         // Closed and reopened all session long; releasing on close would free
         // it out from under the controller still holding it.
         isReleasedWhenClosed = false
+        // `false`, with `didResignActiveNotification` doing the dismissing
+        // instead. AppKit's own hiding does not route through `close()`, so it
+        // would leave the event monitors installed on a panel the user can no
+        // longer see — and the key monitor swallows Escape app-wide.
         hidesOnDeactivate = false
         isMovable = false
         isOpaque = false
@@ -81,8 +87,11 @@ final class StatusPanel: NSPanel {
         return image
     }
 
-    /// Borderless panels refuse key by default, which would leave the Escape
-    /// monitor as the only way out and the search field in the picker dead.
+    /// Borderless panels refuse key by default, and a panel that never becomes
+    /// key cannot take a keystroke at all — including the Escape the local
+    /// monitor is watching for. (An earlier version of this comment also
+    /// claimed it kept the symbol picker's search field alive; the picker is
+    /// its own window controller and this panel is closed before it opens.)
     override var canBecomeKey: Bool { true }
 
     /// Swap in freshly built content and resize to fit it.
@@ -105,7 +114,16 @@ final class StatusPanel: NSPanel {
         ])
         background.layoutSubtreeIfNeeded()
         setContentSize(view.fittingSize)
-        if isVisible { setFrameTopLeftPoint(topLeft) }
+        guard isVisible else { return }
+        setFrameTopLeftPoint(topLeft)
+        // Re-clamp: a rebuild that made the panel wider would otherwise push
+        // its new right edge past the screen, because `topLeft` was measured
+        // at the old width and says nothing about the new one.
+        if let anchor, let window = anchor.window {
+            let button = window.convertToScreen(anchor.convert(anchor.bounds, to: nil))
+            let clamped = origin(under: button, on: window.screen)
+            setFrameTopLeftPoint(NSPoint(x: clamped.x, y: topLeft.y))
+        }
     }
 
     var isShowing: Bool { isVisible }
@@ -125,6 +143,15 @@ final class StatusPanel: NSPanel {
     override func close() {
         stopWatching()
         super.close()
+    }
+
+    /// `.transient` lets the window server order this panel out during a Spaces
+    /// switch or Mission Control, and that path does not call `close()`. The
+    /// monitors have to come down with the panel however it goes away, or the
+    /// key monitor keeps eating Escape for an invisible window.
+    override func orderOut(_ sender: Any?) {
+        stopWatching()
+        super.orderOut(sender)
     }
 
     /// Centred under the status item, then pulled back onto the screen it is
@@ -153,21 +180,47 @@ final class StatusPanel: NSPanel {
         // close the panel out from under them. The status item itself is
         // excluded below so this does not race the button's own toggle, which
         // would close and immediately reopen.
-        outsideClicks = NSEvent.addGlobalMonitorForEvents(
-            matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]
-        ) { [weak self] _ in
+        let mouse: NSEvent.EventTypeMask = [.leftMouseDown, .rightMouseDown, .otherMouseDown]
+        outsideClicks = NSEvent.addGlobalMonitorForEvents(matching: mouse) { [weak self] _ in
             let location = NSEvent.mouseLocation
+            MainActor.assumeIsolated { self?.dismiss(clickedAt: location) }
+        }
+        // And a *local* one for this app's own windows. A global monitor never
+        // sees them, so without this a dropdown opened over the settings window
+        // could not be dismissed by clicking that window — the user had to
+        // click a different application to get it off their own settings.
+        //
+        // This is what makes `anchorFrame()` load-bearing: the status item
+        // button is in this process, so its click arrives here, and closing on
+        // it would fight the button's own toggle into close-then-reopen.
+        ownClicks = NSEvent.addLocalMonitorForEvents(matching: mouse) { [weak self] event in
+            let location = NSEvent.mouseLocation
+            // A click inside the panel is the user using it, not leaving it.
+            let isOurs = event.window === self
             MainActor.assumeIsolated {
-                guard let self, !self.anchorFrame().contains(location) else { return }
-                self.close()
+                guard !isOurs else { return }
+                self?.dismiss(clickedAt: location)
             }
+            return event
+        }
+        // ⌘-Tab. Nothing else takes a `.popUpMenu`-level panel down on a
+        // keyboard-only switch, and it would then float over every other app.
+        deactivation = NotificationCenter.default.addObserver(
+            forName: NSApplication.didResignActiveNotification,
+            object: NSApp, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.close() }
         }
         keys = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             // Classified out here rather than inside `assumeIsolated`, which can
             // only hand back a `Sendable` value — and an `NSEvent` is not one.
             let isEscape = event.keyCode == 53
-            let isQuit =
-                event.modifierFlags.contains(.command)
+            // Command *alone*: ⌘⇧Q is the system log-out chord, and quitting
+            // Squiggle instead of logging the user out is not a surprise worth
+            // having.
+            let onlyCommand = event.modifierFlags
+                .intersection(.deviceIndependentFlagsMask) == .command
+            let isQuit = onlyCommand
                 && event.charactersIgnoringModifiers?.lowercased() == "q"
             guard isEscape || isQuit else { return event }
             MainActor.assumeIsolated {
@@ -177,6 +230,12 @@ final class StatusPanel: NSPanel {
         }
     }
 
+    /// Close unless the click was on the status item itself.
+    private func dismiss(clickedAt location: NSPoint) {
+        guard !anchorFrame().contains(location) else { return }
+        close()
+    }
+
     private func anchorFrame() -> NSRect {
         guard let anchor, let window = anchor.window else { return .zero }
         return window.convertToScreen(anchor.convert(anchor.bounds, to: nil))
@@ -184,8 +243,12 @@ final class StatusPanel: NSPanel {
 
     private func stopWatching() {
         if let outsideClicks { NSEvent.removeMonitor(outsideClicks) }
+        if let ownClicks { NSEvent.removeMonitor(ownClicks) }
         if let keys { NSEvent.removeMonitor(keys) }
+        if let deactivation { NotificationCenter.default.removeObserver(deactivation) }
         outsideClicks = nil
+        ownClicks = nil
         keys = nil
+        deactivation = nil
     }
 }
