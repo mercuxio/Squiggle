@@ -27,6 +27,12 @@ enum StripRenderer {
     struct Metrics {
         let rowCount: Int
         let font: NSFont
+        /// The same face and size a shade heavier, for the symbol at the head
+        /// of each entry. A second font rather than a weight applied at draw
+        /// time because `StatusItemController` has to measure with it too, and
+        /// measurement and drawing disagreeing is a strip laid out at the
+        /// wrong offsets.
+        let emphasisFont: NSFont
         let rowHeight: Double
     }
 
@@ -41,6 +47,9 @@ enum StripRenderer {
         return Metrics(
             rowCount: rowCount,
             font: .monospacedDigitSystemFont(ofSize: size, weight: .regular),
+            // `.semibold`, not `.bold`: at 10pt in a two-row strip a full bold
+            // fills its counters and reads as a smudge rather than as weight.
+            emphasisFont: .monospacedDigitSystemFont(ofSize: size, weight: .semibold),
             rowHeight: barHeight / Double(rowCount))
     }
 
@@ -144,9 +153,10 @@ enum StripRenderer {
             for segment in row.segments {
                 let text = CATextLayer()
                 text.contentsScale = scale
+                let font = segment.emphasized ? metrics.emphasisFont : metrics.font
                 text.string = segment.text
-                text.font = metrics.font
-                text.fontSize = metrics.font.pointSize
+                text.font = font
+                text.fontSize = font.pointSize
                 text.foregroundColor = color(segment.role)
                 text.alignmentMode = .left
                 // A ticker never wraps and never ellipsises: the strip is as

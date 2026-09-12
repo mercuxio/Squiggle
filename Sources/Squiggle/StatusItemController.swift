@@ -328,14 +328,27 @@ final class StatusItemController: NSObject {
     /// with the rows above them by one symbol.
     private static let entryGap: Double = 20
 
+    /// R131: the closure binds the fonts, so `StripLayout` never sees one.
+    ///
+    /// Both weights, because the symbol at the head of an entry is drawn a
+    /// shade heavier than the numbers after it and measures wider for it.
+    /// Written once for the same reason `entryGap` is: `render` lays the strip
+    /// out and `materializeRowSplit` decides which row each symbol lands in,
+    /// and two copies of this closure could measure the same watchlist
+    /// differently.
+    private static func measurer(_ metrics: StripRenderer.Metrics) -> (String, Bool) -> Double {
+        let regular = metrics.font
+        let emphasis = metrics.emphasisFont
+        return { text, emphasized in
+            let font = emphasized ? emphasis : regular
+            return Double((text as NSString).size(withAttributes: [.font: font]).width)
+        }
+    }
+
     private func render() {
         let metrics = StripRenderer.metrics(rows: settings.rows,
                                             barHeight: Double(NSStatusBar.system.thickness))
-        // R131: the closure binds the font, so `StripLayout` never sees one.
-        let font = metrics.font
-        let measure: (String) -> Double = { text in
-            Double((text as NSString).size(withAttributes: [.font: font]).width)
-        }
+        let measure = Self.measurer(metrics)
         let layout = StripLayout.build(symbols: runner.symbols,
                                        quotes: runner.quotes,
                                        dead: runner.deadSymbols,
@@ -453,10 +466,7 @@ final class StatusItemController: NSObject {
               !document.symbols.isEmpty else { return }
         let metrics = StripRenderer.metrics(rows: settings.rows,
                                             barHeight: Double(NSStatusBar.system.thickness))
-        let font = metrics.font
-        let measure: (String) -> Double = { text in
-            Double((text as NSString).size(withAttributes: [.font: font]).width)
-        }
+        let measure = Self.measurer(metrics)
         let buckets = StripLayout.rowBuckets(symbols: document.symbols,
                                              quotes: runner.quotes,
                                              dead: runner.deadSymbols,

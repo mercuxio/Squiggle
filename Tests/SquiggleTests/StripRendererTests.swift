@@ -21,6 +21,36 @@ private let barHeight = 22.0
     #expect(metrics.rowHeight == 11.0)
 }
 
+// The emphasis face is the same face at the same size, one step heavier —
+// anything else would change the strip's line height or its digit widths,
+// and R135 (monospaced digits) has to survive the emphasis.
+@Test func theEmphasisFontIsTheSameSizeAndHeavier() {
+    let metrics = StripRenderer.metrics(rows: 2, barHeight: barHeight)
+    #expect(metrics.emphasisFont.pointSize == metrics.font.pointSize)
+    #expect(metrics.emphasisFont != metrics.font)
+}
+
+// The layer, not just the metrics: a renderer that read one font for every
+// segment would pass the test above and still draw a flat strip.
+@Test func onlyTheEmphasisedSegmentGetsTheHeavierFont() throws {
+    let metrics = StripRenderer.metrics(rows: 1, barHeight: barHeight)
+    let row = StripLayout.Row(
+        segments: [
+            StripLayout.Segment(text: "AAPL ", role: .label, x: 0, width: 40,
+                                emphasized: true),
+            StripLayout.Segment(text: "232.10", role: .label, x: 40, width: 60),
+        ],
+        contentWidth: 120)
+
+    let container = StripRenderer.rowLayer(row, metrics: metrics, scale: 2, copies: 1,
+                                           color: { _ in NSColor.labelColor.cgColor })
+
+    let sublayers = try #require(container.sublayers)
+    let texts = try #require(sublayers as? [CATextLayer])
+    #expect(texts.map(\.fontSize) == [metrics.emphasisFont.pointSize,
+                                      metrics.font.pointSize])
+}
+
 // The same clamp `RowSplitter.split` applies. Two places agreeing by
 // accident is a bug waiting for someone to change one of them, so it is
 // asserted in both.

@@ -20,6 +20,22 @@ struct StripLayout: Equatable {
         /// Points from the left edge of its row.
         let x: Double
         let width: Double
+        /// Drawn in the heavier of the strip's two weights. The symbol takes
+        /// it and the numbers beside it do not, which is the same emphasis
+        /// the dropdown gives its rows.
+        let emphasized: Bool
+
+        /// Spelled out rather than left to the memberwise initialiser so the
+        /// weight can default: every caller that predates the emphasis, tests
+        /// included, means "the ordinary weight" and should not have to say so.
+        init(text: String, role: ColorRole, x: Double, width: Double,
+             emphasized: Bool = false) {
+            self.text = text
+            self.role = role
+            self.x = x
+            self.width = width
+            self.emphasized = emphasized
+        }
     }
 
     struct Row: Equatable {
@@ -40,6 +56,10 @@ struct StripLayout: Equatable {
     private struct Piece {
         let text: String
         let role: ColorRole
+        /// See `Segment.emphasized`. Carried from here so that the one place
+        /// that decides what a strip entry is made of is also the one place
+        /// that decides which part of it is the name.
+        var emphasized: Bool = false
     }
 
     /// - Parameters:
@@ -49,7 +69,11 @@ struct StripLayout: Equatable {
     ///   - gap: points between one entry and the next, and between the last
     ///     entry and the repeat of the first.
     ///   - measure: injected text measurement (R131). The caller binds the
-    ///     font; nothing here knows what a font is.
+    ///     fonts — both of them; nothing here knows what a font is. The flag
+    ///     is `Segment.emphasized`: a heavier weight measures wider, and a
+    ///     measurement taken at the wrong weight would put every segment to
+    ///     its right at the wrong `x` and give the row the wrong
+    ///     `contentWidth`, which is the marquee's lap and its tiling seam.
     ///   - rowOneCount: the user's own arrangement, if they have made one —
     ///     see `Store.rowOneCount`. `nil` lets `RowSplitter` balance by width.
     static func build(symbols: [Symbol],
@@ -59,7 +83,7 @@ struct StripLayout: Equatable {
                       gap: Double,
                       rowOneCount: Int? = nil,
                       locale: Locale = .autoupdatingCurrent,
-                      measure: (String) -> Double) -> StripLayout {
+                      measure: (String, Bool) -> Double) -> StripLayout {
         let rowCount = max(1, min(requestedRows, 2))
         // Named `entries`, not `pieces`: a local called `pieces` would shadow
         // the static `pieces(for:…)` it is initialised from, which Swift
@@ -80,9 +104,10 @@ struct StripLayout: Equatable {
             var x = 0.0
             for index in indices {
                 for piece in entries[index] {
-                    let width = measure(piece.text)
+                    let width = measure(piece.text, piece.emphasized)
                     segments.append(Segment(text: piece.text, role: piece.role,
-                                            x: x, width: width))
+                                            x: x, width: width,
+                                            emphasized: piece.emphasized))
                     x += width
                 }
                 x += gap
@@ -109,10 +134,10 @@ struct StripLayout: Equatable {
                            gap: Double,
                            rowOneCount: Int? = nil,
                            locale: Locale = .autoupdatingCurrent,
-                           measure: (String) -> Double) -> [[Int]] {
+                           measure: (String, Bool) -> Double) -> [[Int]] {
         let entryWidths = symbols.map { symbol -> Double in
             pieces(for: symbol, quotes: quotes, dead: dead, locale: locale)
-                .reduce(0.0) { $0 + measure($1.text) } + gap
+                .reduce(0.0) { $0 + measure($1.text, $1.emphasized) } + gap
         }
         return RowSplitter.split(widths: entryWidths,
                                  rows: max(1, min(requestedRows, 2)),
@@ -127,7 +152,9 @@ struct StripLayout: Equatable {
                                quotes: [Symbol: Quote],
                                dead: Set<Symbol>,
                                locale: Locale) -> [Piece] {
-        let name = Piece(text: symbol.raw + " ", role: .label)
+        // The name is the one piece drawn heavy — the same split the
+        // dropdown makes between a row's symbol and its numbers.
+        let name = Piece(text: symbol.raw + " ", role: .label, emphasized: true)
 
         // No quote yet and given-up-on are rendered the same way on purpose:
         // both mean "there is no number for this slot right now", and the

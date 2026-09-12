@@ -8,7 +8,11 @@ import TickerCore
 // points wide. Real text measurement varies by OS version and installed font
 // (spec §8.5), and none of these tests is about how wide anything is — only
 // about whether the strip is moving.
-private let tenPerCharacter: @Sendable (String) -> Double = { Double($0.count) * 10 }
+/// Weight-blind on purpose: these tests are about placement arithmetic, and
+/// a heavier symbol measuring wider is the caller's business (R131).
+private let tenPerCharacter: @Sendable (String, Bool) -> Double = { text, _ in
+    Double(text.count) * 10
+}
 
 private let posix = Locale(identifier: "en_US_POSIX")
 

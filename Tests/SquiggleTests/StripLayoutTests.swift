@@ -6,7 +6,11 @@ import TickerCore
 // A measurement function with no font in it: every character is 10 points
 // wide. Real text measurement varies by OS version and installed fonts
 // (spec §8.5), so the only stable assertions are against a fake.
-private let tenPerCharacter: @Sendable (String) -> Double = { Double($0.count) * 10 }
+/// Weight-blind on purpose: these tests are about placement arithmetic, and
+/// a heavier symbol measuring wider is the caller's business (R131).
+private let tenPerCharacter: @Sendable (String, Bool) -> Double = { text, _ in
+    Double(text.count) * 10
+}
 
 private let posix = Locale(identifier: "en_US_POSIX")
 
@@ -37,6 +41,53 @@ private func quote(_ raw: String, price: Double, change: Double?) throws -> Quot
 
     let texts = layout.rows[0].segments.map(\.text)
     #expect(texts == ["AAPL ", "232.10 ", "▼", "1.10 (0.47%)"])
+}
+
+@Test func onlyTheSymbolIsDrawnHeavy() throws {
+    // The same emphasis the dropdown gives a row: the name is the thing the
+    // eye is scanning for, the numbers after it are what it stops to read.
+    let aapl = try symbol("AAPL")
+    let layout = StripLayout.build(
+        symbols: [aapl],
+        quotes: [aapl: try quote("AAPL", price: 232.1, change: 1.1)],
+        dead: [], rows: 1, gap: 20, locale: posix, measure: tenPerCharacter)
+
+    let segments = layout.rows[0].segments
+    #expect(segments.map(\.emphasized) == [true, false, false, false])
+}
+
+@Test func aSymbolWithNoQuoteIsStillDrawnHeavy() throws {
+    // The placeholder path builds its own pair of pieces, so it is its own
+    // chance to forget the weight — and a launch showing every symbol
+    // un-emphasised until its first quote lands is exactly the flicker this
+    // pins against.
+    let vod = try symbol("VOD.L")
+    let layout = StripLayout.build(
+        symbols: [vod], quotes: [:],
+        dead: [], rows: 1, gap: 20, locale: posix, measure: tenPerCharacter)
+
+    let segments = layout.rows[0].segments
+    #expect(segments[0].text == "VOD.L ")
+    #expect(segments.map(\.emphasized) == [true, false])
+}
+
+@Test func theHeavierWeightIsMeasuredAtTheHeavierWeight() throws {
+    // R131 says the caller binds the font; the flag is how it knows *which*
+    // font. A layout that measured the symbol at the regular weight would
+    // put every segment after it slightly too far left and hand the marquee
+    // a `contentWidth` shorter than the text it tiles.
+    let aapl = try symbol("AAPL")
+    let doubleWhenHeavy: @Sendable (String, Bool) -> Double = { text, heavy in
+        Double(text.count) * (heavy ? 20 : 10)
+    }
+    let layout = StripLayout.build(
+        symbols: [aapl],
+        quotes: [aapl: try quote("AAPL", price: 232.1, change: 1.1)],
+        dead: [], rows: 1, gap: 20, locale: posix, measure: doubleWhenHeavy)
+
+    let segments = layout.rows[0].segments
+    #expect(segments[0].width == 100)   // "AAPL " at the heavier weight
+    #expect(segments[1].x == 100)       // and the price starts after all of it
 }
 
 @Test func onlyTheDirectionGlyphCarriesDirection() throws {
