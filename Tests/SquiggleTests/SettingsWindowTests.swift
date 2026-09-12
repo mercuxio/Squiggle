@@ -98,6 +98,78 @@ private func window(settings: Settings = Settings(),
     #expect(!labelExists(one, in: controller))
 }
 
+// MARK: - Layout (the user's report: "too much empty space on the left")
+
+@MainActor
+@Test func theLabelColumnHugsItsLabelsInsteadOfPaddingTheWindow() throws {
+    // The window used to be built at a fixed 380pt while the grid only wanted
+    // 322. Column 1 is pinned to `columnWidth`, so column 0 was the only one
+    // free to absorb the 58pt of slack — and column 0 is `.trailing`, so all
+    // of it landed to the *left* of every label. Measured before the fix:
+    // "Refresh" began at x=79 inside a 20pt margin.
+    //
+    // The fix is a zero-width `contentRect`, which lets Auto Layout size the
+    // window from the grid instead of the grid from the window. This test
+    // fails on any width typed back in.
+    let spy = LoginItemSpy(state: .off, result: .off)
+    let controller = window(launchAtLogin: spy.seam)
+    let content = try #require(controller.window?.contentView)
+    controller.window?.layoutIfNeeded()
+
+    // The widest label, so it is the one that defines the column's edge.
+    let widest = try #require(label(ErrorText.intervalLabel, in: controller))
+    let left = Double(widest.convert(widest.bounds, to: content).minX)
+    // 20pt of window margin, less the 2pt an `NSTextField` insets its own
+    // text inside its frame. Anything past this is slack with nowhere to go.
+    #expect(left < 24)
+}
+
+@MainActor
+@Test func theControlColumnHasOneRightEdge() throws {
+    // Left to themselves the pop-ups stop at their longest title — 150pt and
+    // 127pt — against sliders running the column's full width. Four controls
+    // ending at four different x positions is most of what read as unpolished.
+    let spy = LoginItemSpy(state: .off, result: .off)
+    let controller = window(launchAtLogin: spy.seam)
+    let content = try #require(controller.window?.contentView)
+    controller.window?.layoutIfNeeded()
+
+    let stretchy = everyView(in: content).filter { $0 is NSPopUpButton || $0 is NSSlider }
+    // Two pop-ups and two sliders, each wrapped by AppKit in a hosting view
+    // that shares its frame — so the count is what the window has, doubled.
+    #expect(stretchy.count >= 4)
+    let edges = stretchy.map { Double($0.convert($0.bounds, to: content).maxX) }
+    let first = try #require(edges.first)
+    let aligned = edges.allSatisfy { abs($0 - first) < 0.5 }
+    #expect(aligned)
+}
+
+@MainActor
+@Test func aNoteWithNothingToSayGivesItsRowBack() throws {
+    // Hiding the note's *view* left the row's height behind: a blank band
+    // under the checkbox in the ordinary case, which is every case where the
+    // app is working. The row itself has to hide.
+    //
+    // `.needsApproval` is the comparison, not `.unavailable`: that one's note
+    // wraps to two lines, so its window is taller whether or not the empty
+    // rows collapse — measured, and it passed against the unfixed code.
+    // `.needsApproval` says one short line and shows the button, which is
+    // exactly the two rows at issue and nothing else.
+    let quiet = LoginItemSpy(state: .off, result: .off)
+    let explaining = LoginItemSpy(state: .needsApproval, result: .needsApproval)
+    let a = window(launchAtLogin: quiet.seam)
+    let b = window(launchAtLogin: explaining.seam)
+    a.window?.layoutIfNeeded()
+    b.window?.layoutIfNeeded()
+
+    let short = try #require(a.window?.contentView)
+    let tall = try #require(b.window?.contentView)
+    // `.off` has neither a note nor a button, so its window must be shorter.
+    #expect(Double(short.bounds.height) < Double(tall.bounds.height))
+    // And the same width regardless — the sentence wraps, it does not widen.
+    #expect(Double(short.bounds.width) == Double(tall.bounds.width))
+}
+
 // MARK: - Launch at login (R146)
 
 @MainActor

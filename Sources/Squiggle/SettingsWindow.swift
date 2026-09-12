@@ -32,7 +32,7 @@ final class SettingsWindowController: NSWindowController {
 
     /// The width of the grid's control column, and so the width any note in it
     /// has to wrap inside. Named because two places have to agree on it.
-    private static let columnWidth: CGFloat = 220
+    private static let columnWidth: CGFloat = 240
     private let loginSettingsButton = NSButton(title: ErrorText.openLoginItems,
                                                target: nil, action: nil)
     /// The watchlist size the effective-interval line is computed against.
@@ -43,6 +43,22 @@ final class SettingsWindowController: NSWindowController {
     /// keep, which it would do the moment the count moved without it.
     var watchlistCount = 0 { didSet { refreshEffectiveLabel() } }
 
+    /// Grid row indices, named because three separate things index into the
+    /// same list — padding, the merged divider, and the rows that come and go
+    /// — and a bare `7` in any of them silently moves when a row is added.
+    private enum Row {
+        static let effective = 2
+        static let divider = 7
+        static let note = 9
+        static let loginButton = 10
+    }
+
+    /// Hiding a *view* leaves its row's height behind; hiding the row is what
+    /// closes the gap. Held because `show(_:)` needs them long after the grid
+    /// has gone out of scope.
+    private var noteRow: NSGridRow?
+    private var loginButtonRow: NSGridRow?
+
     init(settings: Settings,
          launchAtLogin: LaunchAtLogin = .system,
          onChange: @escaping (Settings) -> Void) {
@@ -51,7 +67,14 @@ final class SettingsWindowController: NSWindowController {
         self.onChange = onChange
 
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 380, height: 0),
+            // Zero on both axes: Auto Layout sizes this window from the grid.
+            // A width typed here is a width the grid has to absorb, and it
+            // absorbs it in the one column that is free to grow — column 0,
+            // which is `.trailing`, so the slack lands to the *left* of every
+            // label. The user's report ("too much empty space on the left")
+            // was 57pt of exactly that, measured between the 20pt margin and
+            // the word "Refresh".
+            contentRect: NSRect(x: 0, y: 0, width: 0, height: 0),
             // No `.resizable`: an `NSGridView` of six rows has one correct
             // size and dragging its corner can only spoil it.
             styleMask: [.titled, .closable],
@@ -150,6 +173,9 @@ final class SettingsWindowController: NSWindowController {
         loginSettingsButton.action = #selector(openLoginItems)
         loginSettingsButton.bezelStyle = .inline
 
+        let divider = NSBox()
+        divider.boxType = .separator
+
         let grid = NSGridView(views: [
             [label(ErrorText.rowsLabel), rowsControl],
             [label(ErrorText.intervalLabel), intervalPopUp],
@@ -158,6 +184,7 @@ final class SettingsWindowController: NSWindowController {
             [label(ErrorText.motionLabel), motionControl],
             [label(ErrorText.widthLabel), widthSlider],
             [label(ErrorText.speedLabel), speedSlider],
+            [divider, NSGridCell.emptyContentView],
             [NSGridCell.emptyContentView, loginCheckbox],
             [NSGridCell.emptyContentView, loginNote],
             [NSGridCell.emptyContentView, loginSettingsButton],
@@ -167,6 +194,38 @@ final class SettingsWindowController: NSWindowController {
         grid.rowSpacing = 10
         grid.columnSpacing = 12
         grid.translatesAutoresizingMaskIntoConstraints = false
+
+        // One right edge for the whole column. Left to themselves the popups
+        // stop wherever their longest title happens to end — 150pt and 127pt,
+        // against sliders that run the full 240 — and the ragged edge between
+        // them is most of what reads as unfinished.
+        grid.column(at: 1).xPlacement = .fill
+        // Except for the controls that have a correct size of their own: a
+        // two-segment picker or a checkbox stretched across 240pt looks
+        // stretched, not aligned.
+        for natural in [rowsControl, motionControl] as [NSView] {
+            grid.cell(for: natural)?.xPlacement = .leading
+        }
+        for natural in [loginCheckbox, loginSettingsButton] as [NSView] {
+            grid.cell(for: natural)?.xPlacement = .leading
+        }
+
+        // The divider is a rule, not a cell of content: it spans both columns.
+        grid.mergeCells(inHorizontalRange: NSRange(location: 0, length: 2),
+                        verticalRange: NSRange(location: Row.divider, length: 1))
+        grid.cell(atColumnIndex: 0, rowIndex: Row.divider).xPlacement = .fill
+
+        // Captions belong to the control above them, so they sit closer to it
+        // than the 10pt that separates one setting from the next. The divider
+        // gets the opposite treatment — the login group is a separate subject.
+        grid.row(at: Row.effective).topPadding = -6
+        grid.row(at: Row.note).topPadding = -6
+        grid.row(at: Row.loginButton).topPadding = -2
+        grid.row(at: Row.divider).topPadding = 6
+        grid.row(at: Row.divider).bottomPadding = 6
+
+        noteRow = grid.row(at: Row.note)
+        loginButtonRow = grid.row(at: Row.loginButton)
 
         let container = NSView()
         container.addSubview(grid)
@@ -231,7 +290,12 @@ final class SettingsWindowController: NSWindowController {
         let note = ErrorText.loginItemNote(for: state, failure: outcome.failure)
         loginNote.stringValue = note ?? ""
         loginNote.isHidden = note == nil
+        noteRow?.isHidden = note == nil
         loginSettingsButton.isHidden = !state.showsSystemSettingsButton
+        loginButtonRow?.isHidden = !state.showsSystemSettingsButton
+        // The window is not resizable, so nothing else will take the height
+        // those rows just gave back.
+        window?.contentView?.layoutSubtreeIfNeeded()
     }
 
     @objc private func loginCheckboxChanged() {
