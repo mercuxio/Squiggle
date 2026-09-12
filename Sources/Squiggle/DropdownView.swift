@@ -59,6 +59,19 @@ final class DropdownView: NSView {
         /// and is Pitch's styling, which the user asked to copy exactly.
         static let glyph: CGFloat = rowFontSize
         static let hitSlop: CGFloat = 4
+        /// What a row spends on everything that is not its text: the leading
+        /// inset, the gap the layout keeps between the line and the trash
+        /// button, the button, and the trailing inset the button's slop
+        /// straddles. Derived from the constraints `quoteRow` activates rather
+        /// than written out again, so the two cannot disagree about how wide a
+        /// row has to be to show its line whole.
+        static let rowChrome: CGFloat =
+            inset + rowSpacing * 4 + (glyph + hitSlop * 2) + (inset - hitSlop)
+        /// An `NSTextField` draws its string inside a cell that insets it, so a
+        /// field given exactly the string's typographic width still truncates
+        /// by a hair. Two points a side, the same inset its alignment rect
+        /// carries.
+        static let measurementSlack: CGFloat = 4
     }
 
     /// - Parameters:
@@ -111,6 +124,18 @@ final class DropdownView: NSView {
             guard case .quote(let row) = $0 else { return nil }
             return row
         }
+        let columns = CGFloat(reordering?.rowOneCount == nil ? 1 : 2)
+        // The user asked that no symbol's details be truncated, so the column
+        // is sized to the widest line the model actually produced rather than
+        // to a constant. Measured once, here, off the same attributed string
+        // the rows will draw — a second measurement written in terms of "the
+        // symbol plus a price plus a change" would be a second place that has
+        // to know how `ErrorText.menuRow` spells a line.
+        //
+        // The labels keep their tail truncation. It is now a backstop for the
+        // pathological case rather than the ordinary one.
+        let columnWidth = Self.columnWidth(for: quotes, color: color)
+
         if !quotes.isEmpty {
             var built: [Symbol: NSView] = [:]
             for quote in quotes {
@@ -125,14 +150,13 @@ final class DropdownView: NSView {
                                      textInset: Metrics.inset))
         }
 
-        let columns = CGFloat(reordering?.rowOneCount == nil ? 1 : 2)
-
         for item in model.items {
             switch item {
             case .quote:
                 continue
             case .footer(let text):
-                stack.addArrangedSubview(Self.statusLine(text, columns: columns))
+                stack.addArrangedSubview(Self.statusLine(text,
+                                                         width: columnWidth * columns))
             }
         }
         // Pitch puts a rule immediately above its footer bar and Squiggle's
@@ -146,12 +170,12 @@ final class DropdownView: NSView {
                                                 refreshing: refreshing))
 
         addSubview(stack)
-        // One column's worth of width per column. The rows truncate inside
-        // their column rather than widening the panel, which they used to do:
-        // a two-column panel that grows with its longest row is a panel that
-        // changes width every time a price gains a digit.
+        // One column's worth of width per column, where a column is as wide as
+        // the widest row needs. The width is settled before any row is built
+        // and does not move while the panel is open: it is a function of the
+        // model, so a price gaining a digit only changes it on the next open.
         NSLayoutConstraint.activate([
-            widthAnchor.constraint(greaterThanOrEqualToConstant: Metrics.minWidth * columns),
+            widthAnchor.constraint(greaterThanOrEqualToConstant: columnWidth * columns),
             stack.leadingAnchor.constraint(equalTo: leadingAnchor),
             stack.trailingAnchor.constraint(equalTo: trailingAnchor),
             stack.topAnchor.constraint(equalTo: topAnchor),
@@ -229,6 +253,23 @@ final class DropdownView: NSView {
         return row
     }
 
+    /// How wide one column has to be for every row to show its line whole.
+    ///
+    /// `Metrics.minWidth` is still the floor — a two-symbol watchlist should
+    /// not give a panel narrower than its own footer — and the widest row sets
+    /// everything above it. Rounded up, because a fractional point short is a
+    /// truncated line.
+    private static func columnWidth(for quotes: [MenuModel.QuoteRow],
+                                    color: (ColorRole) -> NSColor) -> CGFloat {
+        let font = NSFont.menuFont(ofSize: Metrics.rowFontSize)
+        var widest: CGFloat = 0
+        for quote in quotes {
+            widest = max(widest, text(quote, font: font, color: color).size().width)
+        }
+        let needed = widest + Metrics.rowChrome + Metrics.measurementSlack
+        return max(Metrics.minWidth, needed.rounded(.up))
+    }
+
     /// The row's line, with the direction glyph — and only the glyph — taking
     /// the colour its role earns.
     ///
@@ -241,6 +282,18 @@ final class DropdownView: NSView {
     /// The range is `MenuModel`'s to decide, not this view's: a view hunting
     /// for "▲" would be a second place that has to know what a glyph looks
     /// like, and it would find one in a symbol named after an arrow.
+    ///
+    /// The symbol takes a heavier weight than the price and change beside it,
+    /// which is the user's ask. Derived from the row's own font rather than
+    /// named outright, so it stays the menu face at the row's size and follows
+    /// the text-size setting the rest of the row follows; if the descriptor
+    /// cannot produce a bold face the row simply keeps one weight throughout,
+    /// which is what it looked like before.
+    ///
+    /// Its range comes from `MenuModel`, on the same principle as the glyph's:
+    /// the string's assembler knows where the symbol ends, and a view counting
+    /// spaces to find out would be a second place that has to know how the line
+    /// is spelled.
     ///
     /// The paragraph style is not decoration. An `NSTextField` truncates via
     /// its cell's `lineBreakMode`, and an attributed string carrying no
@@ -256,6 +309,11 @@ final class DropdownView: NSView {
             attributes: [.font: font ?? NSFont.menuFont(ofSize: Metrics.rowFontSize),
                          .foregroundColor: color(.label),
                          .paragraphStyle: paragraph])
+        let base = font ?? NSFont.menuFont(ofSize: Metrics.rowFontSize)
+        if let bold = NSFont(descriptor: base.fontDescriptor.withSymbolicTraits(.bold),
+                             size: base.pointSize) {
+            line.addAttribute(.font, value: bold, range: quote.symbolRange)
+        }
         if let glyph = quote.glyph {
             line.addAttribute(.foregroundColor,
                               value: color(.direction(glyph.direction)),
@@ -268,13 +326,13 @@ final class DropdownView: NSView {
     /// thing `MenuModel.Item.footer` means. The bar of icons under it is
     /// `MenuFooterView`; the two are not the same thing.
     ///
-    /// - Parameter columns: how many columns the watchlist above is drawn in.
-    ///   The stack stretches this row to the panel's full width either way, but
-    ///   a wrapping label wraps at `preferredMaxLayoutWidth` and not at the
-    ///   width it was given — so a two-column panel used to wrap "Updated…"
-    ///   down the left-hand column and leave the right half empty. The user
-    ///   asked for the line to span both, which is this one number.
-    private static func statusLine(_ text: String, columns: CGFloat) -> NSView {
+    /// - Parameter width: the panel's whole width, every column of it. The
+    ///   stack stretches this row that far either way, but a wrapping label
+    ///   wraps at `preferredMaxLayoutWidth` and not at the width it was given —
+    ///   so a two-column panel used to wrap "Updated…" down the left-hand
+    ///   column and leave the right half empty. The user asked for the line to
+    ///   span both, which is this one number.
+    private static func statusLine(_ text: String, width: CGFloat) -> NSView {
         let row = NSView()
         let label = NSTextField(labelWithString: text)
         label.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
@@ -283,7 +341,7 @@ final class DropdownView: NSView {
         // longer than a watchlist row, and the half of it that says what to do
         // is at the end.
         label.lineBreakMode = .byWordWrapping
-        label.preferredMaxLayoutWidth = Metrics.minWidth * columns - Metrics.inset * 2
+        label.preferredMaxLayoutWidth = width - Metrics.inset * 2
         label.translatesAutoresizingMaskIntoConstraints = false
         row.addSubview(label)
         NSLayoutConstraint.activate([

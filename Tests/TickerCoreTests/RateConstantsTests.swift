@@ -30,7 +30,14 @@ import Testing
 
 @Test func requestSpacingMatchesTheSpec() {
     // §4.1: `spacing = 30s  // between any two requests, ever`
+    //
+    // Held at 30 rather than lowered, and the reason is in `RateConstants`:
+    // below 25 the quiet multiplier stops binding, the whole day runs at the
+    // budget floor, and the day goes over 1,200. Pinned above 24 here too, so
+    // a future edit meets the arithmetic rather than a bare literal.
     #expect(RateConstants.spacingSeconds == 30)
+    #expect(RateConstants.spacingSeconds * RateConstants.quietMultiplier
+        > RateConstants.secondsPerDay / Double(RateConstants.dailyRequestBudget))
 }
 
 @Test func theRefreshMenuMatchesTheSpec() {
@@ -66,8 +73,13 @@ import Testing
 }
 
 @Test func theBucketCapacityMatchesTheSpec() {
-    // §4.3: "Capacity 5, refill 1 per 30s."
-    #expect(RateConstants.bucketCapacity == 5)
+    // §4.3 wrote "Capacity 5, refill 1 per 30s"; the same amendment raises the
+    // capacity to one full watchlist so a cold launch fills both rows at once.
+    // It cannot raise the burst past 20 whatever is written here: `take()`
+    // needs a daily-bucket token too, and that bucket holds
+    // `maxWatchlistCount`.
+    #expect(RateConstants.bucketCapacity == 20)
+    #expect(RateConstants.bucketCapacity == Double(RateConstants.maxWatchlistCount))
 }
 
 @Test func theRateLimitLadderMatchesTheSpec() {

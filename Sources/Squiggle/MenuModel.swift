@@ -59,6 +59,15 @@ struct MenuModel: Equatable {
         }
 
         let title: String
+        /// Which characters of `title` are the symbol itself, so the view can
+        /// set them a weight heavier than the price and change beside them.
+        ///
+        /// Decided here for the same reason `Glyph.range` is: `ErrorText`
+        /// assembles the line and puts the symbol first, so the span is
+        /// arithmetic on a length the assembler already knows. A view working
+        /// it out would have to know the delimiter `menuRow` chose, and would
+        /// be wrong the day that changes.
+        let symbolRange: NSRange
         /// Rides along because the row carries a trash button that needs to
         /// know what it is removing.
         let symbol: Symbol
@@ -123,7 +132,8 @@ struct MenuModel: Equatable {
             let title = ErrorText.menuRow(symbol: symbol.raw,
                                           price: Formatting.deadPlaceholder,
                                           change: "", currency: nil)
-            return QuoteRow(title: title, symbol: symbol, glyph: nil)
+            return QuoteRow(title: title, symbolRange: symbolRange(symbol),
+                            symbol: symbol, glyph: nil)
         }
         let parts = Formatting.changeParts(quote, locale: locale)
         let change = parts.glyph + parts.body
@@ -132,6 +142,7 @@ struct MenuModel: Equatable {
                                       change: change,
                                       currency: quote.currency)
         return QuoteRow(title: title,
+                        symbolRange: symbolRange(symbol),
                         symbol: symbol,
                         glyph: glyph(parts.glyph, in: title, change: change,
                                      direction: quote.direction))
@@ -146,6 +157,14 @@ struct MenuModel: Equatable {
     /// `theArrowsSpanIsTheArrow` asserts the substring rather than the offset:
     /// if either changes its mind, the test says so instead of the dropdown
     /// colouring a digit.
+    /// The symbol is the head of the line — `ErrorText.menuRow` writes it
+    /// first in both of its shapes — so its span starts at zero and runs the
+    /// symbol's own length. Measured in UTF-16 units, like `Glyph.range`,
+    /// because the only consumer is an `NSAttributedString`.
+    private static func symbolRange(_ symbol: Symbol) -> NSRange {
+        NSRange(location: 0, length: (symbol.raw as NSString).length)
+    }
+
     private static func glyph(_ arrow: String, in title: String, change: String,
                               direction: Direction) -> QuoteRow.Glyph? {
         let arrowLength = (arrow as NSString).length

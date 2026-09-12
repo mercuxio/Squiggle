@@ -225,6 +225,43 @@ private func title(_ model: MenuModel) -> String {
     #expect(line.substring(with: span.range) == Direction.flat.glyph)
 }
 
+// MARK: - The symbol's span
+
+private func symbolSpan(_ model: MenuModel) -> NSRange? {
+    for item in model.items {
+        if case .quote(let row) = item { return row.symbolRange }
+    }
+    return nil
+}
+
+/// The span the dropdown sets in a heavier weight must be the symbol and
+/// nothing else — not the two spaces after it, and not the first digit of the
+/// price.
+///
+/// Asserted as the substring rather than as an offset, for the same reason the
+/// arrow's span is: `ErrorText.menuRow` decides that the symbol comes first,
+/// and `MenuModel` only does arithmetic on that. A dash inside the symbol is
+/// the case that would break a view counting delimiters, so it is the case
+/// pinned here.
+@Test func theSymbolsSpanIsTheSymbol() throws {
+    let brk = try sym("BRK-B")
+    let up = quote(brk, price: 101, previousClose: 100, currency: "USD")
+    let built = model(symbols: [brk], quotes: [brk: up])
+    let span = try #require(symbolSpan(built))
+
+    #expect((title(built) as NSString).substring(with: span) == "BRK-B")
+}
+
+/// A row with no number still has a symbol, and it is still the head of the
+/// line — the placeholder takes the price's place, not the symbol's.
+@Test func aRowWithNoNumberStillSpansItsSymbol() throws {
+    let vod = try sym("VOD.L")
+    let built = model(symbols: [vod])
+    let span = try #require(symbolSpan(built))
+
+    #expect((title(built) as NSString).substring(with: span) == "VOD.L")
+}
+
 /// Same rule as the strip: a symbol with no quote, and one the engine gave up
 /// on, both have no number and therefore nothing to span.
 @Test func aRowWithNoNumberHasNoSpanToColour() throws {

@@ -12,11 +12,34 @@
 /// far cheaper than being blocked.
 public enum RateConstants {
     /// The floor between any two requests, ever. A safety property.
+    ///
+    /// **Do not lower this below 25 without moving the budget with it.** It
+    /// looks like a pure burst control and is not: `RefreshPolicy.cycleInterval`
+    /// stretches `max(requested, count x spacingSeconds)` by `quietMultiplier`
+    /// in extended hours, and that product only exceeds the budget floor of
+    /// `count x 72` while `spacingSeconds x 3 > 72`. At 30 the quiet stretch is
+    /// real and buys the day 107 requests of slack under the 1,200 budget; at
+    /// anything from 24 down the stretch collapses into the floor, every hour
+    /// of the day runs at exactly the budget rate, and the opening burst then
+    /// carries the day past 1,200. Measured, when this was tried at 10: the
+    /// simulated worst day went 1,112 -> 1,219 and four budget tests failed.
+    ///
+    /// Lowering it also buys nothing visible. What made a cold launch fill the
+    /// top row and leave the bottom on placeholders was `bucketCapacity`, not
+    /// this: a burst spends tokens the bucket already holds, and refill spacing
+    /// only governs what comes after the burst is gone.
     public static let spacingSeconds: Double = 30
 
     /// Burst allowance: a launch, an unocclusion and a manual refresh should
-    /// not each wait 30 seconds. Does not raise the long-run rate.
-    public static let bucketCapacity: Double = 5
+    /// not each wait for the spacing floor. Does not raise the long-run rate.
+    ///
+    /// One full watchlist, so the opening burst of a cold launch can walk
+    /// every symbol instead of the first five - which is what made the bottom
+    /// row of a two-row ticker sit on placeholders for minutes after the top
+    /// row was live. `take()` needs a token from the daily bucket too, and
+    /// `dailyBucketCapacity` is `maxWatchlistCount`, so a burst could never
+    /// have exceeded 20 anyway: anything above this is dead weight.
+    public static let bucketCapacity: Double = 20
 
     /// Decorrelated jitter: min(cap, random(base, previous × growth)).
     public static let jitterGrowthFactor: Double = 3

@@ -325,11 +325,18 @@ private let dailyBudget = RateConstants.dailyRequestBudget
     // simulated day starts at 00:00, inside the overnight, so the sweep pays a
     // boundary at midnight that this ceiling does not model. That is one more
     // partial cycle of slack than the three-session day had, on top of the
-    // bucket's opening burst. Measured: the ceiling is 1,125 and the sweep's
-    // worst day is 1,112, a gap of 13.
+    // bucket's opening burst.
+    //
+    // 30 rather than 15 because that burst term is `bucketCapacity`, which is
+    // now one full watchlist pass instead of five. The ceiling moved with it
+    // and the simulation did not: a day spends its opening burst once, so
+    // fifteen more tokens of head-room is fifteen more requests this bound
+    // allows and the sweep never reaches. Measured: the ceiling is 1,140 and
+    // the sweep's worst day is 1,112, a gap of 28 — it was 1,125 against
+    // 1,112 while the burst was five.
     let unreachable = "the ceiling is \(ceiling) but the sweep only spends \(worst); "
         + "a term in it has become unreachable"
-    #expect(ceiling - worst <= 15, "\(unreachable)")
+    #expect(ceiling - worst <= 30, "\(unreachable)")
 }
 
 @Test func anOccludedDayCostsAlmostNothing() {

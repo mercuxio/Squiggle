@@ -22,7 +22,14 @@ import Testing
     #expect(!extra)
 }
 
-@Test func theBucketRefillsAtExactlyOnePerSpacingInterval() {
+/// The interval that actually governs a refill, which is no longer the
+/// spacing bucket's. `bucketCapacity` is now one full watchlist pass, the same
+/// as `dailyBucketCapacity`, so draining one bucket drains the other — and the
+/// daily bucket refills the slower of the two. The 30-second floor is still a
+/// floor; it is simply never the binding term until `halveCapacity()` scales
+/// the spacing bucket back, which `halvingTheCapacityHalvesTheBurstAndTheRate`
+/// covers.
+@Test func theBucketRefillsAtExactlyOnePerBindingInterval() {
     let clock = FakeClock()
     var pacer = RequestPacer(clock: clock)
     var drained = 0
@@ -32,7 +39,7 @@ import Testing
     }
     #expect(drained < 100, "take() never returned false")
 
-    clock.advance(RateConstants.spacingSeconds - 0.001)
+    clock.advance(RequestPacer.dailySpacingSeconds - 0.001)
     let tooEarly = pacer.take()
     #expect(!tooEarly, "a token appeared before the spacing floor elapsed")
 
@@ -65,15 +72,16 @@ import Testing
     #expect(granted == Int(RateConstants.bucketCapacity))
 }
 
-@Test func theShortRunRateIsOnePerSpacingIntervalNoMatterHowOftenItIsAsked() {
+@Test func theShortRunRateIsOnePerBindingIntervalNoMatterHowOftenItIsAsked() {
     // Poll it every second and let the bucket, not the caller, decide the
     // rate.
     //
-    // Ten minutes, not a day: the day-horizon bucket refills every 72 seconds
-    // against this one's 30, so it becomes the binding bucket somewhere past
-    // 771 seconds (where `n/72 + 20` falls below `n/30 + 5`) and this
-    // assertion would then be measuring that bucket instead. The day is
-    // measured in `theDailyBucketHoldsAWholeDayToTheBudget` below.
+    // The binding bucket is the daily one at every horizon now. It used to
+    // cross over somewhere past 771 seconds — `n/72 + 20` against the spacing
+    // bucket's `n/30 + 5` — and raising `bucketCapacity` to the same 20 moved
+    // the crossover to zero: equal capacities, and the daily bucket refills
+    // the slower. Ten minutes is kept as the horizon because the day has its
+    // own test in `theDailyBucketHoldsAWholeDayToTheBudget` below.
     let horizon = 600
     let clock = FakeClock()
     var pacer = RequestPacer(clock: clock)
@@ -82,7 +90,8 @@ import Testing
         if pacer.take() { granted += 1 }
         clock.advance(1)
     }
-    let ceiling = Int(Double(horizon) / RateConstants.spacingSeconds + RateConstants.bucketCapacity)
+    let ceiling = Int(Double(horizon) / RequestPacer.dailySpacingSeconds
+        + RequestPacer.dailyBucketCapacity)
     #expect(granted <= ceiling, "granted \(granted), ceiling \(ceiling)")
     #expect(granted >= ceiling - 2, "granted \(granted); the bucket is throttling below its rate")
 }
@@ -218,8 +227,10 @@ import Testing
     )
 
     // A genuine forward advance past the high-water mark must still credit
-    // correctly — exactly one token for one spacing interval, not more.
-    clock.advance(RateConstants.spacingSeconds)
+    // correctly — exactly one token for one binding interval, not more. The
+    // daily bucket is the binding one; see
+    // `theBucketRefillsAtExactlyOnePerBindingInterval`.
+    clock.advance(RequestPacer.dailySpacingSeconds)
     let earned = pacer.take()
     #expect(earned, "a real spacing interval should have earned a token")
     let extra = pacer.take()
