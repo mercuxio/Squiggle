@@ -105,7 +105,6 @@ private func view(_ symbols: [Symbol]) -> DropdownView {
         switch item {
         case .quote(let row): #expect(shown.contains(row.title))
         case .footer(let text): #expect(shown.contains(text))
-        case .separator: break
         }
     }
 }
@@ -445,8 +444,8 @@ private func columnsView(in root: NSView) throws -> WatchlistColumnsView {
 
 /// Pitch draws a separator directly above its footer bar, and the user asked
 /// for "border before the footer like in pitch". Asserted as adjacency rather
-/// than by counting boxes: the model already emits one separator to close the
-/// watchlist, so "a separator exists" was true before this one did.
+/// than by counting boxes: the rule has to be the thing immediately above the
+/// icon row, and "a box exists somewhere" would not say that.
 @MainActor
 @Test func aRuleSitsDirectlyAboveTheFooterBar() throws {
     let watched = [try sym("AAPL"), try sym("MSFT")]
@@ -458,15 +457,14 @@ private func columnsView(in root: NSView) throws -> WatchlistColumnsView {
     let rule = try #require(stack.arrangedSubviews[footerIndex - 1] as? NSBox)
 
     // Not merely "a box is there". The first version of this rule was an
-    // `NSBox` of type `.separator`, which draws in `separatorColor` — about a
-    // tenth of a point of black, and nothing at all once the panel's blurred
-    // `.menu` material is behind it. The box was present and the user still
-    // asked where the border was, so the assertion has to be about a line that
-    // can be seen: filled, opaque enough to read, and no border of its own.
+    // `NSBox` of type `.separator`, which draws nothing the constraint asked
+    // for: it refuses a one-point frame and puts its hairline somewhere in the
+    // middle of a five-point box. So the rule is a filled custom box with no
+    // border of its own — and the fill is Pitch's shade, which is what "refer
+    // to pitch" asks for and what a menu separator is supposed to look like.
     #expect(rule.boxType == .custom)
     #expect(rule.borderWidth == 0)
-    let weight = rule.fillColor.usingColorSpace(.deviceRGB)?.alphaComponent ?? 0
-    #expect(Double(weight) > 0.15)
+    #expect(rule.fillColor == NSColor.separatorColor)
 }
 
 // MARK: - Which column is which row
@@ -539,4 +537,37 @@ private func columnsView(in root: NSView) throws -> WatchlistColumnsView {
             .flatMap { row in everyView(in: row).compactMap { $0 as? NSTextField }.first })
     let labelX = columns.convert(rowLabel.bounds.origin, from: rowLabel).x
     #expect(Double(leftHeading) == Double(labelX))
+}
+
+// MARK: - The status line's width
+
+/// "the updated message should span 2 columns when there are 2 columns".
+///
+/// The row itself always spanned the panel — the stack's `alignment = .width`
+/// sees to that — so the defect was invisible to any assertion about frames.
+/// What confined the text was the label's own `preferredMaxLayoutWidth`, which
+/// is where a wrapping `NSTextField` decides to break, and it was pinned to one
+/// column's worth. So this asks the label how wide it is allowed to grow.
+@MainActor
+private func statusLabelWrapWidth(in root: NSView) throws -> Double {
+    let stack = try #require(everyView(in: root).compactMap { $0 as? NSStackView }.first)
+    let footerIndex = try #require(
+        stack.arrangedSubviews.firstIndex { $0 is MenuFooterView })
+    // The status line is the row two above the footer bar: the rule sits
+    // between them.
+    let statusRow = stack.arrangedSubviews[footerIndex - 2]
+    let label = try #require(everyView(in: statusRow).compactMap { $0 as? NSTextField }.first)
+    return Double(label.preferredMaxLayoutWidth)
+}
+
+@MainActor
+@Test func theStatusLineWrapsAcrossBothColumnsWhenThereAreTwo() throws {
+    let watched = [try sym("AAPL"), try sym("MSFT")]
+    let one = try statusLabelWrapWidth(in: draggableView(watched, rowOneCount: nil))
+    let two = try statusLabelWrapWidth(in: draggableView(watched, rowOneCount: 1))
+
+    // Two columns of panel minus the same pair of insets — one extra column's
+    // width, not two, because the insets are the panel's and not each column's.
+    #expect(two > one)
+    #expect(two - one == Double(draggableView(watched, rowOneCount: 1).fittingSize.width) / 2)
 }

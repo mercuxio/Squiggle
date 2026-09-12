@@ -82,7 +82,6 @@ struct MenuModel: Equatable {
         /// spec's own word for this line. The row of icons beneath it is
         /// `MenuFooterView`, and the two are not the same thing.
         case footer(String)
-        case separator
     }
 
     let items: [Item]
@@ -99,8 +98,6 @@ struct MenuModel: Equatable {
         var items: [Item] = symbols.map { symbol in
             .quote(row(for: symbol, quotes: quotes, dead: dead, locale: locale))
         }
-        if !items.isEmpty { items.append(.separator) }
-
         // R139: the transient fault outranks the permanent one, because the
         // permanent one gets every other minute of the session to be read in.
         let footer = ErrorText.footer(

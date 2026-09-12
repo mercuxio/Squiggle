@@ -31,7 +31,6 @@ private func titles(_ model: MenuModel) -> [String] {
         switch $0 {
         case .quote(let row): return row.title
         case .footer(let text): return text
-        case .separator: return nil
         }
     }
 }
@@ -162,26 +161,6 @@ private func titles(_ model: MenuModel) -> [String] {
         return nil
     }.first)
     #expect(footer.contains("12 min"))
-}
-
-// A separator either side of the footer, and one before Quit. Asserted as
-// a shape rather than by index so that Tasks 13 and 15 inserting their own
-// items cannot quietly turn this into a test of nothing.
-@Test func separatorsAreWhereSeparatorsBelong() throws {
-    let built = model(symbols: [try sym("AAPL")])
-    let isSeparator = built.items.map { item -> Bool in
-        if case .separator = item { return true }
-        return false
-    }
-    // `first`/`last` are `Bool?`, so `!` will not apply and `== false`
-    // is the swallowed shape. Hoist, defaulting to `true` so an empty
-    // menu — itself a bug — fails here rather than passing vacuously.
-    let opensWithSeparator = isSeparator.first ?? true
-    let endsWithSeparator = isSeparator.last ?? true
-    #expect(!opensWithSeparator)
-    #expect(!endsWithSeparator)
-    let doubled = zip(isSeparator, isSeparator.dropFirst()).contains { $0 && $1 }
-    #expect(!doubled)
 }
 
 // MARK: - The direction glyph's span

@@ -106,7 +106,7 @@ final class DropdownView: NSView {
         // The quote rows leave the stack and become one child of it, because
         // two columns are not something a vertical stack can express and a
         // drag is not something it can survive. Everything else — the status
-        // line, the separator, the footer bar — stays exactly where it was.
+        // line, the rule, the footer bar — stays exactly where it was.
         let quotes: [MenuModel.QuoteRow] = model.items.compactMap {
             guard case .quote(let row) = $0 else { return nil }
             return row
@@ -125,21 +125,22 @@ final class DropdownView: NSView {
                                      textInset: Metrics.inset))
         }
 
+        let columns = CGFloat(reordering?.rowOneCount == nil ? 1 : 2)
+
         for item in model.items {
             switch item {
             case .quote:
                 continue
             case .footer(let text):
-                stack.addArrangedSubview(Self.statusLine(text))
-            case .separator:
-                stack.addArrangedSubview(Self.separator())
+                stack.addArrangedSubview(Self.statusLine(text, columns: columns))
             }
         }
         // Pitch puts a rule immediately above its footer bar and Squiggle's
-        // footer is a copy of Pitch's, so it gets the same rule. The model's
-        // own separator closes the watchlist; this one separates the list from
-        // the chrome, which is a different statement and needs its own line —
-        // without it the icon row reads as one more entry in the list.
+        // footer is a copy of Pitch's, so it gets the same rule. It is the only
+        // rule in the panel: one above the status line as well read as two
+        // stripes across a short menu, and the user asked for "no border above
+        // the updated at". This one earns its place — without it the icon row
+        // reads as one more entry in the list.
         stack.addArrangedSubview(Self.separator())
         stack.addArrangedSubview(MenuFooterView(target: target, selector: command,
                                                 refreshing: refreshing))
@@ -149,7 +150,6 @@ final class DropdownView: NSView {
         // their column rather than widening the panel, which they used to do:
         // a two-column panel that grows with its longest row is a panel that
         // changes width every time a price gains a digit.
-        let columns = CGFloat(reordering?.rowOneCount == nil ? 1 : 2)
         NSLayoutConstraint.activate([
             widthAnchor.constraint(greaterThanOrEqualToConstant: Metrics.minWidth * columns),
             stack.leadingAnchor.constraint(equalTo: leadingAnchor),
@@ -267,7 +267,14 @@ final class DropdownView: NSView {
     /// Spec §7's one line of detail — the app's only error surface, and the
     /// thing `MenuModel.Item.footer` means. The bar of icons under it is
     /// `MenuFooterView`; the two are not the same thing.
-    private static func statusLine(_ text: String) -> NSView {
+    ///
+    /// - Parameter columns: how many columns the watchlist above is drawn in.
+    ///   The stack stretches this row to the panel's full width either way, but
+    ///   a wrapping label wraps at `preferredMaxLayoutWidth` and not at the
+    ///   width it was given — so a two-column panel used to wrap "Updated…"
+    ///   down the left-hand column and leave the right half empty. The user
+    ///   asked for the line to span both, which is this one number.
+    private static func statusLine(_ text: String, columns: CGFloat) -> NSView {
         let row = NSView()
         let label = NSTextField(labelWithString: text)
         label.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
@@ -276,7 +283,7 @@ final class DropdownView: NSView {
         // longer than a watchlist row, and the half of it that says what to do
         // is at the end.
         label.lineBreakMode = .byWordWrapping
-        label.preferredMaxLayoutWidth = Metrics.minWidth - Metrics.inset * 2
+        label.preferredMaxLayoutWidth = Metrics.minWidth * columns - Metrics.inset * 2
         label.translatesAutoresizingMaskIntoConstraints = false
         row.addSubview(label)
         NSLayoutConstraint.activate([
@@ -290,23 +297,18 @@ final class DropdownView: NSView {
         return row
     }
 
-    /// A rule the user can actually see.
+    /// Pitch's rule: `separatorColor`, the shade AppKit uses between sections
+    /// of a menu, which is what "refer to pitch" asks for.
     ///
-    /// This was `boxType = .separator`, copied from Pitch — and it does draw,
-    /// but `NSBox` paints that with `separatorColor`, which is about a tenth
-    /// of a point of black. Over the panel's blurred `.menu` material there is
-    /// nothing left of it, which is why the rule this method exists for read
-    /// as missing. A filled 1pt box in `tertiaryLabelColor` is the same line
-    /// at a weight that survives the vibrancy behind it.
-    ///
-    /// `.separator` also refuses to be 1pt tall — the box kept a 5pt frame and
-    /// drew its hairline in the middle, so the rule sat where the constraint
-    /// said only by luck. A custom box has no such minimum.
+    /// Drawn as a filled custom box rather than `boxType = .separator`, which
+    /// paints the same colour but refuses to be one point tall — it kept a 5pt
+    /// frame and drew its hairline somewhere in the middle, so the rule landed
+    /// where the constraint asked only by coincidence.
     private static func separator() -> NSView {
         let box = NSBox()
         box.boxType = .custom
         box.borderWidth = 0
-        box.fillColor = .tertiaryLabelColor
+        box.fillColor = .separatorColor
         box.translatesAutoresizingMaskIntoConstraints = false
         box.heightAnchor.constraint(equalToConstant: 1).isActive = true
         return box
