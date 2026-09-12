@@ -256,6 +256,43 @@ private func button(_ command: MenuCommand, in root: NSView) -> NSButton? {
     #expect(refresh.contentTintColor == NSColor.secondaryLabelColor)
 }
 
+/// The user's correction: "it should be spinning not moving around".
+///
+/// `transform.rotation.z` turns about the anchor point, so a centred anchor is
+/// the whole difference between a spin and an orbit — and the first version of
+/// this corrected it with `layer.frame = bounds`, which is in the superlayer's
+/// coordinates and threw the button into the corner of the footer. The frame
+/// not moving is therefore the property worth asserting, not the anchor point
+/// on its own.
+@MainActor
+@Test func theIconTurnsAboutItsOwnCentreWithoutMoving() throws {
+    let button = SpinningFooterButton(frame: NSRect(x: 40, y: 5, width: 21, height: 21))
+    let layer = try #require(button.layer)
+    // What AppKit does for a placed view, done here because nothing places it.
+    layer.frame = button.frame
+    let placed = layer.frame
+
+    button.layout()
+    #expect(layer.anchorPoint == CGPoint(x: 0.5, y: 0.5))
+    #expect(layer.frame == placed)
+}
+
+/// `layout()` runs on every pass, so the correction has to be a no-op once it
+/// has been made. An unguarded shift would walk the icon across the footer one
+/// half-width at a time.
+@MainActor
+@Test func repeatedLayoutPassesLeaveTheIconWhereItIs() throws {
+    let button = SpinningFooterButton(frame: NSRect(x: 40, y: 5, width: 21, height: 21))
+    let layer = try #require(button.layer)
+    layer.frame = button.frame
+
+    button.layout()
+    let settled = layer.frame
+    button.layout()
+    button.layout()
+    #expect(layer.frame == settled)
+}
+
 /// Spec §5.1's rule, applied to the footer by `MotionPolicy.refreshIndicator`:
 /// a glyph turning until the network answers is exactly the indefinite motion
 /// Reduce Motion exists to stop. The indicator stays; only its means change.

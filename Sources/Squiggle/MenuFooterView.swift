@@ -211,19 +211,33 @@ final class SpinningFooterButton: FooterButton {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("R133: built in code, not a xib") }
 
-    /// Turn about the middle of the glyph.
+    /// Turn about the middle of the glyph, in place.
     ///
-    /// A layer-backed `NSView` anchors at (0, 0) — AppKit's choice, and it
-    /// re-asserts it along with the layer's geometry on every layout pass, so
-    /// setting the anchor point once in `init` would survive only until the
-    /// stack view placed this button. Left at the corner, the icon orbits the
-    /// bottom-left of its own hit box instead of spinning in place.
+    /// A layer-backed `NSView` anchors at (0, 0) — AppKit's choice — and
+    /// `transform.rotation.z` turns about the anchor point, so left alone the
+    /// icon orbits the bottom-left corner of its own hit box.
     ///
-    /// Re-setting the frame afterwards is the other half: moving the anchor
-    /// point moves the layer, and assigning `frame` puts it back.
+    /// Moving the anchor point moves the layer with it, and the correction has
+    /// to be `position`, never `frame`: a backing layer's frame is in its
+    /// *superlayer's* coordinates, while `bounds.origin` is always (0, 0), so
+    /// assigning `frame = bounds` parks the button at the corner of whatever
+    /// layer hosts the footer and makes the orbit worse rather than better.
+    /// Shifting `position` by the same fraction of the layer's own size that
+    /// the anchor point moved leaves the frame exactly where it was —
+    /// `theIconTurnsAboutItsOwnCentreWithoutMoving` is that invariant.
+    ///
+    /// Guarded, so it is a no-op once centred: `layout()` runs on every pass,
+    /// and an unguarded shift would walk the button across the footer. The
+    /// guard is also what makes this self-healing — if AppKit ever re-asserts
+    /// the anchor point, the next pass puts it back.
     override func layout() {
         super.layout()
-        layer?.anchorPoint = CGPoint(x: 0.5, y: 0.5)
-        layer?.frame = bounds
+        let centre = CGPoint(x: 0.5, y: 0.5)
+        guard let layer, layer.anchorPoint != centre else { return }
+        let was = layer.anchorPoint
+        layer.anchorPoint = centre
+        layer.position = CGPoint(
+            x: layer.position.x + (centre.x - was.x) * layer.bounds.width,
+            y: layer.position.y + (centre.y - was.y) * layer.bounds.height)
     }
 }
