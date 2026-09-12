@@ -154,6 +154,22 @@ public struct Store: Codable, Equatable, Sendable {
 
     public var schemaVersion: Int
     public var symbols: [Symbol]
+    /// How many *leading* symbols the user put in the menu bar's first row,
+    /// the rest being the second. `nil` means nobody has arranged this
+    /// watchlist by hand and `RowSplitter` may still balance it by width.
+    ///
+    /// One integer, not a row per symbol, because the dropdown that sets this
+    /// reorders `symbols` in the same gesture — see `RowSplitter.split`. The
+    /// two fields therefore cannot contradict each other the way a parallel
+    /// array of row numbers could.
+    ///
+    /// `schemaVersion` deliberately does not move for this, which is R120's
+    /// ruling applied again: every field here decodes leniently with a
+    /// default, so a file carrying this key loads in a build that has never
+    /// heard of it. Bumping the version would instead make this build's file
+    /// unreadable to the older Squiggle the user may still have on disk, which
+    /// is a worse outcome than one ignored key.
+    public var rowOneCount: Int?
     public var settings: Settings
     /// The single wall-clock value in the package: a backoff deadline that has
     /// to survive process termination, or a user could relaunch their way
@@ -162,10 +178,12 @@ public struct Store: Codable, Equatable, Sendable {
 
     public init(schemaVersion: Int = Store.currentSchemaVersion,
                 symbols: [Symbol] = [],
+                rowOneCount: Int? = nil,
                 settings: Settings = Settings(),
                 cooldownUntilEpoch: Double? = nil) {
         self.schemaVersion = schemaVersion
         self.symbols = symbols
+        self.rowOneCount = rowOneCount
         self.settings = settings
         self.cooldownUntilEpoch = cooldownUntilEpoch
     }
@@ -190,6 +208,23 @@ public struct Store: Codable, Equatable, Sendable {
             .compactMap(Symbol.init)
             .filter { seen.insert($0.raw).inserted }
             .prefix(RateConstants.maxWatchlistCount))
+
+        // Clamped against the watchlist that survived the lines above, not
+        // against the one the file was written for: dropping an invalid symbol
+        // shortens `symbols`, and a boundary past the end would send every
+        // remaining symbol to row 1 and leave row 2 empty. Absent stays absent
+        // — `nil` is "never arranged by hand", which is a different statement
+        // from "arranged, with none in row 1".
+        //
+        // Written as a `let` and an `if`, not `.map`: inside `init(from:)` a
+        // closure body mentioning `symbols` resolves it as `self.symbols` and
+        // so captures a half-initialised `self`, which Swift rejects.
+        let liveCount = symbols.count
+        if let rawRowOne = c.lenient(Int.self, .rowOneCount) {
+            rowOneCount = min(max(rawRowOne, 0), liveCount)
+        } else {
+            rowOneCount = nil
+        }
 
         settings = c.lenient(Settings.self, .settings, default: Settings())
 

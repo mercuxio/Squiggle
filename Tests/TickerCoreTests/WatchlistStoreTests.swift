@@ -916,3 +916,61 @@ private func write(_ json: String, to url: URL) throws {
         #expect(stored == choice)
     }
 }
+
+// MARK: - The row split the user arranged
+
+@Test func aRowSplitSurvivesARoundTrip() throws {
+    // The whole point of persisting one integer: the arrangement the user
+    // dragged in the dropdown is still theirs after a relaunch.
+    let url = tempURL()
+    let file = try FileWatchlistStore(url: url)
+    try file.save(Store(symbols: [try #require(Symbol("AAPL")),
+                                  try #require(Symbol("MSFT"))],
+                        rowOneCount: 1))
+
+    let loaded = try file.load()
+    #expect(loaded.rowOneCount == 1)
+    #expect(loaded.symbols.map(\.raw) == ["AAPL", "MSFT"])
+}
+
+@Test func anAbsentRowSplitStaysAbsentRatherThanBecomingZero() throws {
+    // R120 again, with a sharper distinction than the other lenient fields
+    // carry: `nil` means "nobody has arranged this, the balancer may choose",
+    // while `0` means "the user put every symbol in row 2". Defaulting to zero
+    // would freeze every never-arranged watchlist into one empty row.
+    let url = tempURL()
+    try write(#"{"schemaVersion":1,"symbols":["AAPL","MSFT"]}"#, to: url)
+
+    let store = try FileWatchlistStore(url: url).load()
+    #expect(store.rowOneCount == nil)
+}
+
+@Test func aRowSplitOfTheWrongTypeCostsOnlyItself() throws {
+    let url = tempURL()
+    try write(#"{"schemaVersion":1,"symbols":["AAPL"],"rowOneCount":"top"}"#, to: url)
+
+    let store = try FileWatchlistStore(url: url).load()
+    #expect(store.rowOneCount == nil)
+    #expect(store.symbols.count == 1, "one bad key cost the user their watchlist")
+}
+
+@Test func aRowSplitIsClampedAgainstTheSymbolsThatSurvivedTheDecode() throws {
+    // The case the clamp exists for: the boundary was written for three
+    // symbols, one of them no longer parses, and a boundary of 3 against the
+    // surviving two would send both to row 1 and leave row 2 empty — the
+    // user's arrangement silently replaced by a different one.
+    let url = tempURL()
+    try write(#"{"schemaVersion":1,"symbols":["AAPL","","MSFT"],"rowOneCount":3}"#, to: url)
+
+    let store = try FileWatchlistStore(url: url).load()
+    #expect(store.symbols.map(\.raw) == ["AAPL", "MSFT"])
+    #expect(store.rowOneCount == 2)
+}
+
+@Test func aNegativeRowSplitClampsToZero() throws {
+    let url = tempURL()
+    try write(#"{"schemaVersion":1,"symbols":["AAPL"],"rowOneCount":-5}"#, to: url)
+
+    let store = try FileWatchlistStore(url: url).load()
+    #expect(store.rowOneCount == 0)
+}

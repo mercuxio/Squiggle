@@ -44,6 +44,15 @@ final class StatusItemController: NSObject {
     /// microseconds, and a panel closed and reopened mid-fetch would show a
     /// still icon while a fetch was in flight.
     private var isRefreshing = false
+    /// True while the pointer is down on a dropdown row.
+    ///
+    /// The same shape of state as `isRefreshing` and for a sharper reason: a
+    /// fetch landing mid-gesture calls `rebuildDropdownContent`, which throws
+    /// away every row view — including the one under the pointer, whose
+    /// tracking loop would then be animating a view in no window. The rebuild
+    /// is dropped instead, and the commit at the end of the drag rebuilds
+    /// once, from the arrangement the user actually released on.
+    private var isDraggingRows = false
     private var settingsWindow: SettingsWindowController?
     private var pickerWindow: SymbolPickerWindowController?
     private var persistTimer: Timer?
@@ -313,6 +322,12 @@ final class StatusItemController: NSObject {
         return { ColorPolicy.color(for: $0, scheme: scheme, isStale: stale) }
     }
 
+    /// Points between one watchlist entry and the next in the strip. Named
+    /// because `render` and `materializeRowSplit` must measure the same strip
+    /// — a different gap in the two would let the dropdown's columns disagree
+    /// with the rows above them by one symbol.
+    private static let entryGap: Double = 20
+
     private func render() {
         let metrics = StripRenderer.metrics(rows: settings.rows,
                                             barHeight: Double(NSStatusBar.system.thickness))
@@ -325,7 +340,8 @@ final class StatusItemController: NSObject {
                                        quotes: runner.quotes,
                                        dead: runner.deadSymbols,
                                        rows: metrics.rowCount,
-                                       gap: 20,
+                                       gap: Self.entryGap,
+                                       rowOneCount: document.rowOneCount,
                                        measure: measure)
         // Spec §5.1: a *fixed*-width status item. Task 6 created it
         // `variableLength` because a button sized to its title was the honest
@@ -379,6 +395,8 @@ final class StatusItemController: NSObject {
     /// is no longer watched on screen, with a live trash button, would be the
     /// one state this view must never be in.
     private func rebuildDropdownContent() {
+        guard !isDraggingRows else { return }
+        materializeRowSplit()
         let model = MenuModel.build(symbols: runner.symbols,
                                     quotes: runner.quotes,
                                     dead: runner.deadSymbols,
@@ -399,7 +417,87 @@ final class StatusItemController: NSObject {
                                              ? MotionPolicy.refreshIndicator(
                                                  reduceMotion: NSWorkspace.shared
                                                      .accessibilityDisplayShouldReduceMotion)
-                                             : nil))
+                                             : nil,
+                                         reordering: WatchlistColumnsView.Reordering(
+                                            // One column whenever the menu bar
+                                            // shows one row, whatever split the
+                                            // file remembers from a two-row
+                                            // spell: "if only 1 row is enable,
+                                            // then just 1 column".
+                                            rowOneCount: settings.rows == 2
+                                                ? document.rowOneCount
+                                                : nil,
+                                            commit: { [weak self] in
+                                                self?.applyArrangement($0)
+                                            },
+                                            dragStateChanged: { [weak self] in
+                                                self?.isDraggingRows = $0
+                                            })))
+    }
+
+    /// Turns the width-balanced split into one the user owns, the first time
+    /// the dropdown has to draw it as two columns.
+    ///
+    /// This is the whole of what `RowSplitter`'s balancer still decides. Until
+    /// it runs, `rowOneCount` is `nil` and the balancer picks the rows afresh
+    /// on every render; afterwards the number in the file is the answer, and
+    /// the only thing that changes it is the user dragging a row.
+    ///
+    /// Reordering the watchlist to match is what makes one integer enough, and
+    /// it is invisible: the balancer's two rows keep the same symbols in the
+    /// same order, so the menu bar draws exactly what it drew a moment ago.
+    /// Only the flat list behind it — and the order the engine fetches in —
+    /// changes.
+    private func materializeRowSplit() {
+        guard settings.rows == 2, document.rowOneCount == nil,
+              !document.symbols.isEmpty else { return }
+        let metrics = StripRenderer.metrics(rows: settings.rows,
+                                            barHeight: Double(NSStatusBar.system.thickness))
+        let font = metrics.font
+        let measure: (String) -> Double = { text in
+            Double((text as NSString).size(withAttributes: [.font: font]).width)
+        }
+        let buckets = StripLayout.rowBuckets(symbols: document.symbols,
+                                             quotes: runner.quotes,
+                                             dead: runner.deadSymbols,
+                                             rows: metrics.rowCount,
+                                             gap: Self.entryGap,
+                                             measure: measure)
+        // `StripRenderer.metrics` can answer with one row even when the
+        // setting says two — a menu bar too short for two lines of text. No
+        // boundary exists in that case, and writing one would record a split
+        // the user never saw.
+        guard buckets.count > 1 else { return }
+        applyArrangement(WatchlistArrangement(
+            symbols: buckets.flatMap { $0.map { document.symbols[$0] } },
+            rowOneCount: buckets[0].count),
+                         rebuildDropdown: false)
+    }
+
+    /// The watchlist as the user just arranged it: a new order, and the
+    /// boundary between the two menu-bar rows that falls out of it.
+    ///
+    /// `reorderWatchlist`, never `replaceWatchlist` — the set of symbols has
+    /// not changed, and the replace path treats an edit as "try everything
+    /// again", which would resurrect every dead symbol and re-arm the cycle on
+    /// every drag.
+    private func applyArrangement(_ arrangement: WatchlistArrangement,
+                                  rebuildDropdown: Bool = true) {
+        let ordered = arrangement.flattened
+        // A gesture that somehow produced a different set of symbols is a bug,
+        // and writing it would be the kind that costs a watchlist.
+        guard Set(ordered) == Set(document.symbols) else { return }
+        document.symbols = ordered
+        // `nil` when the arrangement had one column, which clears a boundary
+        // recorded during a two-row spell rather than leaving it describing an
+        // order that no longer exists. Switching back to two rows balances
+        // afresh, which is the same thing that happens for a watchlist nobody
+        // has arranged.
+        document.rowOneCount = arrangement.rowOneCount
+        runner.reorderWatchlist(ordered)
+        schedulePersist()
+        render()
+        if rebuildDropdown { rebuildDropdownContent() }
     }
 
     /// No `default:`: a sixth command must fail the build here rather than
@@ -531,6 +629,13 @@ final class StatusItemController: NSObject {
     /// remove the wrong one.
     @objc private func removeSymbol(_ sender: RemoveButton) {
         let symbol = sender.symbol
+        // The boundary counts leading symbols, so deleting one from the first
+        // row has to move it down with them. Left alone, removing the top
+        // symbol would silently pull the first symbol of row 2 up into row 1.
+        if let boundary = document.rowOneCount,
+           let index = document.symbols.firstIndex(of: symbol), index < boundary {
+            document.rowOneCount = boundary - 1
+        }
         document.symbols.removeAll { $0 == symbol }
         runner.replaceWatchlist(document.symbols)
         persist()

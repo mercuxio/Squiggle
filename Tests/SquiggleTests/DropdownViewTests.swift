@@ -367,3 +367,71 @@ private func button(_ command: MenuCommand, in root: NSView) -> NSButton? {
     #expect(refresh as? SpinningFooterButton == nil)
     #expect(refresh.contentTintColor == NSColor.labelColor)
 }
+
+// MARK: - One column or two
+
+@MainActor
+private func draggableView(_ symbols: [Symbol], rowOneCount: Int?) -> DropdownView {
+    DropdownView(model: model(symbols),
+                 target: Spy(),
+                 remove: #selector(Spy.remove(_:)),
+                 command: { _ in #selector(Spy.command(_:)) },
+                 reordering: .init(rowOneCount: rowOneCount,
+                                   commit: { _ in },
+                                   dragStateChanged: { _ in }))
+}
+
+@MainActor
+private func columnsView(in root: NSView) throws -> WatchlistColumnsView {
+    try #require(everyView(in: root).compactMap { $0 as? WatchlistColumnsView }.first)
+}
+
+/// The user's rule, verbatim: "if 2 rows is enabled, the dropdown to be 2
+/// columns, row 1 and row 2 [...] if only 1 row is enable, then just 1 column".
+/// The controller passes `nil` for the one-row case, so `nil` is what decides.
+@MainActor
+@Test func oneRowGivesTheDropdownASingleColumn() throws {
+    let watched = [try sym("AAPL"), try sym("MSFT"), try sym("VOD.L")]
+    let columns = try columnsView(in: draggableView(watched, rowOneCount: nil))
+    #expect(columns.columnCount == 1)
+}
+
+@MainActor
+@Test func twoRowsGiveTheDropdownTwoColumnsSplitAtTheStoredBoundary() throws {
+    let watched = [try sym("AAPL"), try sym("MSFT"), try sym("VOD.L")]
+    let columns = try columnsView(in: draggableView(watched, rowOneCount: 1))
+    #expect(columns.columnCount == 2)
+    // Row 1 holds one symbol and row 2 the other two, so the taller column is
+    // two rows deep where one column would have been three: the panel is
+    // sized from the taller column, not from the watchlist.
+    let one = try columnsView(in: draggableView(watched, rowOneCount: nil))
+    #expect(columns.intrinsicContentSize.height < one.intrinsicContentSize.height)
+}
+
+/// A two-column panel is exactly twice as wide as a one-column panel, and no
+/// wider. Asserted as a ratio rather than against `Metrics.minWidth`, which is
+/// private: the property that matters is that a row's own text never widens the
+/// panel, since a panel that grows whenever a price gains a digit is a panel
+/// that visibly jitters as quotes land.
+@MainActor
+@Test func aSecondColumnDoublesThePanelAndNothingElseWidensIt() throws {
+    let short = [try sym("AAPL"), try sym("MSFT")]
+    let one = draggableView(short, rowOneCount: nil).fittingSize.width
+    let two = draggableView(short, rowOneCount: 1).fittingSize.width
+    #expect(two == one * 2)
+
+    // A long name in the model must not move either number.
+    let long = [try sym("BRK-B"), try sym("EURUSD=X"), try sym("BTC-USD")]
+    #expect(draggableView(long, rowOneCount: nil).fittingSize.width == one)
+    #expect(draggableView(long, rowOneCount: 2).fittingSize.width == two)
+}
+
+/// The default argument matters: every caller that does not offer dragging —
+/// the settings-less rebuild paths and every older test in this file — must
+/// still get the one-column panel they had before columns existed.
+@MainActor
+@Test func aDropdownBuiltWithoutReorderingIsStillOneColumn() throws {
+    let watched = [try sym("AAPL"), try sym("MSFT")]
+    let columns = try columnsView(in: view(watched))
+    #expect(columns.columnCount == 1)
+}

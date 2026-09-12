@@ -109,3 +109,40 @@ private func load(_ row: [Int], _ widths: [Double]) -> Double {
     let widest = widths.max() ?? 0
     #expect(difference <= widest)
 }
+
+// MARK: - The manual split
+
+@Test func aManualBoundaryIsHonouredExactlyHoweverUnevenItLooks() {
+    // The user's answer when asked who owns the split: "Yes — I own the
+    // split". A hand-arranged watchlist is never re-balanced, even where the
+    // balancer would plainly have done better — that is what owning it means.
+    let widths = [100.0, 1.0, 1.0, 1.0]
+    #expect(RowSplitter.split(widths: widths, rows: 2, manualRowOneCount: 1)
+            == [[0], [1, 2, 3]])
+    #expect(RowSplitter.split(widths: widths, rows: 2, manualRowOneCount: 3)
+            == [[0, 1, 2], [3]])
+}
+
+@Test func aManualBoundaryOfZeroPutsEverythingInTheSecondRow() {
+    // Distinct from `nil`, which means "nobody has arranged this" and leaves
+    // the balancer free to choose. Zero is an arrangement.
+    let widths = [10.0, 10.0]
+    #expect(RowSplitter.split(widths: widths, rows: 2, manualRowOneCount: 0) == [[], [0, 1]])
+}
+
+@Test func aManualBoundaryFromAStaleFileIsClamped() {
+    // `Store.rowOneCount` is a number in a file the user is invited to edit,
+    // and it can outlive the watchlist it was written for — a symbol dropped
+    // on decode shortens the list under it.
+    let widths = [10.0, 10.0]
+    #expect(RowSplitter.split(widths: widths, rows: 2, manualRowOneCount: 9) == [[0, 1], []])
+    #expect(RowSplitter.split(widths: widths, rows: 2, manualRowOneCount: -3) == [[], [0, 1]])
+}
+
+@Test func aManualBoundaryIsIgnoredWhenThereIsOnlyOneRow() {
+    // One row has no boundary to place. The menu bar can end up with one row
+    // even while the setting says two — a bar too short for two lines of text
+    // — and the stored split must not cost a symbol when that happens.
+    let widths = [10.0, 10.0, 10.0]
+    #expect(RowSplitter.split(widths: widths, rows: 1, manualRowOneCount: 1) == [[0, 1, 2]])
+}

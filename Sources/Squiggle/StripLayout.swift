@@ -50,11 +50,14 @@ struct StripLayout: Equatable {
     ///     entry and the repeat of the first.
     ///   - measure: injected text measurement (R131). The caller binds the
     ///     font; nothing here knows what a font is.
+    ///   - rowOneCount: the user's own arrangement, if they have made one —
+    ///     see `Store.rowOneCount`. `nil` lets `RowSplitter` balance by width.
     static func build(symbols: [Symbol],
                       quotes: [Symbol: Quote],
                       dead: Set<Symbol>,
                       rows requestedRows: Int,
                       gap: Double,
+                      rowOneCount: Int? = nil,
                       locale: Locale = .autoupdatingCurrent,
                       measure: (String) -> Double) -> StripLayout {
         let rowCount = max(1, min(requestedRows, 2))
@@ -62,14 +65,10 @@ struct StripLayout: Equatable {
         // the static `pieces(for:…)` it is initialised from, which Swift
         // rejects as a variable used inside its own initial value.
         let entries = symbols.map { pieces(for: $0, quotes: quotes, dead: dead, locale: locale) }
-        let entryWidths = entries.map { entry in
-            entry.reduce(0.0) { $0 + measure($1.text) } + gap
-        }
 
-        // `RowSplitter` balances by rendered width (spec §5.1) and is the one
-        // place that decision lives — duplicating it here is how the CLI and
-        // the app would end up disagreeing about the same watchlist.
-        let buckets = RowSplitter.split(widths: entryWidths, rows: rowCount)
+        let buckets = rowBuckets(symbols: symbols, quotes: quotes, dead: dead,
+                                 rows: rowCount, gap: gap, rowOneCount: rowOneCount,
+                                 locale: locale, measure: measure)
 
         // `RowSplitter` always returns exactly `rowCount` buckets, empty ones
         // included, so an emptied watchlist still yields the rows the renderer
@@ -90,6 +89,34 @@ struct StripLayout: Equatable {
             }
             return Row(segments: segments, contentWidth: x)
         })
+    }
+
+    /// Which watchlist indices land in which row, and nothing else.
+    ///
+    /// Split out of `build` because two surfaces need this answer and only one
+    /// of them wants a strip: the dropdown draws a column per row, and a
+    /// dropdown that grouped its symbols differently from the menu bar above
+    /// it would be worse than no columns at all. Measuring twice in two places
+    /// is exactly how those two would drift.
+    ///
+    /// `RowSplitter` balances by rendered width (spec §5.1) and is the one
+    /// place that decision lives — duplicating it here is how the CLI and the
+    /// app would end up disagreeing about the same watchlist.
+    static func rowBuckets(symbols: [Symbol],
+                           quotes: [Symbol: Quote],
+                           dead: Set<Symbol>,
+                           rows requestedRows: Int,
+                           gap: Double,
+                           rowOneCount: Int? = nil,
+                           locale: Locale = .autoupdatingCurrent,
+                           measure: (String) -> Double) -> [[Int]] {
+        let entryWidths = symbols.map { symbol -> Double in
+            pieces(for: symbol, quotes: quotes, dead: dead, locale: locale)
+                .reduce(0.0) { $0 + measure($1.text) } + gap
+        }
+        return RowSplitter.split(widths: entryWidths,
+                                 rows: max(1, min(requestedRows, 2)),
+                                 manualRowOneCount: rowOneCount)
     }
 
     /// R127's segment order: `SYMBOL price ▲delta (pct%)`. The currency code

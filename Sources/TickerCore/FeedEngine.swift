@@ -303,6 +303,40 @@ public struct FeedEngine {
         // would let a user dodge a 429 backoff by adding a symbol.
     }
 
+    /// Puts the same symbols in a new order, and changes nothing else.
+    ///
+    /// Not `replaceWatchlist`, and the difference is the whole reason this
+    /// exists. That method treats an edit as the user's "try again": it clears
+    /// `dead`, re-parks the cursor, and zeroes `cycleDeadline`. Dragging a row
+    /// in the dropdown to arrange the two marquee rows is none of those
+    /// things, and routing it through there would resurrect every symbol the
+    /// engine had given up on and nudge the refresh schedule on every gesture
+    /// — a user tidying their watchlist for a few seconds would fire a burst
+    /// of requests at Yahoo for nothing.
+    ///
+    /// The cursor is carried with the symbol it was pointing at rather than
+    /// left on its index. An index means a different symbol after a
+    /// permutation, so leaving it put would silently re-fetch one symbol and
+    /// skip another for that pass.
+    ///
+    /// A cursor sitting past the end is a finished pass waiting on
+    /// `cycleDeadline`, not a symbol, so it is left exactly where it is. The
+    /// guard keeps the count identical, so an out-of-range cursor stays out of
+    /// range and `next()` still meets the wrap gate on the other side of the
+    /// drag. Collapsing it to zero instead would start a fresh pass on every
+    /// gesture — the same burst of requests this method exists to avoid.
+    ///
+    /// A caller handing this a different *set* of symbols would be using the
+    /// wrong method; the guard makes that a no-op rather than a quiet
+    /// half-replacement that leaves `latestQuotes` holding symbols nobody
+    /// watches.
+    public mutating func reorderWatchlist(_ newOrder: [Symbol]) {
+        guard newOrder.count == symbols.count, Set(newOrder) == Set(symbols) else { return }
+        let parked = symbols.indices.contains(cursor) ? symbols[cursor] : nil
+        symbols = newOrder
+        cursor = parked.flatMap { newOrder.firstIndex(of: $0) } ?? cursor
+    }
+
     /// Invalidates the in-progress cycle's deadline so a new
     /// `userIntervalSeconds` takes effect starting at the *next* cycle,
     /// rather than either truncating one already underway or being ignored

@@ -90,6 +90,19 @@ final class TickerRunner {
         calendars.retain(live)
     }
 
+    /// The same symbols, rearranged. Nothing is dropped, so nothing here
+    /// filters: `quotes` and `calendars` are keyed by symbol and every key
+    /// they hold is still watched.
+    ///
+    /// See `FeedEngine.reorderWatchlist` for why this does not go through
+    /// `replaceWatchlist` — in short, a drag in the dropdown is not the user
+    /// asking to retry every dead symbol.
+    func reorderWatchlist(_ newOrder: [Symbol]) {
+        guard newOrder.count == symbols.count, Set(newOrder) == Set(symbols) else { return }
+        symbols = newOrder
+        engine.reorderWatchlist(newOrder)
+    }
+
     func setUserInterval(_ seconds: Double) {
         userIntervalSeconds = seconds
         engine.setUserInterval(seconds)

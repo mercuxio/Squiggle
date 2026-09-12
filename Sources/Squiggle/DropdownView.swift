@@ -79,13 +79,18 @@ final class DropdownView: NSView {
     ///     because the click rebuilds this whole view — an animation attached
     ///     to the button that was pressed would be discarded microseconds
     ///     later, and reopening the panel mid-fetch would show nothing.
+    ///   - reordering: present when the rows may be dragged, and carrying the
+    ///     row split that decides whether they are drawn in one column or two.
+    ///     Absent leaves a static list — which is what this view was before
+    ///     the user asked for "2 columns, row 1 and row 2".
     init(model: MenuModel,
          target: AnyObject,
          remove: Selector,
          command: (MenuCommand) -> Selector,
          color: (ColorRole) -> NSColor = { ColorPolicy.color(for: $0, scheme: .monochrome,
                                                              isStale: false) },
-         refreshing: RefreshIndicator? = nil) {
+         refreshing: RefreshIndicator? = nil,
+         reordering: WatchlistColumnsView.Reordering? = nil) {
         super.init(frame: NSRect(x: 0, y: 0, width: Metrics.minWidth, height: 0))
 
         let stack = NSStackView()
@@ -98,11 +103,30 @@ final class DropdownView: NSView {
         stack.edgeInsets = NSEdgeInsets(top: Metrics.topPadding, left: 0, bottom: 0, right: 0)
         stack.translatesAutoresizingMaskIntoConstraints = false
 
+        // The quote rows leave the stack and become one child of it, because
+        // two columns are not something a vertical stack can express and a
+        // drag is not something it can survive. Everything else — the status
+        // line, the separator, the footer bar — stays exactly where it was.
+        let quotes: [MenuModel.QuoteRow] = model.items.compactMap {
+            guard case .quote(let row) = $0 else { return nil }
+            return row
+        }
+        if !quotes.isEmpty {
+            var built: [Symbol: NSView] = [:]
+            for quote in quotes {
+                built[quote.symbol] = Self.quoteRow(quote, target: target, action: remove,
+                                                    color: color)
+            }
+            stack.addArrangedSubview(
+                WatchlistColumnsView(symbols: quotes.map(\.symbol), rows: built,
+                                     rowHeight: Metrics.glyph + Metrics.hitSlop * 2,
+                                     reordering: reordering))
+        }
+
         for item in model.items {
             switch item {
-            case .quote(let row):
-                stack.addArrangedSubview(
-                    Self.quoteRow(row, target: target, action: remove, color: color))
+            case .quote:
+                continue
             case .footer(let text):
                 stack.addArrangedSubview(Self.statusLine(text))
             case .separator:
@@ -113,8 +137,13 @@ final class DropdownView: NSView {
                                                 refreshing: refreshing))
 
         addSubview(stack)
+        // One column's worth of width per column. The rows truncate inside
+        // their column rather than widening the panel, which they used to do:
+        // a two-column panel that grows with its longest row is a panel that
+        // changes width every time a price gains a digit.
+        let columns = CGFloat(reordering?.rowOneCount == nil ? 1 : 2)
         NSLayoutConstraint.activate([
-            widthAnchor.constraint(greaterThanOrEqualToConstant: Metrics.minWidth),
+            widthAnchor.constraint(greaterThanOrEqualToConstant: Metrics.minWidth * columns),
             stack.leadingAnchor.constraint(equalTo: leadingAnchor),
             stack.trailingAnchor.constraint(equalTo: trailingAnchor),
             stack.topAnchor.constraint(equalTo: topAnchor),
@@ -146,6 +175,11 @@ final class DropdownView: NSView {
         label.font = .menuFont(ofSize: Metrics.rowFontSize)
         label.lineBreakMode = .byTruncatingTail
         label.attributedStringValue = text(quote, font: label.font, color: color)
+        // A row now lives in a column of fixed width, so the label has to be
+        // the thing that gives when the line is too long. Left at the default,
+        // its compression resistance outranks the spacing constraint below it
+        // and Auto Layout breaks one at random instead.
+        label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
         let button = RemoveButton(symbol: symbol)
         button.image = LucideIcon.trash2.image(size: Metrics.glyph)

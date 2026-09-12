@@ -1012,4 +1012,100 @@ struct FeedEngineTests {
         if case .sleep = action { isWaiting = true } else { isWaiting = false }
         #expect(isWaiting, "the cooldown let a fetch through: \(action)")
     }
+
+    // MARK: - Dragging a row in the dropdown
+
+    @Test func reorderingCarriesTheCursorWithItsSymbolRatherThanItsIndex() throws {
+        // A drag rearranges the two menu-bar rows; it is not a statement about
+        // which symbol is next. Leaving the raw index behind would silently
+        // skip whichever symbol the drag pushed past the cursor — the user
+        // would see one quote go stale for a whole cycle for no visible
+        // reason.
+        let clock = FakeClock()
+        let a = try sym("AAPL")
+        let b = try sym("MSFT")
+        let c = try sym("NVDA")
+        var e = engine(clock, [a, b, c])
+
+        guard case .fetch(let first) = e.next(openMarket()) else {
+            Issue.record("expected the first fetch to go out")
+            return
+        }
+        #expect(first == a)
+        e.recordSuccess(stubQuote(a), for: a)
+        clock.advance(RateConstants.spacingSeconds)
+
+        // The cursor is parked on MSFT. After the drag MSFT sits at index 0,
+        // where the old index 1 now holds NVDA.
+        e.reorderWatchlist([b, c, a])
+        guard case .fetch(let second) = e.next(openMarket()) else {
+            Issue.record("expected a fetch after the reorder")
+            return
+        }
+        #expect(second == b, "the cursor followed its index instead of its symbol")
+    }
+
+    @Test func reorderingDoesNotReviveADeadSymbolTheWayReplacingDoes() throws {
+        // `replaceWatchlist` clears `dead` because editing the watchlist is the
+        // user saying "try again". Dragging a row says nothing of the kind, so
+        // a symbol Yahoo has no such ticker for must stay out of the rotation.
+        let clock = FakeClock()
+        let gone = try sym("GONE")
+        let kept = try sym("AAPL")
+        var e = engine(clock, [gone, kept])
+        e.record(.symbolNotFound(gone), for: gone)
+        let wasDead = e.deadSymbols.contains(gone)
+        #expect(wasDead)
+
+        e.reorderWatchlist([kept, gone])
+        let stillDead = e.deadSymbols.contains(gone)
+        #expect(stillDead, "a drag cleared the dead set and put a 404 back in the rotation")
+    }
+
+    @Test func reorderingDoesNotOverrideTheCycleGateTheWayAnEditDoes() throws {
+        // Zeroing `cycleDeadline` is `replaceWatchlist`'s way of letting a
+        // newly added symbol be fetched at once. A drag adds nothing, so it
+        // must not buy a free pass round the cadence the user configured.
+        let clock = FakeClock()
+        let a = try sym("AAPL")
+        let b = try sym("MSFT")
+        var e = engine(clock, [a, b], interval: 900)
+
+        // Four fetches, not two: `cycleDeadline` starts at zero, so it is the
+        // *second* pass that is gated by it — the first wrap is what arms it.
+        for _ in 0..<4 {
+            guard case .fetch(let s) = e.next(openMarket()) else {
+                Issue.record("expected the first two passes to complete")
+                return
+            }
+            e.recordSuccess(stubQuote(s), for: s)
+            clock.advance(RateConstants.spacingSeconds)
+        }
+
+        e.reorderWatchlist([b, a])
+        let action = e.next(openMarket())
+        let isWaiting: Bool
+        if case .sleep = action { isWaiting = true } else { isWaiting = false }
+        #expect(isWaiting, "the drag started a new cycle early: \(action)")
+    }
+
+    @Test func aReorderThatIsNotAPermutationIsIgnoredEntirely() throws {
+        // The guard exists because the caller is a view: a dropped row that
+        // gained or lost a symbol would otherwise let the watchlist the engine
+        // fetches drift away from the watchlist the store holds.
+        let clock = FakeClock()
+        let a = try sym("AAPL")
+        let b = try sym("MSFT")
+        var e = engine(clock, [a, b])
+
+        e.reorderWatchlist([b])
+        e.reorderWatchlist([b, a, try sym("NVDA")])
+        e.reorderWatchlist([b, b])
+
+        guard case .fetch(let first) = e.next(openMarket()) else {
+            Issue.record("expected a fetch")
+            return
+        }
+        #expect(first == a, "a malformed reorder was applied anyway")
+    }
 }
