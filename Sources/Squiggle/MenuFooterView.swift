@@ -12,7 +12,7 @@ import AppKit
 /// `MenuModel` stopped emitting them as items when this view appeared.
 @MainActor
 final class MenuFooterView: NSView {
-    private enum Metrics {
+    fileprivate enum Metrics {
         /// Glyph, plus its slop on both sides, plus InOut's 5pt vertical
         /// padding on both sides.
         static let height: CGFloat = 31
@@ -118,7 +118,10 @@ final class MenuFooterView: NSView {
         let button: FooterButton = refreshing == .spin
             ? SpinningFooterButton(frame: .zero)
             : FooterButton()
-        button.image = image(for: command)
+        // The spinning button strokes its own glyph into a layer it owns, so
+        // leaving the cell an image as well would draw two glyphs on top of
+        // each other — one turning, one not.
+        button.image = refreshing == .spin ? nil : image(for: command)
         button.imagePosition = .imageOnly
         button.isBordered = false
         button.bezelStyle = .shadowlessSquare
@@ -172,7 +175,7 @@ class FooterButton: NSButton {
     }
 }
 
-/// The refresh icon while a fetch is in flight: the same button, turning.
+/// The refresh icon while a fetch is in flight: a spinner, turning.
 ///
 /// The rotation is honest rather than cosmetic. It starts when the click asks
 /// for a cycle and stops when the step returns, which is at least
@@ -182,62 +185,85 @@ class FooterButton: NSButton {
 ///
 /// A subclass rather than a flag on `FooterButton`, so that the only button
 /// that can spin is the one that was built to.
+///
+/// The glyph is `loader-circle` rather than `refresh-cw`, matching the loader
+/// in the user's Athena project ("it should be like the loader animation in the
+/// athena project"): a ring with a single gap has no feature except the gap, so
+/// its turning reads as turning. Two arrows chasing each other read as the
+/// arrows moving instead.
 final class SpinningFooterButton: FooterButton {
     /// One turn every `turnSeconds`, forever — "forever" being until the next
     /// rebuild replaces this view with one that is not this class.
     static let turnSeconds: Double = 0.9
     static let animationKey = "squiggle.refresh.spin"
 
+    /// The turning glyph: a layer *we* create, not the view's backing layer.
+    ///
+    /// That distinction is the whole fix. `transform.rotation.z` turns about a
+    /// layer's `anchorPoint`, and a layer-backed `NSView`'s backing layer
+    /// anchors at (0, 0) — AppKit's choice, and AppKit's to re-assert whenever
+    /// it likes as the view joins a window. Two attempts to move that anchor
+    /// point, correcting first `frame` and then `position` for the move, both
+    /// held headlessly and both orbited on screen. A sublayer has no such
+    /// owner: its `anchorPoint` is (0.5, 0.5) from birth and nothing outside
+    /// this class ever touches it, so turning about the middle is what the
+    /// layer *is* rather than something corrected back into place each pass.
+    let spinner = CAShapeLayer()
+
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
+
+        let side = MenuFooterView.Metrics.glyph
+        spinner.bounds = CGRect(x: 0, y: 0, width: side, height: side)
+        spinner.path = LucideIcon.loaderCircle.cgPath(size: side)
+        spinner.lineWidth = LucideIcon.strokeWidth(size: side)
+        spinner.lineCap = .round
+        spinner.lineJoin = .round
+        // A shape layer fills by default, which would blot the ring out.
+        spinner.fillColor = nil
+        spinner.strokeColor = Self.stroke
+        // `position` is written on every layout pass, and a layer's default
+        // implicit animation would make the glyph glide to each new centre.
+        spinner.actions = ["position": NSNull()]
+
         // Added here rather than in `layout()` or on move-to-window: the layer
         // carries it from the moment the button exists, so the spin is already
         // running when the panel draws its first frame — and a test can ask the
         // layer whether it is there without a window server.
         let spin = CABasicAnimation(keyPath: "transform.rotation.z")
         spin.fromValue = 0
-        // Negative: `refresh-cw`'s arrowheads point clockwise, and a glyph that
-        // turns against its own arrows reads as broken.
+        // Negative: positive z-rotation is anticlockwise in a layer's y-up
+        // space, and every spinner a Mac user has ever seen turns the other way.
         spin.toValue = -2 * Double.pi
         spin.duration = Self.turnSeconds
         // Linear, and no autoreverse: an eased repeat pulses, which reads as a
         // series of attempts rather than one that is still running.
         spin.timingFunction = CAMediaTimingFunction(name: .linear)
         spin.repeatCount = .infinity
-        layer?.add(spin, forKey: Self.animationKey)
+        spinner.add(spin, forKey: Self.animationKey)
+
+        layer?.addSublayer(spinner)
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("R133: built in code, not a xib") }
 
-    /// Turn about the middle of the glyph, in place.
+    /// Full-strength label colour — the same `refreshing != nil` gives the
+    /// other footer icons, because this is the live one while it turns.
     ///
-    /// A layer-backed `NSView` anchors at (0, 0) — AppKit's choice — and
-    /// `transform.rotation.z` turns about the anchor point, so left alone the
-    /// icon orbits the bottom-left corner of its own hit box.
-    ///
-    /// Moving the anchor point moves the layer with it, and the correction has
-    /// to be `position`, never `frame`: a backing layer's frame is in its
-    /// *superlayer's* coordinates, while `bounds.origin` is always (0, 0), so
-    /// assigning `frame = bounds` parks the button at the corner of whatever
-    /// layer hosts the footer and makes the orbit worse rather than better.
-    /// Shifting `position` by the same fraction of the layer's own size that
-    /// the anchor point moved leaves the frame exactly where it was —
-    /// `theIconTurnsAboutItsOwnCentreWithoutMoving` is that invariant.
-    ///
-    /// Guarded, so it is a no-op once centred: `layout()` runs on every pass,
-    /// and an unguarded shift would walk the button across the footer. The
-    /// guard is also what makes this self-healing — if AppKit ever re-asserts
-    /// the anchor point, the next pass puts it back.
+    /// Resolved to a `CGColor` because that is all a layer will take, and
+    /// re-read on an appearance change below, because a `CGColor` cannot.
+    private static var stroke: CGColor { NSColor.labelColor.cgColor }
+
+    /// Centre the glyph. Its own anchor point does the rest.
     override func layout() {
         super.layout()
-        let centre = CGPoint(x: 0.5, y: 0.5)
-        guard let layer, layer.anchorPoint != centre else { return }
-        let was = layer.anchorPoint
-        layer.anchorPoint = centre
-        layer.position = CGPoint(
-            x: layer.position.x + (centre.x - was.x) * layer.bounds.width,
-            y: layer.position.y + (centre.y - was.y) * layer.bounds.height)
+        spinner.position = CGPoint(x: bounds.midX, y: bounds.midY)
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        spinner.strokeColor = Self.stroke
     }
 }

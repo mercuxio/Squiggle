@@ -233,8 +233,15 @@ private func button(_ command: MenuCommand, in root: NSView) -> NSButton? {
 @Test func theRefreshIconSpinsWhileAFetchIsInFlight() throws {
     let refresh = try #require(button(.refreshNow, in: footer(.spin)))
     let spinner = try #require(refresh as? SpinningFooterButton)
-    let layer = try #require(spinner.layer)
-    #expect(layer.animation(forKey: SpinningFooterButton.animationKey) != nil)
+    #expect(spinner.spinner.animation(forKey: SpinningFooterButton.animationKey) != nil)
+    // The cell must not also draw a glyph, or two of them overlap — one
+    // turning, one not. Asked as a size rather than as `== nil`, because a
+    // button whose `image` has ever been written hands back a 1×1 placeholder
+    // instead of the nil it was given.
+    let resting = try #require(button(.refreshNow, in: footer(nil)))
+    let drawn = spinner.image?.size.width ?? 0
+    let glyph = resting.image?.size.width ?? 0
+    #expect(drawn < glyph)
 }
 
 /// Only the icon that means "fetch" says a fetch is happening. A quit button
@@ -256,41 +263,59 @@ private func button(_ command: MenuCommand, in root: NSView) -> NSButton? {
     #expect(refresh.contentTintColor == NSColor.secondaryLabelColor)
 }
 
-/// The user's correction: "it should be spinning not moving around".
+/// The user's correction, twice over: "it should be spinning not moving
+/// around", then "still moving in circles and not spinning in place".
 ///
-/// `transform.rotation.z` turns about the anchor point, so a centred anchor is
-/// the whole difference between a spin and an orbit — and the first version of
-/// this corrected it with `layer.frame = bounds`, which is in the superlayer's
-/// coordinates and threw the button into the corner of the footer. The frame
-/// not moving is therefore the property worth asserting, not the anchor point
-/// on its own.
+/// Both earlier attempts rotated the view's *backing* layer and tried to move
+/// its anchor point to the middle. AppKit owns that layer's geometry, and the
+/// orbit survived on screen while every headless assertion passed. What the
+/// class turns now is a sublayer of its own, whose anchor point is (0.5, 0.5)
+/// because that is a `CALayer`'s default and nothing outside the class writes
+/// it — so this test pins the property that made the bug impossible rather than
+/// a correction that was supposed to.
 @MainActor
-@Test func theIconTurnsAboutItsOwnCentreWithoutMoving() throws {
+@Test func theGlyphTurnsAboutItsOwnCentre() {
     let button = SpinningFooterButton(frame: NSRect(x: 40, y: 5, width: 21, height: 21))
-    let layer = try #require(button.layer)
-    // What AppKit does for a placed view, done here because nothing places it.
-    layer.frame = button.frame
-    let placed = layer.frame
-
-    button.layout()
-    #expect(layer.anchorPoint == CGPoint(x: 0.5, y: 0.5))
-    #expect(layer.frame == placed)
+    #expect(button.spinner.anchorPoint == CGPoint(x: 0.5, y: 0.5))
+    // The layer that turns is not the one AppKit hands out.
+    #expect(button.spinner !== button.layer)
 }
 
-/// `layout()` runs on every pass, so the correction has to be a no-op once it
-/// has been made. An unguarded shift would walk the icon across the footer one
-/// half-width at a time.
+/// Turning in place means the turning layer sits at the middle of the button:
+/// a centred anchor point on a layer parked off to one side still orbits.
 @MainActor
-@Test func repeatedLayoutPassesLeaveTheIconWhereItIs() throws {
+@Test func layoutCentresTheGlyphInTheButton() {
     let button = SpinningFooterButton(frame: NSRect(x: 40, y: 5, width: 21, height: 21))
-    let layer = try #require(button.layer)
-    layer.frame = button.frame
+    button.layout()
+    #expect(button.spinner.position == CGPoint(x: 10.5, y: 10.5))
+}
 
+/// `layout()` runs on every pass, so placing the glyph has to be idempotent.
+/// The version this replaced shifted by a delta each time, which would have
+/// walked the icon across the footer had its guard ever been wrong.
+@MainActor
+@Test func repeatedLayoutPassesLeaveTheGlyphWhereItIs() {
+    let button = SpinningFooterButton(frame: NSRect(x: 40, y: 5, width: 21, height: 21))
     button.layout()
-    let settled = layer.frame
+    let settled = button.spinner.position
     button.layout()
     button.layout()
-    #expect(layer.frame == settled)
+    #expect(button.spinner.position == settled)
+}
+
+/// The tests above call `layout()` by hand, which assumes the thing that
+/// actually matters: that a real layout pass reaches this button at all. This
+/// one drives the whole footer the way AppKit does and asks the same question.
+@MainActor
+@Test func aPlacedFooterCentresTheSpinnerInItsButton() throws {
+    let bar = footer(.spin)
+    bar.frame = NSRect(x: 0, y: 0, width: 240, height: 31)
+    bar.layoutSubtreeIfNeeded()
+
+    let refresh = try #require(button(.refreshNow, in: bar) as? SpinningFooterButton)
+    #expect(refresh.spinner.position
+            == CGPoint(x: refresh.bounds.midX, y: refresh.bounds.midY))
+    #expect(refresh.bounds.width > 0)
 }
 
 /// Spec §5.1's rule, applied to the footer by `MotionPolicy.refreshIndicator`:

@@ -82,6 +82,28 @@ struct LucideIcon {
         }
     }
 
+    /// lucide/icons/loader-circle.svg — Lucide's `Loader2`.
+    ///
+    /// The spinner Athena's `RefreshIndicator` turns with, and the reason this
+    /// glyph exists at all: `refresh-cw` is two arrows, so a viewer reads its
+    /// rotation as the arrows moving, while a ring with one gap has no feature
+    /// but the gap and reads as nothing *but* rotation.
+    ///
+    /// "M21 12a9 9 0 1 1-6.219-8.56" — one arc, 288 degrees of a 9-radius
+    /// circle about (12,12), leaving a 72-degree gap. Angles increase clockwise
+    /// on screen here (see the type's own note), so the sweep starts at the
+    /// right of the ring and comes back round to just past the top.
+    static var loaderCircle: LucideIcon {
+        LucideIcon { path in
+            path.appendArc(
+                withCenter: CGPoint(x: 12, y: 12),
+                radius: 9,
+                startAngle: 0,
+                endAngle: 288,
+                clockwise: false)
+        }
+    }
+
     /// lucide/icons/plus.svg
     static var plus: LucideIcon {
         LucideIcon { path in
@@ -202,5 +224,32 @@ struct LucideIcon {
         }
         image.isTemplate = true
         return image
+    }
+
+    /// The same glyph as a `CGPath`, for a layer that strokes it itself.
+    ///
+    /// `image(size:weight:)` renders into an already-flipped context and hands
+    /// the result to a button's cell, which tints a template image for us. A
+    /// `CAShapeLayer` does neither: its space is y-up and its `strokeColor` is
+    /// an already-resolved `CGColor`. So the flip the image path gets for free
+    /// from the context is baked into the path here instead.
+    func cgPath(size: CGFloat) -> CGPath {
+        let path = NSBezierPath()
+        trace(path)
+        let scale = size / LucideIcon.grid
+        // Scale and flip in one step: y' = size - y * scale.
+        var toLayer = CGAffineTransform(a: scale, b: 0, c: 0, d: -scale, tx: 0, ty: size)
+        let traced = path.cgPath
+        return traced.copy(using: &toLayer) ?? traced
+    }
+
+    /// The stroke width a path from `cgPath(size:)` wants, in the same points.
+    ///
+    /// `image(size:weight:)` gets this for nothing by scaling the CTM, which
+    /// scales the stroke with it. A path already baked into layer coordinates
+    /// has to be told, and the `weight` default is the same optical correction
+    /// against SF Symbols for the same reason.
+    static func strokeWidth(size: CGFloat, weight: CGFloat = 1.15) -> CGFloat {
+        strokeUnits * weight * (size / grid)
     }
 }
