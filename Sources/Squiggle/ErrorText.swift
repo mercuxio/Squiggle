@@ -26,6 +26,16 @@ enum ErrorText {
     /// button in Squiggle.
     static let coffeeURL = "https://buymeacoffee.com/benjamintan"
 
+    /// The two column headings in the dropdown, in column order: the first
+    /// column is the menu bar's top row, the second is the bottom one. Shown
+    /// only when the user has asked for two rows — one row has one column, and
+    /// nothing to distinguish.
+    ///
+    /// "Top" and "Bottom" rather than "1" and "2" because the user is looking
+    /// at their menu bar while they drag: the heading names where the symbol
+    /// will appear, not which index it has in a file.
+    static let columnHeadings = ["Top Row", "Bottom Row"]
+
     /// The trash button's only label. Icon-only controls are invisible to
     /// VoiceOver otherwise, and twenty rows of "Remove" would leave a screen
     /// reader user counting to work out which one they were on.

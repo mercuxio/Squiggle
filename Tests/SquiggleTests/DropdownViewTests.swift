@@ -404,8 +404,13 @@ private func columnsView(in root: NSView) throws -> WatchlistColumnsView {
     // Row 1 holds one symbol and row 2 the other two, so the taller column is
     // two rows deep where one column would have been three: the panel is
     // sized from the taller column, not from the watchlist.
+    //
+    // Depth rather than `intrinsicContentSize.height`: the heading band makes
+    // a two-column panel of two rows and a three-row single column very nearly
+    // the same number of points, and "nearly" is not something to assert on.
+    #expect(columns.depth == 2)
     let one = try columnsView(in: draggableView(watched, rowOneCount: nil))
-    #expect(columns.intrinsicContentSize.height < one.intrinsicContentSize.height)
+    #expect(one.depth == 3)
 }
 
 /// A two-column panel is exactly twice as wide as a one-column panel, and no
@@ -434,4 +439,51 @@ private func columnsView(in root: NSView) throws -> WatchlistColumnsView {
     let watched = [try sym("AAPL"), try sym("MSFT")]
     let columns = try columnsView(in: view(watched))
     #expect(columns.columnCount == 1)
+}
+
+// MARK: - Which column is which row
+
+/// The user's words: "1st column row 1, 2nd column row 2. Also label the column
+/// Top Row, bottom row when showing 2 rows". The headings are the only thing in
+/// the dropdown that says which menu bar row a column feeds, so their order is
+/// the feature.
+@MainActor
+@Test func twoColumnsAreLabelledTopRowThenBottomRow() throws {
+    let watched = [try sym("AAPL"), try sym("MSFT"), try sym("VOD.L")]
+    let columns = try columnsView(in: draggableView(watched, rowOneCount: 1))
+    #expect(columns.columnHeadings == ["Top Row", "Bottom Row"])
+}
+
+/// One column has nothing to distinguish itself from, and a lone "Top Row"
+/// over a single list would claim a second row exists.
+@MainActor
+@Test func oneColumnCarriesNoHeadingAtAll() throws {
+    let watched = [try sym("AAPL"), try sym("MSFT")]
+    let columns = try columnsView(in: draggableView(watched, rowOneCount: nil))
+    #expect(columns.columnHeadings.isEmpty)
+    let plain = try columnsView(in: view(watched))
+    #expect(plain.columnHeadings.isEmpty)
+}
+
+/// The band has to push the rows down, not sit behind them. Four separate
+/// pieces of geometry read `headingBand`, and a heading drawn over the first
+/// row is what it looks like when one of them forgets.
+@MainActor
+@Test func theHeadingBandSitsAboveTheFirstRowRatherThanOnTopOfIt() throws {
+    let watched = [try sym("AAPL"), try sym("MSFT"), try sym("VOD.L")]
+    let root = draggableView(watched, rowOneCount: 1)
+    root.frame = NSRect(x: 0, y: 0, width: 520, height: root.fittingSize.height)
+    root.layoutSubtreeIfNeeded()
+    let columns = try columnsView(in: root)
+
+    // Headings are bare text fields; a row is the container built around one.
+    let headings = columns.subviews.compactMap { $0 as? NSTextField }
+    let rows = columns.subviews.filter { !($0 is NSTextField) }
+    let bandBottom = try #require(headings.map(\.frame.maxY).max())
+    let firstRowTop = try #require(rows.map(\.frame.minY).min())
+    #expect(Double(firstRowTop) >= Double(bandBottom))
+
+    // And the second heading starts where the second column does.
+    let rightHeading = try #require(headings.map(\.frame.minX).max())
+    #expect(Double(rightHeading) > Double(columns.bounds.width / 2))
 }

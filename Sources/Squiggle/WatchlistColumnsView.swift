@@ -38,6 +38,10 @@ final class WatchlistColumnsView: NSView {
 
     private enum Metrics {
         static let spacing: CGFloat = 2
+        /// Between a column's heading and the first row under it. Larger than
+        /// `spacing`, so the heading reads as a heading rather than as a row
+        /// that has lost its price.
+        static let headingGap: CGFloat = 6
         /// Points the pointer must travel before a press becomes a drag.
         /// Below this it is a click, and a click on a row means nothing — the
         /// only command a row carries is its trash button, which handles its
@@ -49,6 +53,19 @@ final class WatchlistColumnsView: NSView {
     private let rowHeight: CGFloat
     private let rows: [Symbol: NSView]
     private let reordering: Reordering?
+
+    /// One per column, or empty in the one-column case. Built once: nothing a
+    /// drag can do changes how many columns there are, so these are as stable
+    /// as the view itself.
+    private let headingLabels: [NSTextField]
+    /// The dropdown's own text inset, handed in rather than reached for —
+    /// `DropdownView.Metrics` is private, and a heading that does not share
+    /// the rows' left edge reads as a misalignment rather than a heading.
+    private let textInset: CGFloat
+    /// Height stolen from the top of the view by the headings. Zero in the
+    /// one-column case, which is what keeps the plain list geometry exactly
+    /// as it was.
+    private var headingBand: CGFloat = 0
 
     /// What is drawn right now. During a drag this is the *gapped* arrangement
     /// — the dragged symbol lifted out — so the rows the user sees are the
@@ -66,13 +83,21 @@ final class WatchlistColumnsView: NSView {
     ///   - rows: one view per symbol, already built. Built by the caller
     ///     because a row is the dropdown's business — this type knows only
     ///     that a row is a rectangle of a fixed height.
+    ///   - headings: one title per column, in column order. Used only when
+    ///     there are two columns; a single column has nothing to distinguish
+    ///     itself from.
     init(symbols: [Symbol], rows: [Symbol: NSView], rowHeight: CGFloat,
-         reordering: Reordering?) {
+         reordering: Reordering?, headings: [String] = [], textInset: CGFloat = 0) {
         self.rowHeight = rowHeight
         self.rows = rows
         self.reordering = reordering
+        self.textInset = textInset
         self.arrangement = WatchlistArrangement(symbols: symbols,
                                                 rowOneCount: reordering?.rowOneCount)
+        // A local, not `columnCount`: computed properties are off-limits until
+        // every stored property is initialised and `super.init` has run.
+        let twoColumn = reordering?.rowOneCount != nil
+        self.headingLabels = twoColumn ? headings.prefix(2).map(Self.heading) : []
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
         for symbol in symbols {
@@ -80,12 +105,33 @@ final class WatchlistColumnsView: NSView {
             row.translatesAutoresizingMaskIntoConstraints = true
             addSubview(row)
         }
+        for label in headingLabels { addSubview(label) }
+        headingBand = headingLabels.isEmpty
+            ? 0
+            : ceil(headingLabels.map(\.fittingSize.height).max() ?? 0) + Metrics.headingGap
+    }
+
+    /// Quieter and smaller than a row, so the eye reads it as a label on the
+    /// column rather than as an entry in it.
+    private static func heading(_ title: String) -> NSTextField {
+        let label = NSTextField(labelWithString: title)
+        label.font = .systemFont(ofSize: NSFont.smallSystemFontSize, weight: .semibold)
+        label.textColor = .secondaryLabelColor
+        label.lineBreakMode = .byTruncatingTail
+        label.translatesAutoresizingMaskIntoConstraints = true
+        return label
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("R133: built in code, not a xib") }
 
     var columnCount: Int { arrangement.isTwoColumn ? 2 : 1 }
+
+    /// The two accessors below exist for the tests: `arrangement` is private
+    /// on purpose, and asserting on pixel heights instead made a test that
+    /// failed the moment a heading band shifted the geometry.
+    var depth: Int { arrangement.depth }
+    var columnHeadings: [String] { headingLabels.map(\.stringValue) }
 
     // MARK: - Layout
 
@@ -97,12 +143,25 @@ final class WatchlistColumnsView: NSView {
         let height = slots == 0
             ? 0
             : CGFloat(slots) * (rowHeight + Metrics.spacing) - Metrics.spacing
-        return NSSize(width: NSView.noIntrinsicMetric, height: height)
+        return NSSize(width: NSView.noIntrinsicMetric, height: height + headingBand)
     }
 
     override func layout() {
         super.layout()
+        positionHeadings()
         positionRows(animated: false)
+    }
+
+    /// Above the band, sharing the rows' left edge. Never animated and never
+    /// moved by a drag: a heading names a column, and the columns do not move.
+    private func positionHeadings() {
+        for (column, label) in headingLabels.enumerated() {
+            let height = ceil(label.fittingSize.height)
+            label.frame = NSRect(x: CGFloat(column) * columnWidth + textInset,
+                                 y: 0,
+                                 width: max(0, columnWidth - textInset * 2),
+                                 height: height)
+        }
     }
 
     private var columnWidth: CGFloat {
@@ -111,7 +170,7 @@ final class WatchlistColumnsView: NSView {
 
     private func origin(column: Int, row: Int) -> NSPoint {
         NSPoint(x: CGFloat(column) * columnWidth,
-                y: CGFloat(row) * (rowHeight + Metrics.spacing))
+                y: headingBand + CGFloat(row) * (rowHeight + Metrics.spacing))
     }
 
     private func positionRows(animated: Bool) {
@@ -184,7 +243,10 @@ final class WatchlistColumnsView: NSView {
     private func dropTarget(at point: NSPoint) -> (column: Int, row: Int) {
         let column = columnCount > 1 && point.x >= columnWidth ? 1 : 0
         let step = rowHeight + Metrics.spacing
-        let row = Int((point.y / step).rounded())
+        // Measured from the first row, not from the top of the view: the
+        // heading band is not a slot anything can be dropped into, and
+        // forgetting it here would put every drop one row too high.
+        let row = Int(((point.y - headingBand) / step).rounded())
         let capacity = arrangement.columns.indices.contains(column)
             ? arrangement.columns[column].count
             : 0

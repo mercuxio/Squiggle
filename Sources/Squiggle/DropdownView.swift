@@ -120,7 +120,9 @@ final class DropdownView: NSView {
             stack.addArrangedSubview(
                 WatchlistColumnsView(symbols: quotes.map(\.symbol), rows: built,
                                      rowHeight: Metrics.glyph + Metrics.hitSlop * 2,
-                                     reordering: reordering))
+                                     reordering: reordering,
+                                     headings: ErrorText.columnHeadings,
+                                     textInset: Metrics.inset))
         }
 
         for item in model.items {
