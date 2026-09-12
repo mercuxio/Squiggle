@@ -221,12 +221,14 @@ enum ErrorText {
         return "\(chosen) (\(minutes(cycle)) min with \(symbols))"
     }
 
-    /// The running app's marketing version, shown at the foot of the settings
-    /// window. The number itself comes from `CFBundleShortVersionString`; this
-    /// only says how to word it, because no other file in the app target is
-    /// allowed to word anything.
+    /// The running app's marketing version, shown at the right-hand end of the
+    /// settings window's login row. The number itself comes from
+    /// `CFBundleShortVersionString`; this only says how to word it, because no
+    /// other file in the app target is allowed to word anything. Named in full
+    /// — "Squiggle Version 1.0.0" — because on that row a bare "Version 1.0.0"
+    /// would read as belonging to "Open at Login" beside it.
     static func versionLine(_ version: String) -> String {
-        "Version \(version)"
+        "Squiggle Version \(version)"
     }
 
     static let launchAtLoginLabel = "Open at Login"

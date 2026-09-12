@@ -381,7 +381,9 @@ private func window(settings: Settings = Settings(),
 }
 
 /// Run as a bare binary with no bundle around it there is no version to give,
-/// and the window says nothing rather than saying "Version " and trailing off.
+/// and the window says nothing rather than trailing off after "Version". The
+/// label is still in the row — an empty one claims no width, so there is
+/// nothing to hide and no gap where it would have been.
 @MainActor
 @Test func aVersionlessBuildPrintsNoVersionLineAtAll() throws {
     let spy = LoginItemSpy(state: .off, result: .off)
@@ -390,7 +392,41 @@ private func window(settings: Settings = Settings(),
     let printed = everyView(in: content).compactMap { $0 as? NSTextField }
         .map(\.stringValue)
 
-    #expect(!printed.contains { $0.hasPrefix("Version") })
+    #expect(!printed.contains { $0.contains("Version") })
+}
+
+/// "version can be in the same row as open at login. open at login to align
+/// left and the version to align right."
+///
+/// Frames rather than gravity areas: `addView(_:in: .trailing)` is how the
+/// right edge is asked for, and this asserts it was granted — a stack whose
+/// cell stopped filling the column would still hold the same two gravities
+/// while drawing the version halfway across the window.
+@MainActor
+@Test func theVersionSitsAtTheRightEndOfTheLoginRow() throws {
+    let spy = LoginItemSpy(state: .off, result: .off)
+    let controller = window(launchAtLogin: spy.seam, version: "1.0.0")
+    let content = try #require(controller.window?.contentView)
+    content.layoutSubtreeIfNeeded()
+
+    let row = try #require(everyView(in: content).compactMap { $0 as? NSStackView }
+        .first { stack in
+            stack.views.contains { ($0 as? NSButton)?.title == ErrorText.launchAtLoginLabel }
+        })
+    let checkbox = try #require(row.views.compactMap { $0 as? NSButton }.first)
+    let version = try #require(row.views.compactMap { $0 as? NSTextField }.first)
+
+    #expect(version.stringValue == ErrorText.versionLine("1.0.0"))
+    // Alignment rects, not frames: a stack aligns those, and an `NSTextField`
+    // insets its own by 2pt — so the frame overhangs the stack by 2pt while
+    // the text it draws sits exactly on the edge. The text is what the user
+    // asked to line up.
+    #expect(Double(checkbox.alignmentRect(forFrame: checkbox.frame).minX)
+            == Double(row.bounds.minX))
+    #expect(Double(version.alignmentRect(forFrame: version.frame).maxX)
+            == Double(row.bounds.maxX))
+    // Two ends of one row, not two rows: the same stack, and no overlap.
+    #expect(Double(version.frame.minX) > Double(checkbox.frame.maxX))
 }
 
 /// The app's real bundle carries the version the settings window will show, so

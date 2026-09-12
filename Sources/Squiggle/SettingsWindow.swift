@@ -31,6 +31,11 @@ final class SettingsWindowController: NSWindowController {
                                          target: nil, action: nil)
     private let loginNote = NSTextField(labelWithString: "")
     private let versionLabel = NSTextField(labelWithString: "")
+    /// "Open at Login" at one end, the version at the other. A stack rather
+    /// than two grid cells because the grid has two columns and column 0 is
+    /// the labels: a version placed there would sit to the *left* of the
+    /// checkbox, not the right of the window.
+    private let loginRow = NSStackView()
 
     /// The width of the grid's control column, and so the width any note in it
     /// has to wrap inside. Named because two places have to agree on it.
@@ -53,13 +58,11 @@ final class SettingsWindowController: NSWindowController {
         static let divider = 7
         static let note = 9
         static let loginButton = 10
-        static let version = 11
     }
 
     /// Hiding a *view* leaves its row's height behind; hiding the row is what
     /// closes the gap. Held because `show(_:)` needs them long after the grid
     /// has gone out of scope.
-    private var versionRow: NSGridRow?
     private var noteRow: NSGridRow?
     private var loginButtonRow: NSGridRow?
 
@@ -193,6 +196,18 @@ final class SettingsWindowController: NSWindowController {
             versionLabel.stringValue = ErrorText.versionLine(version)
         }
 
+        // Gravity areas rather than a spacer view: `.leading` hugs the left of
+        // whatever width the stack is given and `.trailing` hugs the right, so
+        // the two ends stay put without a third view standing between them
+        // pretending to be space.
+        loginRow.orientation = .horizontal
+        // Baselines, not centres: the version is small-system-size and the
+        // checkbox is not, and two different type sizes centred against each
+        // other read as one of them sitting slightly low.
+        loginRow.alignment = .firstBaseline
+        loginRow.addView(loginCheckbox, in: .leading)
+        loginRow.addView(versionLabel, in: .trailing)
+
         let grid = NSGridView(views: [
             [label(ErrorText.rowsLabel), rowsControl],
             [label(ErrorText.intervalLabel), intervalPopUp],
@@ -202,10 +217,9 @@ final class SettingsWindowController: NSWindowController {
             [label(ErrorText.widthLabel), widthSlider],
             [label(ErrorText.speedLabel), speedSlider],
             [divider, NSGridCell.emptyContentView],
-            [NSGridCell.emptyContentView, loginCheckbox],
+            [NSGridCell.emptyContentView, loginRow],
             [NSGridCell.emptyContentView, loginNote],
             [NSGridCell.emptyContentView, loginSettingsButton],
-            [versionLabel, NSGridCell.emptyContentView],
         ])
         grid.column(at: 0).xPlacement = .trailing
         grid.column(at: 1).width = Self.columnWidth
@@ -224,9 +238,10 @@ final class SettingsWindowController: NSWindowController {
         for natural in [rowsControl, motionControl] as [NSView] {
             grid.cell(for: natural)?.xPlacement = .leading
         }
-        for natural in [loginCheckbox, loginSettingsButton] as [NSView] {
-            grid.cell(for: natural)?.xPlacement = .leading
-        }
+        // `loginRow` keeps column 1's default `.fill`: the checkbox stays
+        // left because its gravity area says so, and the version needs the
+        // column's full width to sit against its right edge.
+        grid.cell(for: loginSettingsButton)?.xPlacement = .leading
 
         // The divider is a rule, not a cell of content: it spans both columns.
         grid.mergeCells(inHorizontalRange: NSRange(location: 0, length: 2),
@@ -241,21 +256,6 @@ final class SettingsWindowController: NSWindowController {
         grid.row(at: Row.loginButton).topPadding = -2
         grid.row(at: Row.divider).topPadding = 6
         grid.row(at: Row.divider).bottomPadding = 6
-
-        // Centred across the full width, the way every other Mac settings
-        // window prints its version: it is a fact about the app rather than a
-        // caption belonging to the login group directly above it, and the
-        // extra top padding is what says so.
-        grid.mergeCells(inHorizontalRange: NSRange(location: 0, length: 2),
-                        verticalRange: NSRange(location: Row.version, length: 1))
-        grid.cell(atColumnIndex: 0, rowIndex: Row.version).xPlacement = .center
-        grid.row(at: Row.version).topPadding = 8
-
-        // Nothing to say, and no blank line where it would have been. Squiggle
-        // only lacks a version when it is run as a bare binary outside a
-        // bundle — the same condition the login note above already explains.
-        versionRow = grid.row(at: Row.version)
-        versionRow?.isHidden = version == nil
 
         noteRow = grid.row(at: Row.note)
         loginButtonRow = grid.row(at: Row.loginButton)
