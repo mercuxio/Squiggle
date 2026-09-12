@@ -65,9 +65,11 @@ private func label(_ text: String, in controller: NSWindowController) -> NSTextF
 
 @MainActor
 private func window(settings: Settings = Settings(),
-                    launchAtLogin: LaunchAtLogin) -> SettingsWindowController {
+                    launchAtLogin: LaunchAtLogin,
+                    version: String? = "1.0.0") -> SettingsWindowController {
     SettingsWindowController(settings: settings,
                              launchAtLogin: launchAtLogin,
+                             version: version,
                              onChange: { _ in })
 }
 
@@ -349,4 +351,63 @@ private func window(settings: Settings = Settings(),
 
     #expect(panel.isVisible)
     #expect(controller.window === panel)
+}
+
+// MARK: - The version line
+
+/// "also put the squiggle version in the settings dialog".
+///
+/// Asserted against `ErrorText.versionLine` rather than against the literal
+/// "Version 1.0.0": the wording belongs to `ErrorText` and nowhere else, so a
+/// test that spelled it out here would be a second copy to keep in step.
+@MainActor
+@Test func theSettingsWindowPrintsTheAppVersion() {
+    let spy = LoginItemSpy(state: .off, result: .off)
+    let controller = window(launchAtLogin: spy.seam, version: "1.0.0")
+
+    #expect(labelExists(ErrorText.versionLine("1.0.0"), in: controller))
+}
+
+/// The number is the bundle's, not a literal typed into the window — so a
+/// release that bumps `CFBundleShortVersionString` needs no code change here,
+/// and this is the assertion that would catch one being hard-coded back in.
+@MainActor
+@Test func theVersionLineSaysWhateverTheBundleSays() {
+    let spy = LoginItemSpy(state: .off, result: .off)
+    let controller = window(launchAtLogin: spy.seam, version: "9.9.9")
+
+    #expect(labelExists(ErrorText.versionLine("9.9.9"), in: controller))
+    #expect(!labelExists(ErrorText.versionLine("1.0.0"), in: controller))
+}
+
+/// Run as a bare binary with no bundle around it there is no version to give,
+/// and the window says nothing rather than saying "Version " and trailing off.
+@MainActor
+@Test func aVersionlessBuildPrintsNoVersionLineAtAll() throws {
+    let spy = LoginItemSpy(state: .off, result: .off)
+    let controller = window(launchAtLogin: spy.seam, version: nil)
+    let content = try #require(controller.window?.contentView)
+    let printed = everyView(in: content).compactMap { $0 as? NSTextField }
+        .map(\.stringValue)
+
+    #expect(!printed.contains { $0.hasPrefix("Version") })
+}
+
+/// The app's real bundle carries the version the settings window will show, so
+/// a release that forgot to set it would ship a window with a blank foot. Read
+/// from the source plist rather than `Bundle.main`, which under `swift test` is
+/// the test runner and knows nothing about Squiggle.
+@Test func theShippedBundleCarriesAMarketingVersion() throws {
+    let plist = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()   // SquiggleTests
+        .deletingLastPathComponent()   // Tests
+        .deletingLastPathComponent()   // package root
+        .appendingPathComponent("Resources/Info.plist")
+    let contents = try Data(contentsOf: plist)
+    let parsed = try #require(
+        try PropertyListSerialization.propertyList(from: contents, format: nil)
+            as? [String: Any])
+
+    let version = try #require(parsed["CFBundleShortVersionString"] as? String)
+    #expect(version == "1.0.0")
 }

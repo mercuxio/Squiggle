@@ -26,9 +26,11 @@ final class SettingsWindowController: NSWindowController {
     private let speedSlider = NSSlider()
     private let effectiveLabel = NSTextField(labelWithString: "")
     private let launchAtLogin: LaunchAtLogin
+    private let version: String?
     private let loginCheckbox = NSButton(checkboxWithTitle: ErrorText.launchAtLoginLabel,
                                          target: nil, action: nil)
     private let loginNote = NSTextField(labelWithString: "")
+    private let versionLabel = NSTextField(labelWithString: "")
 
     /// The width of the grid's control column, and so the width any note in it
     /// has to wrap inside. Named because two places have to agree on it.
@@ -51,19 +53,28 @@ final class SettingsWindowController: NSWindowController {
         static let divider = 7
         static let note = 9
         static let loginButton = 10
+        static let version = 11
     }
 
     /// Hiding a *view* leaves its row's height behind; hiding the row is what
     /// closes the gap. Held because `show(_:)` needs them long after the grid
     /// has gone out of scope.
+    private var versionRow: NSGridRow?
     private var noteRow: NSGridRow?
     private var loginButtonRow: NSGridRow?
 
+    /// - Parameter version: what to print at the foot of the window, or `nil`
+    ///   to print nothing. An argument rather than a direct read of
+    ///   `Bundle.main`, because under `swift test` the main bundle is the test
+    ///   runner: a window that asked the bundle itself could only be tested
+    ///   against whatever version the test harness happens to carry.
     init(settings: Settings,
          launchAtLogin: LaunchAtLogin = .system,
+         version: String? = AppVersion.current,
          onChange: @escaping (Settings) -> Void) {
         self.settings = settings
         self.launchAtLogin = launchAtLogin
+        self.version = version
         self.onChange = onChange
 
         let window = EscapeClosingWindow(
@@ -176,6 +187,12 @@ final class SettingsWindowController: NSWindowController {
         let divider = NSBox()
         divider.boxType = .separator
 
+        versionLabel.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        versionLabel.textColor = .secondaryLabelColor
+        if let version {
+            versionLabel.stringValue = ErrorText.versionLine(version)
+        }
+
         let grid = NSGridView(views: [
             [label(ErrorText.rowsLabel), rowsControl],
             [label(ErrorText.intervalLabel), intervalPopUp],
@@ -188,6 +205,7 @@ final class SettingsWindowController: NSWindowController {
             [NSGridCell.emptyContentView, loginCheckbox],
             [NSGridCell.emptyContentView, loginNote],
             [NSGridCell.emptyContentView, loginSettingsButton],
+            [versionLabel, NSGridCell.emptyContentView],
         ])
         grid.column(at: 0).xPlacement = .trailing
         grid.column(at: 1).width = Self.columnWidth
@@ -223,6 +241,21 @@ final class SettingsWindowController: NSWindowController {
         grid.row(at: Row.loginButton).topPadding = -2
         grid.row(at: Row.divider).topPadding = 6
         grid.row(at: Row.divider).bottomPadding = 6
+
+        // Centred across the full width, the way every other Mac settings
+        // window prints its version: it is a fact about the app rather than a
+        // caption belonging to the login group directly above it, and the
+        // extra top padding is what says so.
+        grid.mergeCells(inHorizontalRange: NSRange(location: 0, length: 2),
+                        verticalRange: NSRange(location: Row.version, length: 1))
+        grid.cell(atColumnIndex: 0, rowIndex: Row.version).xPlacement = .center
+        grid.row(at: Row.version).topPadding = 8
+
+        // Nothing to say, and no blank line where it would have been. Squiggle
+        // only lacks a version when it is run as a bare binary outside a
+        // bundle — the same condition the login note above already explains.
+        versionRow = grid.row(at: Row.version)
+        versionRow?.isHidden = version == nil
 
         noteRow = grid.row(at: Row.note)
         loginButtonRow = grid.row(at: Row.loginButton)
@@ -334,5 +367,17 @@ final class SettingsWindowController: NSWindowController {
 final class EscapeClosingWindow: NSWindow {
     override func cancelOperation(_ sender: Any?) {
         performClose(sender)
+    }
+}
+
+/// Where the app's own version number comes from.
+///
+/// `CFBundleShortVersionString` is the user-facing one — `1.0.0` — as against
+/// `CFBundleVersion`, which is a build counter nobody wants read aloud. `nil`
+/// when Squiggle is run as a bare executable with no bundle around it, which
+/// `main.swift` already allows for and which has no version to report.
+enum AppVersion {
+    static var current: String? {
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
     }
 }

@@ -221,6 +221,14 @@ enum ErrorText {
         return "\(chosen) (\(minutes(cycle)) min with \(symbols))"
     }
 
+    /// The running app's marketing version, shown at the foot of the settings
+    /// window. The number itself comes from `CFBundleShortVersionString`; this
+    /// only says how to word it, because no other file in the app target is
+    /// allowed to word anything.
+    static func versionLine(_ version: String) -> String {
+        "Version \(version)"
+    }
+
     static let launchAtLoginLabel = "Open at Login"
     static let openLoginItems = "Open Login Items…"
 
