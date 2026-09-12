@@ -455,7 +455,18 @@ private func columnsView(in root: NSView) throws -> WatchlistColumnsView {
     let footerIndex = try #require(
         stack.arrangedSubviews.firstIndex { $0 is MenuFooterView })
     #expect(footerIndex > 0)
-    #expect(stack.arrangedSubviews[footerIndex - 1] is NSBox)
+    let rule = try #require(stack.arrangedSubviews[footerIndex - 1] as? NSBox)
+
+    // Not merely "a box is there". The first version of this rule was an
+    // `NSBox` of type `.separator`, which draws in `separatorColor` — about a
+    // tenth of a point of black, and nothing at all once the panel's blurred
+    // `.menu` material is behind it. The box was present and the user still
+    // asked where the border was, so the assertion has to be about a line that
+    // can be seen: filled, opaque enough to read, and no border of its own.
+    #expect(rule.boxType == .custom)
+    #expect(rule.borderWidth == 0)
+    let weight = rule.fillColor.usingColorSpace(.deviceRGB)?.alphaComponent ?? 0
+    #expect(Double(weight) > 0.15)
 }
 
 // MARK: - Which column is which row

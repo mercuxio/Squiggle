@@ -290,9 +290,23 @@ final class DropdownView: NSView {
         return row
     }
 
+    /// A rule the user can actually see.
+    ///
+    /// This was `boxType = .separator`, copied from Pitch — and it does draw,
+    /// but `NSBox` paints that with `separatorColor`, which is about a tenth
+    /// of a point of black. Over the panel's blurred `.menu` material there is
+    /// nothing left of it, which is why the rule this method exists for read
+    /// as missing. A filled 1pt box in `tertiaryLabelColor` is the same line
+    /// at a weight that survives the vibrancy behind it.
+    ///
+    /// `.separator` also refuses to be 1pt tall — the box kept a 5pt frame and
+    /// drew its hairline in the middle, so the rule sat where the constraint
+    /// said only by luck. A custom box has no such minimum.
     private static func separator() -> NSView {
         let box = NSBox()
-        box.boxType = .separator
+        box.boxType = .custom
+        box.borderWidth = 0
+        box.fillColor = .tertiaryLabelColor
         box.translatesAutoresizingMaskIntoConstraints = false
         box.heightAnchor.constraint(equalToConstant: 1).isActive = true
         return box
