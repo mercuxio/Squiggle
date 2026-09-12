@@ -99,3 +99,17 @@ import Testing
     #expect(finite)
     #expect(frames.keyTimes.last == 1)
 }
+
+// MARK: - Refresh indicator
+
+// The spin exists to say "a fetch is under way". Reduce Motion is the user
+// saying, at the system level, that a thing which never stops moving is not
+// how they want to be told — the same reasoning that forces `.step` on the
+// strip. The indicator stays; only its means change.
+@Test func reduceMotionSwapsTheSpinForSomethingStill() {
+    #expect(MotionPolicy.refreshIndicator(reduceMotion: true) == .tint)
+}
+
+@Test func withoutReduceMotionTheIconSpins() {
+    #expect(MotionPolicy.refreshIndicator(reduceMotion: false) == .spin)
+}

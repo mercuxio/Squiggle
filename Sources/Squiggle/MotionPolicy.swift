@@ -15,6 +15,16 @@ enum MotionMode: String, Equatable, Sendable {
     }
 }
 
+/// How the footer's refresh icon says a fetch is under way.
+///
+/// Two cases rather than an optional `Bool`, because "not refreshing" is the
+/// absence of an indicator entirely — already spelled by the absence of one of
+/// these — and a third case for it would make one state sayable twice.
+enum RefreshIndicator: Equatable, Sendable {
+    case spin
+    case tint
+}
+
 enum MotionPolicy {
     /// Spec §5.1: one page every four seconds.
     static let stepSeconds: Double = 4
@@ -29,6 +39,17 @@ enum MotionPolicy {
     /// their choice was never overwritten — only overruled.
     static func effective(requested: MotionMode, reduceMotion: Bool) -> MotionMode {
         reduceMotion ? .step : requested
+    }
+
+    /// The same rule `effective` applies to the strip, applied to the footer:
+    /// Reduce Motion overrules the animation without removing the signal.
+    ///
+    /// A glyph rotating until the network answers is exactly the indefinite
+    /// motion that setting exists to stop, so the icon brightens instead —
+    /// which is what it already does under the pointer, so the vocabulary is
+    /// one the user has seen before.
+    static func refreshIndicator(reduceMotion: Bool) -> RefreshIndicator {
+        reduceMotion ? .tint : .spin
     }
 
     /// The x positions the row layer steps through, one per page, starting at

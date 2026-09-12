@@ -35,10 +35,47 @@ enum MenuCommand: Equatable, Sendable, CaseIterable {
 /// same too — every rule worth testing is in here, and none
 /// of it needs a status bar, a window server or a run loop to exercise.
 struct MenuModel: Equatable {
+    /// One watchlist row: its text, what the trash button acts on, and the one
+    /// span of the text that carries colour.
+    ///
+    /// The strip has had this shape since Task 7 — `StripLayout.pieces` emits
+    /// the direction glyph as its own segment so that it, and nothing else,
+    /// takes `.direction`. The dropdown showed the same line as one flat
+    /// string, which is why its triangle stayed black in every scheme.
+    struct QuoteRow: Equatable {
+        /// Which characters of `title` are the direction glyph, and which way
+        /// it points.
+        ///
+        /// One optional holding both, rather than two that have to agree: a
+        /// direction with no glyph to paint is not a state this row can be in.
+        struct Glyph: Equatable {
+            /// UTF-16 units, because the only consumer is an
+            /// `NSAttributedString` and it measures in those. Located here,
+            /// where the string is assembled, rather than searched for in the
+            /// view — a view hunting for "▲" is a second place that has to
+            /// know what a glyph looks like.
+            let range: NSRange
+            let direction: Direction
+        }
+
+        let title: String
+        /// Rides along because the row carries a trash button that needs to
+        /// know what it is removing.
+        let symbol: Symbol
+        /// `nil` when there is no glyph at all: no quote yet, or a symbol the
+        /// engine gave up on.
+        ///
+        /// A flat day is *not* nil — it has an en dash, and it gets a span
+        /// carrying `.flat`, exactly as `StripLayout.pieces` gives it a
+        /// `.direction(.flat)` segment. Whether that span ends up coloured is
+        /// `ColorPolicy`'s ruling ("`.flat` and `.unknown` are never
+        /// coloured"), made in one place for both surfaces. Filtering flat out
+        /// here would be a second copy of that rule, free to drift.
+        let glyph: Glyph?
+    }
+
     enum Item: Equatable {
-        /// One watchlist row. The symbol rides along because the row carries a
-        /// trash button that needs to know what it is removing.
-        case quote(title: String, symbol: Symbol)
+        case quote(QuoteRow)
         /// Spec §7's one line of detail, and the app's only error surface.
         ///
         /// Named before the footer *bar* existed, and kept: "footer" is the
@@ -60,8 +97,7 @@ struct MenuModel: Equatable {
                       nextStepEpoch: Double?,
                       locale: Locale = .autoupdatingCurrent) -> MenuModel {
         var items: [Item] = symbols.map { symbol in
-            .quote(title: row(for: symbol, quotes: quotes, dead: dead, locale: locale),
-                   symbol: symbol)
+            .quote(row(for: symbol, quotes: quotes, dead: dead, locale: locale))
         }
         if !items.isEmpty { items.append(.separator) }
 
@@ -82,18 +118,43 @@ struct MenuModel: Equatable {
     private static func row(for symbol: Symbol,
                             quotes: [Symbol: Quote],
                             dead: Set<Symbol>,
-                            locale: Locale) -> String {
+                            locale: Locale) -> QuoteRow {
         // Same rule as `StripLayout.pieces`, for the same reason: no quote yet
         // and given up on both mean "there is no number for this slot", and
         // which one it is belongs in the footer, not in a second glyph.
         guard !dead.contains(symbol), let quote = quotes[symbol] else {
-            return ErrorText.menuRow(symbol: symbol.raw,
-                                     price: Formatting.deadPlaceholder,
-                                     change: "", currency: nil)
+            let title = ErrorText.menuRow(symbol: symbol.raw,
+                                          price: Formatting.deadPlaceholder,
+                                          change: "", currency: nil)
+            return QuoteRow(title: title, symbol: symbol, glyph: nil)
         }
-        return ErrorText.menuRow(symbol: symbol.raw,
-                                 price: Formatting.price(quote.price, locale: locale),
-                                 change: Formatting.change(quote, locale: locale),
-                                 currency: quote.currency)
+        let parts = Formatting.changeParts(quote, locale: locale)
+        let change = parts.glyph + parts.body
+        let title = ErrorText.menuRow(symbol: symbol.raw,
+                                      price: Formatting.price(quote.price, locale: locale),
+                                      change: change,
+                                      currency: quote.currency)
+        return QuoteRow(title: title,
+                        symbol: symbol,
+                        glyph: glyph(parts.glyph, in: title, change: change,
+                                     direction: quote.direction))
+    }
+
+    /// Where the arrow sits in the assembled line.
+    ///
+    /// `ErrorText.menuRow` puts the change last and `Formatting.changeParts`
+    /// puts the glyph first inside it, so the arrow is the first characters of
+    /// the final `change` — arithmetic, not a search. Both halves of that are
+    /// load-bearing and neither is local to this file, which is why
+    /// `theArrowsSpanIsTheArrow` asserts the substring rather than the offset:
+    /// if either changes its mind, the test says so instead of the dropdown
+    /// colouring a digit.
+    private static func glyph(_ arrow: String, in title: String, change: String,
+                              direction: Direction) -> QuoteRow.Glyph? {
+        let arrowLength = (arrow as NSString).length
+        guard arrowLength > 0 else { return nil }
+        let start = (title as NSString).length - (change as NSString).length
+        return QuoteRow.Glyph(range: NSRange(location: start, length: arrowLength),
+                              direction: direction)
     }
 }

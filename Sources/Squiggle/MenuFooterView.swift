@@ -36,14 +36,25 @@ final class MenuFooterView: NSView {
     /// - Parameter selector: what each button sends. A closure rather than five
     ///   parameters so that adding a command is one case in `MenuCommand` and
     ///   one arm in the caller's `switch`, with nothing to forget here.
-    init(target: AnyObject, selector: (MenuCommand) -> Selector) {
+    /// - Parameter refreshing: non-`nil` while a fetch is under way, and only
+    ///   ever applied to `.refreshNow`. The controller owns this state and this
+    ///   view is rebuilt from it, rather than the button starting its own
+    ///   animation when clicked: clicking rebuilds the dropdown, so the button
+    ///   that was pressed no longer exists by the time a fetch is in flight.
+    init(target: AnyObject, selector: (MenuCommand) -> Selector,
+         refreshing: RefreshIndicator? = nil) {
         // The width is a starting point only — the panel stretches this view to
         // its full width. The height is the one this view insists on, stated as
         // a constraint below.
         super.init(frame: NSRect(x: 0, y: 0, width: 240, height: Metrics.height))
 
         let leading = NSStackView(views: Self.leadingCommands.map {
-            Self.button(for: $0, target: target, action: selector($0))
+            Self.button(for: $0, target: target, action: selector($0),
+                        // Only the icon that means "fetch" says a fetch is
+                        // happening. Deciding it here, once, is what keeps
+                        // `button` from having to know which command it is
+                        // building beyond picking a glyph.
+                        refreshing: $0 == .refreshNow ? refreshing : nil)
         })
         leading.orientation = .horizontal
         leading.spacing = Metrics.spacing
@@ -99,9 +110,14 @@ final class MenuFooterView: NSView {
     }
 
     private static func button(
-        for command: MenuCommand, target: AnyObject, action: Selector
+        for command: MenuCommand, target: AnyObject, action: Selector,
+        refreshing: RefreshIndicator? = nil
     ) -> NSButton {
-        let button = FooterButton()
+        // `init(frame:)` explicitly: `SpinningFooterButton()` would reach
+        // `NSObject.init()` rather than the initializer that installs the spin.
+        let button: FooterButton = refreshing == .spin
+            ? SpinningFooterButton(frame: .zero)
+            : FooterButton()
         button.image = image(for: command)
         button.imagePosition = .imageOnly
         button.isBordered = false
@@ -111,7 +127,11 @@ final class MenuFooterView: NSView {
         button.toolTip = command.title
         // The icon has no label, so this is the only thing VoiceOver can read.
         button.setAccessibilityLabel(command.title)
-        button.contentTintColor = .secondaryLabelColor
+        // `.tint` is the Reduce Motion substitute and `.spin` brightens too, so
+        // in either case the icon reads as the live one — which is the same
+        // treatment `FooterButton` gives the icon under the pointer, so it is
+        // vocabulary the user has already seen.
+        button.contentTintColor = refreshing == nil ? .secondaryLabelColor : .labelColor
 
         // Glyph plus InOut's 4pt of hit slop on every side: a stroked 13pt icon
         // is a hairline target otherwise.
@@ -149,5 +169,61 @@ class FooterButton: NSButton {
 
     override func mouseExited(with event: NSEvent) {
         contentTintColor = .secondaryLabelColor
+    }
+}
+
+/// The refresh icon while a fetch is in flight: the same button, turning.
+///
+/// The rotation is honest rather than cosmetic. It starts when the click asks
+/// for a cycle and stops when the step returns, which is at least
+/// `RateConstants.minimumWaitSeconds` plus whatever the network takes — and if
+/// the cooldown, a circuit or the token bucket refuses the fetch, it stops
+/// almost at once, because the click asks for a refresh and does not grant one.
+///
+/// A subclass rather than a flag on `FooterButton`, so that the only button
+/// that can spin is the one that was built to.
+final class SpinningFooterButton: FooterButton {
+    /// One turn every `turnSeconds`, forever — "forever" being until the next
+    /// rebuild replaces this view with one that is not this class.
+    static let turnSeconds: Double = 0.9
+    static let animationKey = "squiggle.refresh.spin"
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        // Added here rather than in `layout()` or on move-to-window: the layer
+        // carries it from the moment the button exists, so the spin is already
+        // running when the panel draws its first frame — and a test can ask the
+        // layer whether it is there without a window server.
+        let spin = CABasicAnimation(keyPath: "transform.rotation.z")
+        spin.fromValue = 0
+        // Negative: `refresh-cw`'s arrowheads point clockwise, and a glyph that
+        // turns against its own arrows reads as broken.
+        spin.toValue = -2 * Double.pi
+        spin.duration = Self.turnSeconds
+        // Linear, and no autoreverse: an eased repeat pulses, which reads as a
+        // series of attempts rather than one that is still running.
+        spin.timingFunction = CAMediaTimingFunction(name: .linear)
+        spin.repeatCount = .infinity
+        layer?.add(spin, forKey: Self.animationKey)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("R133: built in code, not a xib") }
+
+    /// Turn about the middle of the glyph.
+    ///
+    /// A layer-backed `NSView` anchors at (0, 0) — AppKit's choice, and it
+    /// re-asserts it along with the layer's geometry on every layout pass, so
+    /// setting the anchor point once in `init` would survive only until the
+    /// stack view placed this button. Left at the corner, the icon orbits the
+    /// bottom-left of its own hit box instead of spinning in place.
+    ///
+    /// Re-setting the frame afterwards is the other half: moving the anchor
+    /// point moves the layer, and assigning `frame` puts it back.
+    override func layout() {
+        super.layout()
+        layer?.anchorPoint = CGPoint(x: 0.5, y: 0.5)
+        layer?.frame = bounds
     }
 }

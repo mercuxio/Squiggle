@@ -37,6 +37,13 @@ final class StatusItemController: NSObject {
     private var document: Store
     private var storeFault: TickerError?
     private var nextStepEpoch: Double?
+    /// True between the *Refresh Now* click and the step it asks for coming
+    /// back. State the controller owns and the dropdown is rebuilt *from*,
+    /// exactly like `nextStepEpoch` above — the click rebuilds the whole view
+    /// tree, so an animation the button started on itself would live for
+    /// microseconds, and a panel closed and reopened mid-fetch would show a
+    /// still icon while a fetch was in flight.
+    private var isRefreshing = false
     private var settingsWindow: SettingsWindowController?
     private var pickerWindow: SymbolPickerWindowController?
     private var persistTimer: Timer?
@@ -174,9 +181,19 @@ final class StatusItemController: NSObject {
     }
 
     private func stepOnce() async {
-        let wait = await runner.step(nowEpoch: Date().timeIntervalSince1970,
-                                     visibility: visibility(),
-                                     lowPowerMode: ProcessInfo.processInfo.isLowPowerModeEnabled)
+        let wait: Double
+        do {
+            // Cleared in a `defer` inside this block, not at the end of the
+            // function: the rebuild below has to see the flag already down, or
+            // the icon it builds would still be spinning. A `defer` rather
+            // than a plain assignment so that no future early exit from this
+            // block can leave the icon turning with nothing behind it.
+            defer { isRefreshing = false }
+            wait = await runner.step(
+                nowEpoch: Date().timeIntervalSince1970,
+                visibility: visibility(),
+                lowPowerMode: ProcessInfo.processInfo.isLowPowerModeEnabled)
+        }
         render()
         // The strip is not the only thing showing these numbers. An `NSMenu`
         // closed itself on almost any stray click, so a dropdown that never
@@ -243,11 +260,7 @@ final class StatusItemController: NSObject {
     /// `NSColor` into a `CGColor`, which is the part that genuinely depends on
     /// the appearance.
     private func colorResolver() -> (ColorRole) -> CGColor {
-        let scheme = ColorPolicy.effective(
-            requested: ColorScheme(setting: settings.colorScheme),
-            differentiateWithoutColor:
-                NSWorkspace.shared.accessibilityDisplayShouldDifferentiateWithoutColor)
-        let stale = isStale(atEpoch: Date().timeIntervalSince1970)
+        let (scheme, stale) = paintState()
 
         // Spec §5.3: the *button's* effective appearance, not the app's. The
         // menu bar can be dark while the app is light — that is the ordinary
@@ -270,6 +283,34 @@ final class StatusItemController: NSObject {
             appearance.performAsCurrentDrawingAppearance { resolved = color.cgColor }
             return resolved
         }
+    }
+
+    /// The two answers every coloured surface needs, decided once.
+    ///
+    /// Shared by the strip and the dropdown so the two cannot disagree — and
+    /// so both obey `accessibilityDisplayShouldDifferentiateWithoutColor` and
+    /// the stale rule for free. That second one is deliberate: when the strip
+    /// greys out because the numbers are old, the dropdown's triangles grey
+    /// with it, because they are the same numbers.
+    private func paintState() -> (scheme: ColorScheme, stale: Bool) {
+        let scheme = ColorPolicy.effective(
+            requested: ColorScheme(setting: settings.colorScheme),
+            differentiateWithoutColor:
+                NSWorkspace.shared.accessibilityDisplayShouldDifferentiateWithoutColor)
+        return (scheme, isStale(atEpoch: Date().timeIntervalSince1970))
+    }
+
+    /// The dropdown's resolver: the same decision, one step shorter.
+    ///
+    /// No `performAsCurrentDrawingAppearance` here, and that is not an
+    /// omission. The strip needs it because its colours are baked into
+    /// `CGColor`s under the *menu bar button's* appearance, which can differ
+    /// from the app's. The panel is an ordinary window drawn by AppKit, and an
+    /// `NSColor` handed to it resolves against that window's own appearance at
+    /// draw time — which is the right one by construction.
+    private func dropdownColorResolver() -> (ColorRole) -> NSColor {
+        let (scheme, stale) = paintState()
+        return { ColorPolicy.color(for: $0, scheme: scheme, isStale: stale) }
     }
 
     private func render() {
@@ -352,7 +393,13 @@ final class StatusItemController: NSObject {
         dropdown.setContent(DropdownView(model: model,
                                          target: self,
                                          remove: #selector(removeSymbol(_:)),
-                                         command: { self.selector(for: $0) }))
+                                         command: { self.selector(for: $0) },
+                                         color: dropdownColorResolver(),
+                                         refreshing: isRefreshing
+                                             ? MotionPolicy.refreshIndicator(
+                                                 reduceMotion: NSWorkspace.shared
+                                                     .accessibilityDisplayShouldReduceMotion)
+                                             : nil))
     }
 
     /// No `default:`: a sixth command must fail the build here rather than
@@ -374,6 +421,11 @@ final class StatusItemController: NSObject {
         // and the token bucket all still get their say, so the click asks for
         // a refresh — it does not grant one.
         runner.requestImmediateCycle()
+        // Set before the rebuild below, which is what puts the spinning icon on
+        // screen. It comes down in `stepOnce`, so the rotation lasts exactly as
+        // long as the fetch does — and stops almost immediately when one of
+        // those three refuses, which is the honest answer.
+        isRefreshing = true
         scheduleStep(after: 0)
         // The dropdown stays open — the click came from inside it — so the
         // status line under the rows is rebuilt to say when the retry is due.

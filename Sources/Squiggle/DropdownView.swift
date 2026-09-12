@@ -48,10 +48,27 @@ final class DropdownView: NSView {
     ///   - remove: sent by a row's trash button, with the `RemoveButton` as
     ///     sender — the symbol comes off that, not out of an index.
     ///   - command: the footer bar's selector for each command.
+    ///   - color: resolves a role exactly as the strip's resolver does, so the
+    ///     two surfaces cannot disagree about what green means — or about
+    ///     whether the data is stale, which greys both.
+    ///
+    ///     `NSColor`, not the strip's `CGColor`: the strip is painted into a
+    ///     layer under the *menu bar's* appearance, which is why it has to
+    ///     resolve through `performAsCurrentDrawingAppearance` first. This view
+    ///     is drawn by AppKit inside the panel, which resolves its own
+    ///     appearance at draw time.
+    ///   - refreshing: non-`nil` while a fetch is under way, saying how to show
+    ///     it. Supplied on every rebuild rather than started by the click,
+    ///     because the click rebuilds this whole view — an animation attached
+    ///     to the button that was pressed would be discarded microseconds
+    ///     later, and reopening the panel mid-fetch would show nothing.
     init(model: MenuModel,
          target: AnyObject,
          remove: Selector,
-         command: (MenuCommand) -> Selector) {
+         command: (MenuCommand) -> Selector,
+         color: (ColorRole) -> NSColor = { ColorPolicy.color(for: $0, scheme: .monochrome,
+                                                             isStale: false) },
+         refreshing: RefreshIndicator? = nil) {
         super.init(frame: NSRect(x: 0, y: 0, width: Metrics.minWidth, height: 0))
 
         let stack = NSStackView()
@@ -66,16 +83,17 @@ final class DropdownView: NSView {
 
         for item in model.items {
             switch item {
-            case .quote(let title, let symbol):
+            case .quote(let row):
                 stack.addArrangedSubview(
-                    Self.quoteRow(title: title, symbol: symbol, target: target, action: remove))
+                    Self.quoteRow(row, target: target, action: remove, color: color))
             case .footer(let text):
                 stack.addArrangedSubview(Self.statusLine(text))
             case .separator:
                 stack.addArrangedSubview(Self.separator())
             }
         }
-        stack.addArrangedSubview(MenuFooterView(target: target, selector: command))
+        stack.addArrangedSubview(MenuFooterView(target: target, selector: command,
+                                                refreshing: refreshing))
 
         addSubview(stack)
         NSLayoutConstraint.activate([
@@ -98,16 +116,19 @@ final class DropdownView: NSView {
     /// This is the user's item 2. It used to be a submenu with a single
     /// *Remove* item in it — two clicks and a hover delay to undo one mistake,
     /// and a submenu that existed only to hold one command.
-    private static func quoteRow(title: String, symbol: Symbol,
-                                 target: AnyObject, action: Selector) -> NSView {
+    private static func quoteRow(_ quote: MenuModel.QuoteRow,
+                                 target: AnyObject, action: Selector,
+                                 color: (ColorRole) -> NSColor) -> NSView {
         let row = NSView()
+        let symbol = quote.symbol
 
-        let label = NSTextField(labelWithString: title)
+        let label = NSTextField(labelWithString: quote.title)
         // The menu font, because this is still a menu as far as the user is
         // concerned even though AppKit no longer thinks so. Size 0 means "the
         // system's own menu size", whatever the user has set.
         label.font = .menuFont(ofSize: 0)
         label.lineBreakMode = .byTruncatingTail
+        label.attributedStringValue = text(quote, font: label.font, color: color)
 
         let button = RemoveButton(symbol: symbol)
         button.image = LucideIcon.trash2.image(size: Metrics.glyph)
@@ -147,6 +168,41 @@ final class DropdownView: NSView {
             row.heightAnchor.constraint(equalToConstant: side),
         ])
         return row
+    }
+
+    /// The row's line, with the direction glyph — and only the glyph — taking
+    /// the colour its role earns.
+    ///
+    /// This is the dropdown catching up with the strip. `StripLayout.pieces`
+    /// has emitted the arrow as its own `.direction` segment since Task 7,
+    /// which is why one triangle up there is green while the numbers beside it
+    /// stay plain; the dropdown flattened the same line to one string and so
+    /// painted the whole of it `.label`.
+    ///
+    /// The range is `MenuModel`'s to decide, not this view's: a view hunting
+    /// for "▲" would be a second place that has to know what a glyph looks
+    /// like, and it would find one in a symbol named after an arrow.
+    ///
+    /// The paragraph style is not decoration. An `NSTextField` truncates via
+    /// its cell's `lineBreakMode`, and an attributed string carrying no
+    /// paragraph style of its own overrules that with the default — which
+    /// wraps. Setting it here keeps the long-row behaviour the plain-string
+    /// version had.
+    private static func text(_ quote: MenuModel.QuoteRow, font: NSFont?,
+                             color: (ColorRole) -> NSColor) -> NSAttributedString {
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.lineBreakMode = .byTruncatingTail
+        let line = NSMutableAttributedString(
+            string: quote.title,
+            attributes: [.font: font ?? NSFont.menuFont(ofSize: 0),
+                         .foregroundColor: color(.label),
+                         .paragraphStyle: paragraph])
+        if let glyph = quote.glyph {
+            line.addAttribute(.foregroundColor,
+                              value: color(.direction(glyph.direction)),
+                              range: glyph.range)
+        }
+        return line
     }
 
     /// Spec §7's one line of detail — the app's only error surface, and the
