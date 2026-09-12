@@ -40,7 +40,24 @@ final class DropdownView: NSView {
         /// Enough that a two-symbol watchlist does not give a panel narrower
         /// than its own footer.
         static let minWidth: CGFloat = 260
-        static let glyph: CGFloat = 13
+        /// One step down from the system menu size, which is what the rows used
+        /// to take. The user asked for smaller detail lines; this is the size
+        /// AppKit itself means by "smaller" rather than a number picked to look
+        /// right, so it follows the user's text-size setting the way the old
+        /// `menuFont(ofSize: 0)` did.
+        ///
+        /// The status line below the rows is already this size and stays
+        /// distinct by colour — it is `.secondaryLabelColor` against the rows'
+        /// `.label`, which was always the larger half of that difference.
+        static let rowFontSize: CGFloat = NSFont.smallSystemFontSize
+        /// The trash icon, matched to the text beside it: "the trash icon to
+        /// follow". Stated as the row font size rather than as its own constant
+        /// so the two cannot drift apart — an icon a third taller than its row's
+        /// text is what made the old 13 look bolted on once the text shrank.
+        ///
+        /// The footer keeps its own 13pt glyph. That row has no text to match
+        /// and is Pitch's styling, which the user asked to copy exactly.
+        static let glyph: CGFloat = rowFontSize
         static let hitSlop: CGFloat = 4
     }
 
@@ -123,10 +140,10 @@ final class DropdownView: NSView {
         let symbol = quote.symbol
 
         let label = NSTextField(labelWithString: quote.title)
-        // The menu font, because this is still a menu as far as the user is
-        // concerned even though AppKit no longer thinks so. Size 0 means "the
-        // system's own menu size", whatever the user has set.
-        label.font = .menuFont(ofSize: 0)
+        // Still the menu font, because this is still a menu as far as the user
+        // is concerned even though AppKit no longer thinks so — but a size down
+        // from the system's own menu size, which is what `ofSize: 0` asks for.
+        label.font = .menuFont(ofSize: Metrics.rowFontSize)
         label.lineBreakMode = .byTruncatingTail
         label.attributedStringValue = text(quote, font: label.font, color: color)
 
@@ -194,7 +211,7 @@ final class DropdownView: NSView {
         paragraph.lineBreakMode = .byTruncatingTail
         let line = NSMutableAttributedString(
             string: quote.title,
-            attributes: [.font: font ?? NSFont.menuFont(ofSize: 0),
+            attributes: [.font: font ?? NSFont.menuFont(ofSize: Metrics.rowFontSize),
                          .foregroundColor: color(.label),
                          .paragraphStyle: paragraph])
         if let glyph = quote.glyph {

@@ -51,6 +51,28 @@ private func view(_ symbols: [Symbol]) -> DropdownView {
     #expect(carried == watched)
 }
 
+/// "the dropdown symbol details to be smaller font size. the trash icon to
+/// follow" — the second half is the one a later edit could quietly undo, so the
+/// icon's size is asserted against the text's rather than against a number.
+///
+/// Asked of the built view rather than of `Metrics`, which is private and would
+/// make this a test that the constant equals itself.
+@MainActor
+@Test func theTrashIconIsTheSizeOfTheTextBesideIt() throws {
+    let built = view([try sym("AAPL")])
+    let button = try #require(removeButtons(in: built).first)
+    let label = try #require(everyView(in: built).compactMap { $0 as? NSTextField }.first)
+    let font = try #require(label.font)
+
+    // Smaller than the menu size the rows used to take, which is what "smaller
+    // font size" asked for. `menuFont(ofSize: 0)` is that size by definition.
+    let wasBefore = NSFont.menuFont(ofSize: 0).pointSize
+    #expect(font.pointSize < wasBefore)
+
+    let glyph = try #require(button.image?.size.width)
+    #expect(Double(glyph) == Double(font.pointSize))
+}
+
 /// Symbols are Yahoo's spelling, verbatim, all the way to the button that
 /// removes them — the same rule the strip and the store follow.
 @MainActor
