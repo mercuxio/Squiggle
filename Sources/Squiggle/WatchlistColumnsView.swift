@@ -154,13 +154,21 @@ final class WatchlistColumnsView: NSView {
 
     /// Above the band, sharing the rows' left edge. Never animated and never
     /// moved by a drag: a heading names a column, and the columns do not move.
+    ///
+    /// Placed by its *alignment rect*, not its frame. An `NSTextField` insets
+    /// its string a couple of points inside its own bounds, and the rows below
+    /// are positioned by `leadingAnchor`, which Auto Layout measures against
+    /// that same inset rect. Setting the frame directly would put the heading's
+    /// first glyph two points right of every symbol under it — which is exactly
+    /// what it looked like.
     private func positionHeadings() {
         for (column, label) in headingLabels.enumerated() {
             let height = ceil(label.fittingSize.height)
-            label.frame = NSRect(x: CGFloat(column) * columnWidth + textInset,
+            let aligned = NSRect(x: CGFloat(column) * columnWidth + textInset,
                                  y: 0,
                                  width: max(0, columnWidth - textInset * 2),
                                  height: height)
+            label.frame = label.frame(forAlignmentRect: aligned)
         }
     }
 

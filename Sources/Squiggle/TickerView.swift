@@ -21,11 +21,16 @@ final class TickerView: NSView {
         // The strip is wider than the window by design; this is what turns
         // that from a bug into a marquee.
         layer?.masksToBounds = true
-        // Rows are numbered top-down by `RowSplitter`, and flipping the
-        // container's geometry is what makes row 0 draw at the top instead of
-        // needing every y computed backwards from the height.
-        layer?.isGeometryFlipped = true
     }
+
+    /// Rows are numbered top-down by `RowSplitter`, so row 0 must draw at the
+    /// top. This used to be `layer?.isGeometryFlipped = true`, set once in
+    /// `init` — but a layer-backed view's backing layer belongs to AppKit,
+    /// which derives that flag from `isFlipped` and resets it out from under
+    /// anyone who assigns it directly. The flag lost, y grew upwards, and the
+    /// menu bar showed row 1 underneath row 2. Overriding `isFlipped` states
+    /// the same intent somewhere AppKit reads rather than overwrites.
+    override var isFlipped: Bool { true }
 
     // `NSView` declares this required; nothing in Squiggle loads a nib, so
     // reaching it means something is very wrong rather than something needs

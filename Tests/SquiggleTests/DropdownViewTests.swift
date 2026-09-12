@@ -441,6 +441,23 @@ private func columnsView(in root: NSView) throws -> WatchlistColumnsView {
     #expect(columns.columnCount == 1)
 }
 
+// MARK: - The rule above the footer
+
+/// Pitch draws a separator directly above its footer bar, and the user asked
+/// for "border before the footer like in pitch". Asserted as adjacency rather
+/// than by counting boxes: the model already emits one separator to close the
+/// watchlist, so "a separator exists" was true before this one did.
+@MainActor
+@Test func aRuleSitsDirectlyAboveTheFooterBar() throws {
+    let watched = [try sym("AAPL"), try sym("MSFT")]
+    let root = view(watched)
+    let stack = try #require(everyView(in: root).compactMap { $0 as? NSStackView }.first)
+    let footerIndex = try #require(
+        stack.arrangedSubviews.firstIndex { $0 is MenuFooterView })
+    #expect(footerIndex > 0)
+    #expect(stack.arrangedSubviews[footerIndex - 1] is NSBox)
+}
+
 // MARK: - Which column is which row
 
 /// The user's words: "1st column row 1, 2nd column row 2. Also label the column
@@ -486,4 +503,29 @@ private func columnsView(in root: NSView) throws -> WatchlistColumnsView {
     // And the second heading starts where the second column does.
     let rightHeading = try #require(headings.map(\.frame.minX).max())
     #expect(Double(rightHeading) > Double(columns.bounds.width / 2))
+}
+
+/// A heading whose text does not start on the same vertical line as the
+/// symbols under it reads as a stray caption rather than as the column's name.
+/// Both sides are text fields with the same alignment-rect inset, so their
+/// frames landing on one x is the same statement as their first glyphs landing
+/// on one x — and it was 12 against 14 before the heading started being placed
+/// by its alignment rect the way `leadingAnchor` places the rows.
+@MainActor
+@Test func eachHeadingStartsOnTheSameLineAsTheSymbolsBeneathIt() throws {
+    let watched = [try sym("AAPL"), try sym("MSFT"), try sym("VOD.L")]
+    let root = draggableView(watched, rowOneCount: 1)
+    root.frame = NSRect(x: 0, y: 0, width: 520, height: root.fittingSize.height)
+    root.layoutSubtreeIfNeeded()
+    let columns = try columnsView(in: root)
+
+    let headings = columns.subviews.compactMap { $0 as? NSTextField }
+    let rows = columns.subviews.filter { !($0 is NSTextField) }
+    let leftHeading = try #require(headings.map(\.frame.minX).min())
+    let leftRow = try #require(rows.map(\.frame.minX).min())
+    let rowLabel = try #require(
+        rows.first { $0.frame.minX == leftRow }
+            .flatMap { row in everyView(in: row).compactMap { $0 as? NSTextField }.first })
+    let labelX = columns.convert(rowLabel.bounds.origin, from: rowLabel).x
+    #expect(Double(leftHeading) == Double(labelX))
 }

@@ -154,6 +154,18 @@ private func windForward(_ view: TickerView, laps: Double) {
     #expect(rowSpeeds(view) == [1, 1])
 }
 
+/// Row 0 is row 1 of the menu bar, and it has to be the one on top.
+///
+/// `apply` places row `i` at `y = i * rowHeight`, which only reads downwards if
+/// the view is flipped — and a layer-backed view's `isGeometryFlipped` is
+/// AppKit's to set, derived from this property. Assigning the layer flag
+/// directly is what put row 1 underneath row 2, so this asserts the flag AppKit
+/// actually consults.
+@MainActor
+@Test func theStripCountsItsRowsDownwardsFromTheTop() {
+    #expect(TickerView().isFlipped)
+}
+
 @MainActor
 @Test func aPausedApplyIsIndistinguishableFromAPauseCall() throws {
     // `pause()` guards on `isPaused`, so `apply(paused: true)` has to report

@@ -135,6 +135,12 @@ final class DropdownView: NSView {
                 stack.addArrangedSubview(Self.separator())
             }
         }
+        // Pitch puts a rule immediately above its footer bar and Squiggle's
+        // footer is a copy of Pitch's, so it gets the same rule. The model's
+        // own separator closes the watchlist; this one separates the list from
+        // the chrome, which is a different statement and needs its own line —
+        // without it the icon row reads as one more entry in the list.
+        stack.addArrangedSubview(Self.separator())
         stack.addArrangedSubview(MenuFooterView(target: target, selector: command,
                                                 refreshing: refreshing))
 
