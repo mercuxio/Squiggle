@@ -43,7 +43,6 @@ private func period(
 @Test func aPeriodWithNoWindowsAtAllReadsClosedRatherThanCrashing() {
     let p = period(pre: nil, regular: nil, post: nil)
     #expect(p.state(atEpoch: 250) == .closed)
-    #expect(p.nextSessionOpenEpoch(after: 0) == nil)
 }
 
 @Test func aZeroLengthOrInvertedWindowIsIgnored() {
@@ -65,43 +64,12 @@ private func period(
     #expect(p.state(atEpoch: 320) == .regular)
 }
 
-@Test func theNextOpenIsOnlyReportedWhenItIsStillAhead() {
-    let p = period()
-    // Mid-pre: regular is the next start still ahead. Mid-regular: post is.
-    #expect(p.nextSessionOpenEpoch(after: 150) == 200)
-    #expect(p.nextSessionOpenEpoch(after: 250) == 300)
-    // Past the last start there is nothing left to wake for.
-    #expect(p.nextSessionOpenEpoch(after: 350) == nil)
-}
-
-@Test func theNextOpenIsThePreOpenAndNotTheRegularOne() {
-    // The whole point of `nextSessionOpenEpoch`. Overnight, both pre and
-    // regular are ahead; the wake belongs at pre. Returning 200 here is the
-    // shipped defect — a Mac left on sleeps from midnight to 09:29 and never
-    // polls the 04:00-09:30 session at all, because the closed-market branch
-    // put it to sleep past the only chance it had.
-    let p = period()
-    #expect(p.nextSessionOpenEpoch(after: 50) == 100)
-}
-
-@Test func aMalformedSessionIsSkippedRatherThanWokenFor() {
-    // A holiday `start == end` pre window must not steal the wake from the
-    // real regular open behind it: a window that contains nothing is a window
-    // worth waking for nothing.
-    let holidayPre = period(pre: (100, 100), regular: (200, 300), post: nil)
-    #expect(holidayPre.nextSessionOpenEpoch(after: 50) == 200)
-
-    let invertedPre = period(pre: (150, 100), regular: (200, 300), post: nil)
-    #expect(invertedPre.nextSessionOpenEpoch(after: 50) == 200)
-}
-
-@Test func anOutOfOrderPayloadStillYieldsTheEarliestOpen() {
-    // Nothing guarantees Yahoo orders the windows, and `min` over the futures
-    // is the answer whatever order they arrive in — not "whichever field is
-    // checked first". Here `post` starts before `pre`.
-    let scrambled = period(pre: (900, 1000), regular: (500, 600), post: (300, 400))
-    #expect(scrambled.nextSessionOpenEpoch(after: 100) == 300)
-}
+// Four tests about the next session's open stood here — which of pre and
+// regular the wake belonged to, that a `start == end` holiday window could
+// not steal it, that an out-of-order payload still yielded the earliest.
+// Nothing computes a wake time any more: "forget the market calendar. always
+// get the latest quote from yahoo regardless if the market is open or
+// closed." `state(atEpoch:)` is what remains, and the tests above cover it.
 
 @Test func theTradingPeriodParsesOutOfARealFixture() throws {
     let parsed = try YahooQuoteDecoding.tradingPeriod(from: Fixture.data("regular-session.json"))

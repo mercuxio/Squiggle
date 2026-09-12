@@ -53,25 +53,4 @@ public struct TradingPeriod: Equatable, Sendable {
         if post?.contains(epoch) ?? false { return .post }
         return .closed
     }
-
-    /// When to set the single wake while the market is closed: the earliest
-    /// session start still ahead of `epoch`, across **all three** sessions,
-    /// or nil if this payload does not describe a future open.
-    ///
-    /// Deliberately not "the next regular open". Pre-market runs 04:00-09:30,
-    /// and a wake set to 09:30 means a Mac left on overnight sleeps straight
-    /// through it: `.pre` would then be reachable only for a user who happened
-    /// to already be awake and polling when the session opened, which the
-    /// closed-market branch has just made impossible. Spec §4.2's cost table
-    /// has an explicit Extended column; polling extended hours is the design.
-    ///
-    /// A malformed window (`startEpoch >= endEpoch`, which Yahoo emits on some
-    /// holidays) contributes nothing, exactly as it contains nothing.
-    public func nextSessionOpenEpoch(after epoch: Double) -> Double? {
-        [pre, regular, post]
-            .compactMap { $0 }
-            .filter { $0.startEpoch < $0.endEpoch && $0.startEpoch > epoch }
-            .map(\.startEpoch)
-            .min()
-    }
 }

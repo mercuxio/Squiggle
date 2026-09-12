@@ -104,14 +104,6 @@ public enum RateConstants {
     /// Extended-hours and Low Power Mode both stretch the cycle by this.
     public static let quietMultiplier: Double = 3
 
-    /// Wake this long before the open, while closed.
-    public static let preOpenWakeLead: Double = 60
-
-    /// The longest a closed market is ever allowed to sleep, even with a
-    /// known open far in the future — a holiday close, or a payload whose
-    /// open time is simply wrong, must still resolve inside half a day.
-    public static let maxClosedMarketWait: Double = 12 * 3600
-
     /// Dim the strip once data is older than this multiple of the interval.
     public static let stalenessMultiplier: Double = 3
 

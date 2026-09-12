@@ -46,12 +46,14 @@ final class TickerRunner {
         calendars.retain(Set(symbols).subtracting(engine.deadSymbols))
         let context = EngineContext(
             nowEpoch: nowEpoch,
-            // Before the first successful quote, assume the market is open:
-            // one wasted request beats a ticker that never starts.
+            // The policy no longer stands down for a shut market, so this
+            // only chooses between the ordinary cycle and the pre/post
+            // stretch. The fallback stays `.regular` all the same: before the
+            // first successful quote there is no calendar to read, and the
+            // faster of the two cadences is the one a cold launch wants.
             marketState: calendars.aggregateState(atEpoch: nowEpoch) ?? .regular,
             visibility: visibility,
-            lowPowerMode: lowPowerMode,
-            nextSessionOpenEpoch: calendars.earliestSessionOpenEpoch(after: nowEpoch))
+            lowPowerMode: lowPowerMode)
 
         switch engine.next(context) {
         case .sleep(let seconds):

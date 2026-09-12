@@ -91,10 +91,13 @@ public enum Diagnosis {
     /// simulation actually measures for the same inputs (1,160). The gap is
     /// the quiet multiplier: pre- and post-market run at a third of the
     /// regular cadence, and folding them into one undifferentiated span throws
-    /// that away. So this splits the day into the same three sessions
+    /// that away. So this splits the day into the same four spans
     /// `BudgetSweepTests`' `Day` model sweeps against — 04:00 pre-open,
-    /// 09:30-16:00 regular, 20:00 post-close — and prices each at its own
-    /// cycle. `TickerCore` reads no clock and sees no real market calendar, so
+    /// 09:30-16:00 regular, 20:00 post-close, and the eight hours shut — and
+    /// prices each at its own cycle. The shut span is priced at the *regular*
+    /// cadence, not the quiet one: `cycleInterval` stretches `.pre` and
+    /// `.post` and leaves `.closed` alone, because outside every session there
+    /// is no quiet to distinguish. `TickerCore` reads no clock and sees no real market calendar, so
     /// this assumes that schedule rather than the day's actual one; that is
     /// why this is an estimate and the sweep is the number actually asserted
     /// against.
@@ -142,11 +145,12 @@ public enum Diagnosis {
         return requests(regularSeconds, marketState: .regular)
             + requests(preSeconds, marketState: .pre)
             + requests(postSeconds, marketState: .post)
+            + requests(closedSeconds, marketState: .closed)
     }
 
-    // The three sessions `BudgetSweepTests`' `Day` model sweeps against —
-    // 04:00 pre-open, 09:30-16:00 regular, 20:00 post-close. Hoisted out of
-    // `estimatedDailyRequests` because all three arms need them.
+    // The spans `BudgetSweepTests`' `Day` model sweeps against — 04:00
+    // pre-open, 09:30-16:00 regular, 20:00 post-close, and the shut remainder.
+    // Hoisted out of `estimatedDailyRequests` because every arm needs them.
     //
     // A `pacerDailyCeiling` constant used to live here, derived from these same
     // three spans and asserted to sit under the budget. It is gone with the
@@ -160,6 +164,12 @@ public enum Diagnosis {
     private static let regularSeconds: Double = 6.5 * 3600
     private static let preSeconds: Double = 5.5 * 3600
     private static let postSeconds: Double = 4 * 3600
+    /// The overnight, priced like any other session since "forget the market
+    /// calendar. always get the latest quote from yahoo regardless if the
+    /// market is open or closed." It used to be the one span this estimator
+    /// charged nothing for, which is why removing the stand-down changes what
+    /// `doctor` reports by more than half.
+    private static let closedSeconds: Double = 8 * 3600
 
     /// Whether the pacer, rather than the user's chosen interval, is what sets
     /// how often Squiggle actually fetches (R79).
@@ -184,19 +194,23 @@ public enum Diagnosis {
     /// is now a useful check, and an earlier draft of this comment said it
     /// did. Measured instead of assumed: swept over every watchlist size 1...20
     /// against intervals from 0.1s to 3600s — far outside anything Settings
-    /// offers — the largest figure `estimatedDailyRequests` returns is **741**,
-    /// at 19 symbols. Against a budget of 1,200 the comparison is unreachable
+    /// offers — the largest figure `estimatedDailyRequests` returns is
+    /// **1,159**, at 19 symbols (re-taken after the overnight became billable;
+    /// it read 741 while that span was free). Against a budget of 1,200 the comparison is unreachable
     /// for every possible input, which is the same defect the clamp caused,
     /// relocated rather than removed. `theEstimatorCannotReachTheBudgetOnAnyInput`
-    /// pins the 741 so this cannot quietly become true again unnoticed.
+    /// pins the 1,159 so this cannot quietly become true again unnoticed.
     ///
     /// The reason is structural, not a matter of the numbers happening to work
     /// out. This estimator prices a *US equity* day: 6.5h regular, 5.5h pre,
-    /// 4h post, and eight hours shut. The budget is a claim about the app on
-    /// *any* calendar, and the case that can exceed it is an instrument that
-    /// never closes — which this function does not model and should not, since
-    /// `doctor` reports on the user's stored settings and not on what their
-    /// symbols trade as. The budget is enforced where the 24-hour case is
+    /// 4h post, and eight hours shut — and since the stand-down was removed
+    /// those last eight hours are billed rather than free, which is what
+    /// closed most of the distance between this figure and the budget. What
+    /// remains between them is the quiet multiplier on 9.5 hours of extended
+    /// trading, and it is a property of the *calendar*: the case that can
+    /// exceed the budget is an instrument with no quiet sessions at all, which
+    /// this function does not model and should not, since `doctor` reports on
+    /// the user's stored settings and not on what their symbols trade as. The budget is enforced where the 24-hour case is
     /// visible: `RefreshPolicy.budgetFloor` and `RequestPacer`'s daily bucket,
     /// asserted on the continuous calendar in
     /// `theDailyBudgetHoldsAcrossEveryReachableConfiguration`.

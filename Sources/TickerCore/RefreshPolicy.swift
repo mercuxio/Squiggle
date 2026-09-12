@@ -16,32 +16,19 @@ public struct RefreshInput: Sendable {
     public var lowPowerMode: Bool
     public var userIntervalSeconds: Double
     public var watchlistCount: Int
-    /// The next **session** open — the earliest of pre, regular and post that
-    /// is still ahead — and not the next *regular* open.
-    ///
-    /// The distinction is load-bearing, which is why the field is named for
-    /// it. The closed-market branch below sleeps until this instant minus
-    /// `preOpenWakeLead`, and that is the only wake a closed Mac gets. Pass
-    /// the regular open and Squiggle sleeps from midnight to 09:29, silently
-    /// skipping the whole 04:00-09:30 pre-market session for everyone whose
-    /// Mac was closed-market when the wake was scheduled — which is everyone
-    /// who leaves it on overnight. `TradingPeriod.nextSessionOpenEpoch(after:)`
-    /// computes the right value; callers should not compute their own.
-    public var nextSessionOpenEpoch: Double?
     public var isCoolingDown: Bool
     public var cooldownRemaining: Double
     public var circuitAllows: Bool
     public var circuitOpenRemaining: Double
     /// The user pressed *Refresh Now*. It retires the **schedule** — the
-    /// market calendar, the occlusion check, the cycle interval — and nothing
-    /// else. The cooldown and both circuits are checked above it and the token
+    /// occlusion check and the cycle interval — and nothing else. The cooldown and both circuits are checked above it and the token
     /// bucket below it, so this is a request for a refresh, not a grant of
     /// one. Defaulted so that every ordinary caller keeps saying nothing.
     public var userRequested: Bool
 
     public init(nowMonotonic: Double, nowEpoch: Double, marketState: MarketState,
                 visibility: Visibility, lowPowerMode: Bool, userIntervalSeconds: Double,
-                watchlistCount: Int, nextSessionOpenEpoch: Double?, isCoolingDown: Bool,
+                watchlistCount: Int, isCoolingDown: Bool,
                 cooldownRemaining: Double, circuitAllows: Bool, circuitOpenRemaining: Double,
                 userRequested: Bool = false) {
         self.nowMonotonic = nowMonotonic
@@ -51,7 +38,6 @@ public struct RefreshInput: Sendable {
         self.lowPowerMode = lowPowerMode
         self.userIntervalSeconds = userIntervalSeconds
         self.watchlistCount = watchlistCount
-        self.nextSessionOpenEpoch = nextSessionOpenEpoch
         self.isCoolingDown = isCoolingDown
         self.cooldownRemaining = cooldownRemaining
         self.circuitAllows = circuitAllows
@@ -226,9 +212,9 @@ public enum RefreshPolicy {
         // Below the safety gates and above every schedule gate — which is the
         // whole of what *Refresh Now* means. The user's words: "the refresh
         // should force the refresh to immediate regardless of the refresh
-        // settings", and the settings are exactly what lies below: the market
-        // calendar, the occlusion check and the cycle interval. The cooldown
-        // and the circuits are not settings, so they stay above.
+        // settings", and the settings are exactly what lies below: the
+        // occlusion check and the cycle interval. The cooldown and the
+        // circuits are not settings, so they stay above.
         //
         // It goes after the watchlist guard rather than before it because an
         // empty watchlist has nothing to fetch — there is no symbol to return
@@ -246,30 +232,27 @@ public enum RefreshPolicy {
             return .wait(seconds: sanitizedWait(cycle))
         }
 
-        if input.marketState == .closed {
-            guard let open = input.nextSessionOpenEpoch else {
-                // No payload has told us when the market opens — a cold launch
-                // into a weekend. Fall back to a slow poll rather than sleeping
-                // indefinitely; a nil must never become a hang.
-                //
-                // No hourly ceiling is written here. The slowest cycle the
-                // interval menu can produce is 45 minutes, so a `min` against
-                // an hour would be a bound that never binds — a guard taking
-                // credit for work the interval table already does. The ceiling
-                // is a requirement on this branch rather than an input to it,
-                // so it lives in `theUnknownOpenFallbackNeverGoesBlindForAnHour`,
-                // which sweeps the whole menu and fails the day a slower
-                // choice is added.
-                return .wait(seconds: sanitizedWait(
-                    max(cycle, RateConstants.defaultRefreshInterval)))
-            }
-            let untilOpen = open - input.nowEpoch - RateConstants.preOpenWakeLead
-            // A stale open time from a payload older than the session it
-            // described would otherwise produce a negative wait; clamp through
-            // the same helper used above rather than a bare `max(0, …)`.
-            return .wait(seconds: sanitizedWait(min(untilOpen, RateConstants.maxClosedMarketWait)))
-        }
-
+        // No closed-market branch. The user's words: "forget the market
+        // calendar. always get the latest quote from yahoo regardless if the
+        // market is open or closed." What used to live here slept until a
+        // minute before the next session open, capped at half a day — and
+        // because `TradingCalendars.aggregateState` reads the *most open*
+        // state across only the symbols that already have a calendar, one
+        // recorded period was enough to stand the whole engine down. An
+        // evening launch fetched exactly one symbol and then went quiet until
+        // the bell.
+        //
+        // What keeps a 24-hour day inside the daily budget is `budgetFloor`,
+        // not the overnight close: it was written for `BTC-USD` and
+        // `EURUSD=X`, instruments that never shut, and at every watchlist size
+        // it holds a round-the-clock day to exactly `dailyRequestBudget`. The
+        // eight hours an equity market is closed were always slack in that
+        // bound rather than the thing enforcing it.
+        //
+        // `marketState` still reaches `cycleInterval` above, which stretches
+        // the cycle through pre- and post-market. That is a cadence, not a
+        // stand-down: the ticker keeps asking, and "efficient with resources"
+        // is still a standing requirement.
         return .fetch
     }
 

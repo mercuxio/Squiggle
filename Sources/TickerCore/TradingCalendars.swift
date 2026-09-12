@@ -63,13 +63,6 @@ public struct TradingCalendars: Sendable {
         return states.max { Self.openness($0) < Self.openness($1) }
     }
 
-    /// The earliest open any watched symbol still has ahead of it. Only
-    /// consulted while the aggregate is `.closed`, which by construction means
-    /// every symbol is closed, so this is the first one to reopen.
-    public func earliestSessionOpenEpoch(after epoch: Double) -> Double? {
-        periods.values.compactMap { $0.nextSessionOpenEpoch(after: epoch) }.min()
-    }
-
     /// One symbol's own state, unaggregated. Nothing in the app reads this; it
     /// exists so a test can show that an equity symbol keeps its own calendar
     /// while a crypto symbol drives the aggregate.

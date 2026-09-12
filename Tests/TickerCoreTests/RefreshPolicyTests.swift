@@ -7,7 +7,6 @@ private func input(
     lowPower: Bool = false,
     interval: Double = RateConstants.defaultRefreshInterval,
     count: Int = 4,
-    nextOpen: Double? = nil,
     cooling: Bool = false,
     cooldownRemaining: Double = 0,
     circuitAllows: Bool = true,
@@ -20,7 +19,6 @@ private func input(
                  lowPowerMode: lowPower,
                  userIntervalSeconds: interval,
                  watchlistCount: count,
-                 nextSessionOpenEpoch: nextOpen,
                  isCoolingDown: cooling,
                  cooldownRemaining: cooldownRemaining,
                  circuitAllows: circuitAllows,
@@ -64,90 +62,37 @@ private func input(
     #expect(corruptCooldown == .wait(seconds: 1800))
 }
 
-@Test func aClosedMarketWaitsUntilShortlyBeforeTheNextOpen() {
-    // Spec §4.1: while closed, one wake a minute before the open, not a
-    // 15-minute poll that learns nothing 96 times a night.
-    let now: Double = 1_757_000_000
-    let untilOpen: Double = 8 * 3600
-    let d = RefreshPolicy.decide(input(market: .closed, nextOpen: now + untilOpen))
-    #expect(d == .wait(seconds: untilOpen - RateConstants.preOpenWakeLead))
+/// "forget the market calendar. always get the latest quote from yahoo
+/// regardless if the market is open or closed."
+///
+/// Five tests and a file-private ceiling constant stood here, each describing
+/// some property of the closed-market stand-down: when it woke, how long it
+/// could sleep at most, what it did with an unknown open, that a stale open
+/// could not make the wait negative. There is no branch left for any of them
+/// to describe, and one assertion in their place says what replaced it.
+@Test func aClosedMarketIsNoLongerAReasonToRefuse() {
+    #expect(RefreshPolicy.decide(input(market: .closed)) == .fetch)
 }
 
-@Test func aClosedMarketNeverSleepsPastHalfADay() {
-    // A holiday close, or a payload whose open time is simply wrong, must
-    // still resolve inside `maxClosedMarketWait` rather than sleeping through
-    // a month of trading on one bad number.
-    let now: Double = 1_757_000_000
-    let d = RefreshPolicy.decide(input(market: .closed, nextOpen: now + 30 * 86_400))
-    #expect(d == .wait(seconds: RateConstants.maxClosedMarketWait))
-}
-
-@Test func aClosedMarketWithNoKnownOpenFallsBackToASlowPoll() {
-    // The open time comes from the last payload. On a cold launch into a
-    // weekend there may be none, and a nil must not become an infinite sleep.
-    let d = RefreshPolicy.decide(input(market: .closed, nextOpen: nil))
-    let wait = d.waitSeconds
-    #expect(wait != nil)
-    if let wait {
-        #expect(wait >= RateConstants.minimumWaitSeconds)
-        #expect(wait <= neverBlindLongerThan,
-                "a fallback poll of \(wait)s is a hang, not a poll")
-    }
-}
-
-/// The longest Squiggle may go without asking, when it does not even know
-/// when the market opens. A literal and not a constant: nothing in the
-/// policy *reads* an hourly ceiling — the interval menu already keeps every
-/// cycle well inside it — so a `RateConstants` entry would be a production
-/// value existing only to be compared against in a test.
-private let neverBlindLongerThan: Double = 3600
-
-@Test func theUnknownOpenFallbackNeverGoesBlindForAnHour() {
-    // The ceiling used to be a `min` in the policy that could not bind, which
-    // made it a promise nothing kept. It is a requirement, so it is asserted
-    // here instead — across every interval Settings offers, at the watchlist
-    // size that stretches the cycle furthest, with and without the Low Power
-    // stretch. Add a slower interval choice and this test, not a silent
-    // constant, is what tells you the fallback has gone blind.
-    //
-    // Only `.closed` is swept: this fallback is reached from that branch
-    // alone, and a `.pre`/`.post` row would return `.fetch` and quietly skip
-    // every assertion below.
-    for interval in RateConstants.refreshIntervalChoices {
-        for lowPower in [false, true] {
-            let d = RefreshPolicy.decide(input(market: .closed,
-                                               lowPower: lowPower,
-                                               interval: interval,
-                                               count: RateConstants.maxWatchlistCount,
-                                               nextOpen: nil))
-            let wait = d.waitSeconds
-            #expect(wait != nil, "interval \(interval) produced \(d)")
-            if let wait {
-                #expect(wait <= neverBlindLongerThan,
-                        "interval \(interval), lowPower \(lowPower) → \(wait)s")
-                #expect(wait >= RateConstants.minimumWaitSeconds)
-            }
-        }
-    }
-}
-
-@Test func aStaleNextOpenInThePastDoesNotProduceANegativeWait() {
-    let now: Double = 1_757_000_000
-    let d = RefreshPolicy.decide(input(market: .closed, nextOpen: now - 5000))
-    let wait = d.waitSeconds ?? -1
-    #expect(wait >= 0)
+/// The cadence still knows about the clock even though the stand-down does
+/// not. `.pre` and `.post` stretch the cycle by `quietMultiplier`; `.closed`
+/// runs at the ordinary one, because outside every session there is no
+/// "quiet" left to distinguish it from. Asserted through `cycleInterval`
+/// rather than `decide`, which returns `.fetch` for all four now.
+@Test func aShutMarketKeepsTheOrdinaryCadence() {
+    let regular = RefreshPolicy.cycleInterval(userIntervalSeconds: 300, watchlistCount: 4,
+                                              marketState: .regular, lowPowerMode: false)
+    let closed = RefreshPolicy.cycleInterval(userIntervalSeconds: 300, watchlistCount: 4,
+                                             marketState: .closed, lowPowerMode: false)
+    #expect(closed == regular)
 }
 
 @Test func aRefusalNeverReportsASubSecondWait() {
     // A wait of a millisecond, returned by a branch that has just decided not
-    // to fetch, is a hot loop in slow motion. The window where the open sits
-    // barely past the wake lead lasts one second of wall time, and waking
-    // inside it buys nothing.
-    let now: Double = 1_757_000_000
-    let barelyPastTheLead = RefreshPolicy.decide(
-        input(market: .closed, nextOpen: now + RateConstants.preOpenWakeLead + 0.001))
-    #expect(barelyPastTheLead == .wait(seconds: RateConstants.minimumWaitSeconds))
-
+    // to fetch, is a hot loop in slow motion. The pre-open case that used to
+    // open this test — an open sitting a millisecond past the wake lead — no
+    // longer exists; a cooldown is the remaining branch that can produce a
+    // sub-second remaining, and the sweep further down covers the rest.
     let tinyCooldown = RefreshPolicy.decide(input(cooling: true, cooldownRemaining: 0.25))
     #expect(tinyCooldown == .wait(seconds: RateConstants.minimumWaitSeconds))
 
@@ -483,7 +428,6 @@ private let neverBlindLongerThan: Double = 3600
                                     #expect(circuitAllows)
                                     #expect(count > 0)
                                     #expect(visibility == .visible)
-                                    #expect(market != .closed)
                                 case .wait(let wait):
                                     #expect(wait.isFinite)
                                     #expect(wait >= 0)
@@ -496,7 +440,7 @@ private let neverBlindLongerThan: Double = 3600
                                     // have been allowed right now — otherwise the
                                     // caller wakes immediately and is refused again.
                                     let fetchWouldBeAllowed = !isCoolingDown && circuitAllows
-                                        && count > 0 && visibility == .visible && market != .closed
+                                        && count > 0 && visibility == .visible
                                     if wait == 0 {
                                         #expect(fetchWouldBeAllowed)
                                     }

@@ -14,7 +14,7 @@ struct FeedEngineTests {
 
     private func openMarket(_ nowEpoch: Double = 1_757_000_000) -> EngineContext {
         EngineContext(nowEpoch: nowEpoch, marketState: .regular, visibility: .visible,
-                      lowPowerMode: false, nextSessionOpenEpoch: nil)
+                      lowPowerMode: false)
     }
 
     private func engine(_ clock: FakeClock, _ symbols: [Symbol],
@@ -230,8 +230,7 @@ struct FeedEngineTests {
         let clock = FakeClock()
         var e = engine(clock, [try sym("AAPL")])
         let context = EngineContext(nowEpoch: 1_757_000_000, marketState: .regular,
-                                    visibility: .occluded, lowPowerMode: false,
-                                    nextSessionOpenEpoch: nil)
+                                    visibility: .occluded, lowPowerMode: false)
 
         for _ in 0..<20 {
             guard case .sleep = e.next(context) else {
@@ -242,28 +241,35 @@ struct FeedEngineTests {
         }
     }
 
-    @Test func aClosedMarketSleepsUntilShortlyBeforeTheOpen() throws {
+    /// "forget the market calendar. always get the latest quote from yahoo
+    /// regardless if the market is open or closed."
+    ///
+    /// This replaces `aClosedMarketSleepsUntilShortlyBeforeTheOpen`, which
+    /// asserted the opposite. Asserted through the engine and not only through
+    /// `RefreshPolicy`, because the symptom the user actually reported was an
+    /// engine-level one: `aggregateState` flips to `.closed` the moment the
+    /// *first* payload lands, so on an evening launch exactly one symbol
+    /// updated and the rest waited for the bell.
+    @Test func aClosedMarketKeepsFetchingLikeAnyOther() throws {
         let clock = FakeClock()
-        var e = engine(clock, [try sym("AAPL")])
+        let watched = [try sym("AAPL"), try sym("MSFT")]
+        var e = engine(clock, watched)
         let now: Double = 1_757_000_000
         let context = EngineContext(nowEpoch: now, marketState: .closed,
-                                    visibility: .visible, lowPowerMode: false,
-                                    nextSessionOpenEpoch: now + 7200)
+                                    visibility: .visible, lowPowerMode: false)
 
-        guard case .sleep(let seconds) = e.next(context) else {
-            Issue.record("expected a wait while the market is closed")
-            return
+        var fetched: [Symbol] = []
+        for _ in watched {
+            guard case .fetch(let symbol) = e.next(context) else {
+                Issue.record("a shut market must still fetch")
+                return
+            }
+            fetched.append(symbol)
+            e.recordSuccess(stubQuote(symbol), for: symbol)
+            // The bucket, not the calendar, is what spaces these now.
+            clock.advance(RateConstants.spacingSeconds)
         }
-        #expect(seconds == 7200 - RateConstants.preOpenWakeLead)
-
-        let noOpen = EngineContext(nowEpoch: now, marketState: .closed,
-                                   visibility: .visible, lowPowerMode: false,
-                                   nextSessionOpenEpoch: nil)
-        guard case .sleep(let fallback) = e.next(noOpen) else {
-            Issue.record("expected a fallback wait with no known open")
-            return
-        }
-        #expect(fallback > 0 && fallback <= 3600)
+        #expect(fetched == watched)
     }
 
     @Test func anEmptyWatchlistNeverFetchesAndNeverSpins() throws {
@@ -520,8 +526,7 @@ struct FeedEngineTests {
         for state in states {
             for visibility in visibilities {
                 let context = EngineContext(nowEpoch: 1_757_000_000, marketState: state,
-                                            visibility: visibility, lowPowerMode: false,
-                                            nextSessionOpenEpoch: nil)
+                                            visibility: visibility, lowPowerMode: false)
                 if case .sleep(let seconds) = e.next(context) {
                     #expect(seconds > 0, "a zero-length sleep would spin")
                 }
@@ -563,8 +568,8 @@ struct FeedEngineTests {
         while t < Day.length {
             let market = Day.state(atSecondOfDay: t)
             let context = EngineContext(
-                nowEpoch: t, marketState: market, visibility: .visible, lowPowerMode: false,
-                nextSessionOpenEpoch: Day.nextSessionOpen(afterSecondOfDay: t))
+                nowEpoch: t, marketState: market, visibility: .visible,
+                lowPowerMode: false)
 
             switch e.next(context) {
             case .fetch(let s):
@@ -657,10 +662,14 @@ struct FeedEngineTests {
                 // `nextSymbolDue`, while `FeedEngine` paces them through the
                 // shared token bucket's burst allowance, so a handful of
                 // requests can land on either side of a session boundary.
+                // `count + 2` rather than `count`: the billed overnight
+                // gives the day a fourth session, and the simulated day begins
+                // at 00:00 *inside* it, so there is one extra boundary — at
+                // midnight — for the two pacing models to disagree across.
                 let drift = abs(actual - predicted)
                 let message = "interval \(interval) x \(count): engine fetched \(actual); "
                     + "the cycleDeadline model predicts \(predicted) (drift \(drift))"
-                #expect(drift <= count, "\(message)")
+                #expect(drift <= count + 2, "\(message)")
             }
         }
     }
@@ -751,13 +760,13 @@ struct FeedEngineTests {
         clock.advance(RateConstants.circuitOpenSeconds + 1)
 
         // Ask under conditions the policy will refuse for an unrelated
-        // reason — the market is closed with no known next open. This must
-        // not consume the half-open probe.
-        let closed = EngineContext(nowEpoch: 1_757_000_000, marketState: .closed,
-                                   visibility: .visible, lowPowerMode: false,
-                                   nextSessionOpenEpoch: nil)
-        guard case .sleep = e.next(closed) else {
-            Issue.record("expected a wait while the market is closed")
+        // reason. That used to be a shut market; the calendar no longer
+        // refuses anything, so occlusion is the schedule gate this borrows.
+        // Refusing here must not consume the half-open probe.
+        let hidden = EngineContext(nowEpoch: 1_757_000_000, marketState: .regular,
+                                   visibility: .occluded, lowPowerMode: false)
+        guard case .sleep = e.next(hidden) else {
+            Issue.record("expected a wait while the strip is occluded")
             return
         }
 
@@ -895,39 +904,23 @@ struct FeedEngineTests {
 
     /// The user's report: "the refresh also doesn't seem to work. the refresh
     /// should force the refresh to immediate regardless of the refresh
-    /// settings." Reported on a Saturday, which is the whole story: with the
-    /// market closed, `RefreshPolicy.decide` returns `.wait` *before* `next()`
-    /// ever reaches the cycle deadline that `requestImmediateCycle` clears, so
-    /// the click cleared a variable nothing on that path reads and the app
-    /// slept until Monday's open.
-    @Test func refreshNowFetchesEvenWithTheMarketClosed() throws {
-        let clock = FakeClock()
-        let one = try sym("AAPL")
-        var e = engine(clock, [one])
-        let closed = EngineContext(nowEpoch: 1_757_000_000, marketState: .closed,
-                                   visibility: .visible, lowPowerMode: false,
-                                   nextSessionOpenEpoch: 1_757_000_000 + 172_800)
-
-        let asleep = e.next(closed)
-        let isWaiting: Bool
-        if case .sleep = asleep { isWaiting = true } else { isWaiting = false }
-        #expect(isWaiting, "a closed market should rest, got \(asleep)")
-
-        e.requestImmediateCycle()
-        #expect(e.next(closed) == .fetch(one))
-    }
-
-    /// The same rule for the other schedule gate. An occluded strip is a
-    /// reason not to spend a request on its own, and not a reason to ignore a
-    /// button the user just pressed — the dropdown they pressed it in is
-    /// exactly what covers the strip.
+    /// settings."
+    ///
+    /// Reported on a Saturday, and the shut market was half the story: the
+    /// closed-market branch returned `.wait` *before* `next()` ever reached
+    /// the cycle deadline that `requestImmediateCycle` clears, so the click
+    /// cleared a variable nothing on that path read. That branch is gone —
+    /// "forget the market calendar" — so occlusion is the only schedule gate
+    /// left for the rule to be asserted against. An occluded strip is a reason
+    /// not to spend a request on its own, and not a reason to ignore a button
+    /// the user just pressed: the dropdown they pressed it in is exactly what
+    /// covers the strip.
     @Test func refreshNowFetchesEvenWhileOccluded() throws {
         let clock = FakeClock()
         let one = try sym("AAPL")
         var e = engine(clock, [one])
         let hidden = EngineContext(nowEpoch: 1_757_000_000, marketState: .regular,
-                                   visibility: .occluded, lowPowerMode: false,
-                                   nextSessionOpenEpoch: nil)
+                                   visibility: .occluded, lowPowerMode: false)
 
         let asleep = e.next(hidden)
         let isWaiting: Bool
@@ -941,20 +934,23 @@ struct FeedEngineTests {
     /// One click, one pass over the whole watchlist — and then the ordinary
     /// schedule again. The request has to outlive the first symbol or a
     /// three-symbol watchlist would refresh only its first row; it has to die
-    /// at the end of the pass or a single click would keep a closed market
+    /// at the end of the pass or a single click would keep an occluded strip
     /// fetching forever.
     @Test func refreshNowCoversEverySymbolAndThenStops() throws {
         let clock = FakeClock()
         let watched = [try sym("AAPL"), try sym("MSFT"), try sym("^GSPC")]
         var e = engine(clock, watched)
-        let closed = EngineContext(nowEpoch: 1_757_000_000, marketState: .closed,
-                                   visibility: .visible, lowPowerMode: false,
-                                   nextSessionOpenEpoch: 1_757_000_000 + 172_800)
+        // Occluded rather than closed: this test needs a context the engine
+        // would *not* fetch in unaided, so that the pass it makes is the
+        // requested one and the stop at the end is real. A shut market is no
+        // longer such a context.
+        let hidden = EngineContext(nowEpoch: 1_757_000_000, marketState: .regular,
+                                   visibility: .occluded, lowPowerMode: false)
 
         e.requestImmediateCycle()
         var fetched: [Symbol] = []
         for _ in watched {
-            let action = e.next(closed)
+            let action = e.next(hidden)
             guard case .fetch(let symbol) = action else {
                 Issue.record("the requested pass stopped early at \(action)")
                 break
@@ -969,10 +965,10 @@ struct FeedEngineTests {
         #expect(Set(fetched) == Set(watched))
         #expect(fetched.count == watched.count)
 
-        let after = e.next(closed)
+        let after = e.next(hidden)
         let isWaiting: Bool
         if case .sleep = after { isWaiting = true } else { isWaiting = false }
-        #expect(isWaiting, "the closed market went back to sleep? got \(after)")
+        #expect(isWaiting, "the occluded strip went back to sleep? got \(after)")
     }
 
     /// The user's second report, one message after the first: "also adding a

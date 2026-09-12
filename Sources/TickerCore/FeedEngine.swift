@@ -9,18 +9,13 @@ public struct EngineContext: Sendable {
     public var marketState: MarketState
     public var visibility: Visibility
     public var lowPowerMode: Bool
-    /// The next **session** open, not the next *regular* open — see
-    /// `RefreshInput.nextSessionOpenEpoch`, which this is threaded straight
-    /// into.
-    public var nextSessionOpenEpoch: Double?
 
     public init(nowEpoch: Double, marketState: MarketState, visibility: Visibility,
-                lowPowerMode: Bool, nextSessionOpenEpoch: Double?) {
+                lowPowerMode: Bool) {
         self.nowEpoch = nowEpoch
         self.marketState = marketState
         self.visibility = visibility
         self.lowPowerMode = lowPowerMode
-        self.nextSessionOpenEpoch = nextSessionOpenEpoch
     }
 }
 
@@ -127,7 +122,6 @@ public struct FeedEngine {
             lowPowerMode: context.lowPowerMode,
             userIntervalSeconds: userIntervalSeconds,
             watchlistCount: live.count,
-            nextSessionOpenEpoch: context.nextSessionOpenEpoch,
             isCoolingDown: ladder.isCoolingDown(),
             cooldownRemaining: ladder.secondsRemaining(),
             circuitAllows: networkCircuit.wouldAllowRequest() && contractCircuit.wouldAllowRequest(),

@@ -120,12 +120,13 @@ import Testing
     // across that boundary. A per-session split can't see that carry-over,
     // so rounding each session's `sessionSeconds / cycle` up (rather than
     // down) sometimes credits a partial final cycle the simulation never
-    // gets to start. Measured worst case across this grid is 40, at 900s x
-    // 20 symbols — 580 simulated against 620 estimated, re-taken after F1
-    // changed the day model (the pair used to read 760 and 800; the gap of 40
-    // survived the change, the two endpoints did not). Widening this number
+    // gets to start. Measured worst case across this grid is 60, at 900s x
+    // 20 symbols — 960 simulated against 1,020 estimated. It was 40 while the
+    // overnight was free, and it grew for the reason the mechanism predicts:
+    // billing the overnight gives the day a fourth session, so there is one
+    // more boundary for the closed form to round up across. Widening this number
     // later should be a visible, deliberate act, not a quiet tolerance creep.
-    let acceptableOvershoot = 40
+    let acceptableOvershoot = 60
 
     for interval in RateConstants.refreshIntervalChoices {
         for count in [1, 2, 4, 10, 20] {
@@ -151,8 +152,9 @@ import Testing
             // day, and 6.5h of regular session against a 30s spacing floor
             // cannot buy 1,200 requests. Swept over every watchlist size 1...20
             // and intervals down to 1s, with `cycleInterval`'s budget floor
-            // deleted, the largest number this function returns is 1,197 — at
-            // 1s x 19 symbols, a point the Settings menu cannot even reach.
+            // deleted, the largest number this function returns runs past
+            // the budget — which is the point: with the floor in place the
+            // same sweep tops out at 1,159, pinned below.
             // An assertion that survives deleting the mechanism it is meant to
             // guard is decoration, and this file has already been burned once
             // by keeping one.
@@ -299,14 +301,16 @@ import Testing
     // `estimatedDailyRequests` prices a US equity day — 6.5h regular, 5.5h
     // pre, 4h post, eight hours shut — so no interval it can be handed buys
     // 1,200 requests. Swept far outside the offered menu, down to a tenth of a
-    // second, the largest figure it returns is 741, at 19 symbols. (Nineteen
+    // second, the largest figure it returns is 1,159, at 19 symbols — it read
+    // 741 while the overnight cost nothing, and billing that span is most of
+    // the distance it has since closed. (Nineteen
     // rather than twenty because `budgetFloor` scales with the count: at 20 the
     // floor is 1,440s a cycle against 19's 1,368s, and the extra symbol does
     // not pay for the longer cycle.)
     //
     // The exact figure is asserted, not just "under budget": a bound the code
     // cannot approach is decoration, and this file has been burned twice now
-    // by keeping one. 741 fails the moment the day model or the floor moves,
+    // by keeping one. 1,159 fails the moment the day model or the floor moves,
     // which is when someone should be looking.
     var worst = 0
     var worstAt = ""
@@ -322,6 +326,6 @@ import Testing
         }
     }
     let reached = "the estimator reached \(worst) at \(worstAt)"
-    #expect(worst == 741, "\(reached)")
+    #expect(worst == 1_159, "\(reached)")
     #expect(worst < RateConstants.dailyRequestBudget, "\(reached)")
 }

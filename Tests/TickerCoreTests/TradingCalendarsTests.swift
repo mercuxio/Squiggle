@@ -86,18 +86,8 @@ private func equitySymbols(_ n: Int) throws -> [Symbol] {
     #expect(calendars.aggregateState(atEpoch: threeAM) == .closed)
 }
 
-@Test func theWakeIsTheEarliestOpenAcrossTheWatchlistNotWhicheverArrivedLast() throws {
-    // Two exchanges, opens three hours apart. Waking for the later one sleeps
-    // straight through the earlier symbol's whole pre-market session.
-    let early = try #require(Symbol("EARLY"))
-    let late = try #require(Symbol("LATE"))
-    var calendars = TradingCalendars()
-    calendars.record(equityDay(openingAt: 3), for: late)
-    calendars.record(equityDay(), for: early)
-
-    let wake = calendars.earliestSessionOpenEpoch(after: threeAM)
-    #expect(wake == 4 * hour, "woke at \(String(describing: wake)) rather than 04:00")
-}
+// The earliest-open-across-the-watchlist test stood here. There is no wake
+// time to compute now that the engine never stands down for a shut market.
 
 @Test func aSymbolTheEngineGaveUpOnStopsVotingOnTheCalendar() throws {
     // A delisted 24-hour ticker that fails forever would otherwise hold the
@@ -123,7 +113,6 @@ private func equitySymbols(_ n: Int) throws -> [Symbol] {
     // request beats never starting.
     let calendars = TradingCalendars()
     #expect(calendars.aggregateState(atEpoch: threeAM) == nil)
-    #expect(calendars.earliestSessionOpenEpoch(after: threeAM) == nil)
 }
 
 @Test func opennessRanksEveryStateAndRegularOutranksThemAll() {

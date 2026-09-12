@@ -490,16 +490,21 @@ private func tempStoreURL() -> URL {
     let line = try #require(lines.first { $0.contains("daily request estimate") })
     #expect(line.contains("US market calendar"), "the estimate named no calendar: \(line)")
 
-    // The two figures, re-taken rather than described. 720 is what the
+    // The two figures, re-taken rather than described. 1,120 is what the
     // estimator reports for these exact settings — the number the line above
     // prints — and 1,200 is what the same 20 symbols at the same cycle cost on
-    // an instrument that never closes. The gap is eight hours of shut market,
-    // and it is the whole reason the qualification is not cosmetic.
+    // an instrument that never closes.
+    //
+    // The gap used to be 480: eight hours of shut market a US calendar did not
+    // pay for. It is 80 now, because "forget the market calendar" made the app
+    // poll that span like any other, and what is left of the gap is the quiet
+    // multiplier on 9.5 hours of extended trading. The qualification is still
+    // not cosmetic — it is just far less generous than it was.
     let estimate = Diagnosis.estimatedDailyRequests(
         userIntervalSeconds: RateConstants.defaultRefreshInterval,
         watchlistCount: RateConstants.maxWatchlistCount)
-    #expect(estimate == 720)
-    #expect(line.contains("~720 requests/day"))
+    #expect(estimate == 1_120)
+    #expect(line.contains("~1120 requests/day"))
 
     let cycle = RefreshPolicy.budgetFloor(watchlistCount: RateConstants.maxWatchlistCount)
     let neverClosing = RateConstants.secondsPerDay / cycle

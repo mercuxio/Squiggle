@@ -66,8 +66,7 @@ struct WatchLoop {
                 // market is open — one wasted request beats never starting.
                 marketState: calendars.aggregateState(atEpoch: now) ?? .regular,
                 visibility: .visible,
-                lowPowerMode: ProcessInfo.processInfo.isLowPowerModeEnabled,
-                nextSessionOpenEpoch: calendars.earliestSessionOpenEpoch(after: now))
+                lowPowerMode: ProcessInfo.processInfo.isLowPowerModeEnabled)
 
             switch engine.next(context) {
             case .sleep(let seconds):

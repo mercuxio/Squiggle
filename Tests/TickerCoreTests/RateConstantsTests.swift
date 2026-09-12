@@ -22,11 +22,11 @@ import Testing
 /// test to match the constant. Go and read the spec section cited beside it,
 /// and change both together only if the spec changed.
 ///
-/// Three constants are deliberately absent: `probeTimeoutSeconds`,
-/// `minimumWaitSeconds` and `maxClosedMarketWait` are implementation choices
-/// with no literal anywhere in the spec. Asserting that one of those equals
-/// itself, with the expected value sourced from nothing but the code it is
-/// checking, would be exactly the vacuity this file exists to answer.
+/// Two constants are deliberately absent: `probeTimeoutSeconds` and
+/// `minimumWaitSeconds` are implementation choices with no literal anywhere in
+/// the spec. Asserting that one of those equals itself, with the expected
+/// value sourced from nothing but the code it is checking, would be exactly
+/// the vacuity this file exists to answer.
 
 @Test func requestSpacingMatchesTheSpec() {
     // §4.1: `spacing = 30s  // between any two requests, ever`
@@ -44,10 +44,13 @@ import Testing
     #expect(RateConstants.quietMultiplier == 3)
 }
 
-@Test func thePreOpenWakeLeadMatchesTheSpec() {
-    // §4.1 table, Closed: "one wake scheduled at `regular.start - 60s`".
-    #expect(RateConstants.preOpenWakeLead == 60)
-}
+// §4.1's Closed row — "one wake scheduled at `regular.start - 60s`" — was
+// pinned here, and the user has since overruled that row of the spec:
+// "forget the market calendar. always get the latest quote from yahoo
+// regardless if the market is open or closed." There is no wake lead and no
+// half-day ceiling left to pin. What the spec still governs for a shut market
+// is the cadence, and `RefreshPolicyTests` asserts that: the ordinary one,
+// not the quiet one.
 
 @Test func theWatchlistCapMatchesTheSpec() {
     // §4.2: "Watchlist capped at 20 symbols."
