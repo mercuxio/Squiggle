@@ -263,6 +263,24 @@ private func button(_ command: MenuCommand, in root: NSView) -> NSButton? {
     #expect(refresh.contentTintColor == NSColor.secondaryLabelColor)
 }
 
+/// "the spinning should be clockwise" — and the sign that means clockwise here
+/// is the opposite of the one you would write from the usual y-up convention.
+///
+/// `FooterButton` is an `NSButton`, and `NSButton.isFlipped` is `true`, so
+/// AppKit flips the backing layer's geometry and every sublayer of it lives in a
+/// y-down space. Measured with a throwaway probe rather than reasoned about,
+/// after two rounds of guessing at AppKit geometry got it wrong. A negative
+/// `toValue` here turned the glyph against its own arrowheads.
+@MainActor
+@Test func theSpinFollowsTheArrowheads() throws {
+    let button = SpinningFooterButton(frame: NSRect(x: 40, y: 5, width: 21, height: 21))
+    let spin = try #require(
+        button.spinner.animation(forKey: SpinningFooterButton.animationKey) as? CABasicAnimation)
+    let turn = try #require(spin.toValue as? Double)
+    #expect(turn > 0)
+    #expect(spin.keyPath == "transform.rotation.z")
+}
+
 /// The user's correction, twice over: "it should be spinning not moving
 /// around", then "still moving in circles and not spinning in place".
 ///

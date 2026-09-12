@@ -186,11 +186,9 @@ class FooterButton: NSButton {
 /// A subclass rather than a flag on `FooterButton`, so that the only button
 /// that can spin is the one that was built to.
 ///
-/// The glyph is `loader-circle` rather than `refresh-cw`, matching the loader
-/// in the user's Athena project ("it should be like the loader animation in the
-/// athena project"): a ring with a single gap has no feature except the gap, so
-/// its turning reads as turning. Two arrows chasing each other read as the
-/// arrows moving instead.
+/// The glyph is the same `refresh-cw` the button shows at rest, so nothing
+/// swaps under the pointer when a fetch starts — only the stroke brightens and
+/// the ring begins to turn. It turns the way its own arrowheads point.
 final class SpinningFooterButton: FooterButton {
     /// One turn every `turnSeconds`, forever — "forever" being until the next
     /// rebuild replaces this view with one that is not this class.
@@ -216,7 +214,7 @@ final class SpinningFooterButton: FooterButton {
 
         let side = MenuFooterView.Metrics.glyph
         spinner.bounds = CGRect(x: 0, y: 0, width: side, height: side)
-        spinner.path = LucideIcon.loaderCircle.cgPath(size: side)
+        spinner.path = LucideIcon.refreshCw.cgPath(size: side)
         spinner.lineWidth = LucideIcon.strokeWidth(size: side)
         spinner.lineCap = .round
         spinner.lineJoin = .round
@@ -233,9 +231,14 @@ final class SpinningFooterButton: FooterButton {
         // layer whether it is there without a window server.
         let spin = CABasicAnimation(keyPath: "transform.rotation.z")
         spin.fromValue = 0
-        // Negative: positive z-rotation is anticlockwise in a layer's y-up
-        // space, and every spinner a Mac user has ever seen turns the other way.
-        spin.toValue = -2 * Double.pi
+        // Positive, which is clockwise here — the direction `refresh-cw`'s own
+        // arrowheads point, and a glyph turning against its arrows reads as
+        // broken. Positive z-rotation is *anti*clockwise in the y-up space a
+        // layer usually lives in; this one is a sublayer of a flipped
+        // `NSButton`'s backing layer, so its y runs the other way and so does
+        // the sign. The first version of this spun backwards for exactly that
+        // reason, and `theSpinFollowsTheArrowheads` is the note to self.
+        spin.toValue = 2 * Double.pi
         spin.duration = Self.turnSeconds
         // Linear, and no autoreverse: an eased repeat pulses, which reads as a
         // series of attempts rather than one that is still running.
