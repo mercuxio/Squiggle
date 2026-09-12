@@ -312,3 +312,41 @@ private func window(settings: Settings = Settings(),
     let note = try #require(ErrorText.loginItemNote(for: .off, failure: spy.failure))
     #expect(!labelExists(note, in: controller))
 }
+
+// MARK: - Escape
+
+/// "esc should be able to close the settings dialog."
+///
+/// Asserted by sending `cancelOperation` — which is what the Escape key turns
+/// into once AppKit has offered it to the field editor — rather than by
+/// synthesising a key event, which needs a run loop and a key window and would
+/// be testing `NSApplication` rather than this window.
+@MainActor
+@Test func escapeClosesTheSettingsWindow() throws {
+    let spy = LoginItemSpy(state: .off, result: .off)
+    let controller = window(launchAtLogin: spy.seam)
+    let panel = try #require(controller.window)
+    panel.orderFront(nil)
+    #expect(panel.isVisible)
+
+    panel.cancelOperation(nil)
+
+    #expect(!panel.isVisible)
+}
+
+/// The window is reopened from the footer after an Escape, so closing must not
+/// destroy it — `isReleasedWhenClosed` is already false for that reason, and
+/// this is the assertion that would catch a subclass quietly changing it.
+@MainActor
+@Test func escapePutsTheSettingsWindowAwayWithoutReleasingIt() throws {
+    let spy = LoginItemSpy(state: .off, result: .off)
+    let controller = window(launchAtLogin: spy.seam)
+    let panel = try #require(controller.window)
+    panel.orderFront(nil)
+
+    panel.cancelOperation(nil)
+    panel.orderFront(nil)
+
+    #expect(panel.isVisible)
+    #expect(controller.window === panel)
+}

@@ -66,7 +66,7 @@ final class SettingsWindowController: NSWindowController {
         self.launchAtLogin = launchAtLogin
         self.onChange = onChange
 
-        let window = NSWindow(
+        let window = EscapeClosingWindow(
             // Zero on both axes: Auto Layout sizes this window from the grid.
             // A width typed here is a width the grid has to absorb, and it
             // absorbs it in the one column that is free to grow — column 0,
@@ -312,4 +312,27 @@ final class SettingsWindowController: NSWindowController {
     }
 
     @objc private func windowBecameKey() { refreshLoginItem() }
+}
+
+/// A window Escape closes.
+///
+/// `NSPanel` does this for nothing — which is why the dropdown already
+/// dismisses on Escape — but a plain `NSWindow` inherits `NSResponder`'s
+/// `cancelOperation(_:)`, which passes the key along and ends at a beep. The
+/// settings window is a modeless dialog with nothing to commit: every control
+/// writes through the moment it changes, so there is no "cancel" for Escape to
+/// mean other than "put this away", and that is what the close button means
+/// too.
+///
+/// `performClose` rather than `close` for exactly that reason: it is the close
+/// button's own code path — delegate consulted, title bar flashed — so the two
+/// ways out of this window cannot drift apart.
+///
+/// Escape inside a text field never reaches here. The field editor takes it
+/// first and uses it to abandon the edit, which is the behaviour every other
+/// Mac app has and not something to take away.
+final class EscapeClosingWindow: NSWindow {
+    override func cancelOperation(_ sender: Any?) {
+        performClose(sender)
+    }
 }
