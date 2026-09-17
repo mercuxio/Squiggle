@@ -729,7 +729,7 @@ and after the `squigglectlTests` test target:
         ),
 ```
 
-A test target depending on an executable target works in this toolchain — `/Users/ben/Projects/Pitch` ships exactly this arrangement — but it only works once the executable actually builds, so Steps 2 and 3 come before the first test run.
+A test target depending on an executable target works in this toolchain — [Pitch](https://github.com/mercuxio/Pitch) ships exactly this arrangement — but it only works once the executable actually builds, so Steps 2 and 3 come before the first test run.
 
 - [ ] **Step 2: Write the entry point**
 
@@ -2077,7 +2077,7 @@ git commit -m "feat: put real prices in the menu bar, driven by one timer"
 
 Build-order step 9 moved here by R123: `SMAppService.mainApp` registers the *bundle*, so Task 14 cannot be written, let alone tested, against a bare SwiftPM executable. The `LSUIElement` flag is the other reason to do it now — it is what stops a dock icon appearing, and every hand-run of the app between here and Task 15 is nicer without one.
 
-SwiftPM has no concept of an app bundle and there is no Xcode on this machine, so the bundle is assembled by a script, exactly as `/Users/ben/Projects/Pitch` does it. `iconutil` ships with the Command Line Tools; `actool` and `xcrun notarytool` do not, which is why the icon is a `.iconset` rather than an asset catalogue and why R126 delivers an ad-hoc-signed bundle plus a Gatekeeper instruction instead of a notarised zip.
+SwiftPM has no concept of an app bundle and there is no Xcode on this machine, so the bundle is assembled by a script, exactly as [Pitch](https://github.com/mercuxio/Pitch) does it. `iconutil` ships with the Command Line Tools; `actool` and `xcrun notarytool` do not, which is why the icon is a `.iconset` rather than an asset catalogue and why R126 delivers an ad-hoc-signed bundle plus a Gatekeeper instruction instead of a notarised zip.
 
 **Files:**
 - Create: `Resources/Info.plist`
