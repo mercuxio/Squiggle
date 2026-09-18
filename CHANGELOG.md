@@ -6,6 +6,8 @@ All notable changes to Squiggle are recorded here. The format follows
 
 ## [Unreleased]
 
+## [1.0.1] — 2026-09-18
+
 ### Fixed
 
 - The app icon no longer sits inside a grey frame on macOS 26 and later. It is
