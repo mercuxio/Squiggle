@@ -19,11 +19,10 @@ enum ErrorText {
     static let quit = "Quit Squiggle"
     static let buyCoffee = "Buy me a coffee"
 
-    /// The one address in this app that is not Yahoo's, and the only one a
-    /// click opens in a browser. Here rather than in the controller because it
-    /// is user-facing copy by the same argument the titles above are: it is a
-    /// thing the user reads, in their browser's address bar, after clicking a
-    /// button in Squiggle.
+    /// One of the two addresses a click opens in a browser. Here rather than in
+    /// the controller because it is user-facing copy by the same argument the
+    /// titles above are: it is a thing the user reads, in their browser's
+    /// address bar, after clicking a button in Squiggle.
     static let coffeeURL = "https://buymeacoffee.com/benjamintan"
 
     /// The two column headings in the dropdown, in column order: the first
@@ -221,15 +220,21 @@ enum ErrorText {
         return "\(chosen) (\(minutes(cycle)) min with \(symbols))"
     }
 
-    /// The running app's marketing version, shown at the right-hand end of the
-    /// settings window's login row. The number itself comes from
-    /// `CFBundleShortVersionString`; this only says how to word it, because no
-    /// other file in the app target is allowed to word anything. Named in full
-    /// — "Squiggle Version 1.0.0" — because on that row a bare "Version 1.0.0"
-    /// would read as belonging to "Open at Login" beside it.
+    /// The running app's marketing version, at the left of the settings
+    /// window's footer, worded as Sniffcast words its own. The number itself
+    /// comes from `CFBundleShortVersionString`; this only says how to word it,
+    /// because no other file in the app target is allowed to word anything.
     static func versionLine(_ version: String) -> String {
-        "Squiggle Version \(version)"
+        "Squiggle \(version)"
     }
+
+    /// The footer's credit, opposite the version, as Sniffcast credits
+    /// Open-Meteo. The README says the same: the prices are Yahoo's, and may
+    /// be delayed.
+    static let pricesCredit = "Prices from Yahoo Finance"
+    /// The other address a click opens in a browser. The feed's own endpoints
+    /// live in `YahooFeed`; this is only the page a person would recognise.
+    static let yahooFinanceURL = "https://finance.yahoo.com/"
 
     static let launchAtLoginLabel = "Open at Login"
     static let openLoginItems = "Open Login Items…"
