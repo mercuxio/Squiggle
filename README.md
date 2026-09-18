@@ -16,7 +16,7 @@ Requires **macOS 14 or later** on **Apple silicon**.
 
 ## Install
 
-**Download the release.** Get `Squiggle-1.0.1.zip` from
+**Download the release.** Get `Squiggle-1.0.2.zip` from
 [Releases](https://github.com/mercuxio/Squiggle/releases), unzip it, and drag
 `Squiggle.app` into `/Applications`.
 
@@ -181,7 +181,7 @@ swift test --build-system native
 
 ## Status
 
-Version 1.0.1. The test suite passes, and the app is in daily use against live
+Version 1.0.2. The test suite passes, and the app is in daily use against live
 Yahoo data.
 
 Releases include an ad-hoc signed `Squiggle.app` in a zip; see

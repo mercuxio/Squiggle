@@ -6,6 +6,14 @@ All notable changes to Squiggle are recorded here. The format follows
 
 ## [Unreleased]
 
+## [1.0.2] — 2026-09-18
+
+### Changed
+
+- The Settings window is now a grouped form in the same style as the Sniffcast
+  settings window. Open at Login is a switch, and the window's foot shows the
+  version and where the prices come from.
+
 ## [1.0.1] — 2026-09-18
 
 ### Fixed
