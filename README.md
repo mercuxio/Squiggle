@@ -160,7 +160,7 @@ interface.
 | `Sources/Squiggle` | The menu bar app. Everything runs on `@MainActor`. |
 | `Sources/squigglectl` | The CLI: hand-written argument parsing and text output. |
 | `Tests/Fixtures` | Yahoo responses recorded live, used to test the parser offline. |
-| `Tools/GenerateIcon.swift` | Draws the app icon. |
+| `Tools/GenerateIcon.swift` | Writes the app icon as an Icon Composer bundle, `Resources/AppIcon.icon`. `./scripts/make-icon.sh` compiles it with Xcode's `actool` into the committed `Resources/Assets.car` and `AppIcon.icns`. |
 | `docs/specs/` | The design spec, which is the final word on behaviour. |
 
 `TickerCore` never sleeps and never checks the time. Every decision is a pure

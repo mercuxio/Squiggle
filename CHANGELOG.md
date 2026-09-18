@@ -4,6 +4,14 @@ All notable changes to Squiggle are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- The app icon no longer sits inside a grey frame on macOS 26 and later. It is
+  now an Icon Composer icon, so the system draws the shape and the glass
+  lighting itself, with a generated fallback for older systems.
+
 ## [1.0.0] — 2026-09-17
 
 First public release.

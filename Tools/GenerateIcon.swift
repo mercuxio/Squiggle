@@ -1,5 +1,11 @@
-// Renders the app icon into a .iconset directory, which `scripts/package-app.sh`
-// then hands to `iconutil` to produce Resources/AppIcon.icns.
+// Writes the app icon as an Icon Composer bundle (Resources/AppIcon.icon),
+// which `scripts/make-icon.sh` compiles with `actool` into the Assets.car and
+// AppIcon.icns that `scripts/package-app.sh` copies into the app.
+//
+// An Icon Composer icon, not a flat .icns with its own rounded tile: macOS 26
+// and later treat a flat icon as legacy and shrink it onto a grey tile. From
+// the bundle the system draws the shape, the glass lighting, and the dark and
+// tinted variants itself; actool still writes a .icns for older systems.
 //
 // A standalone script, not a target: it is build tooling, and adding it to
 // Package.swift would put AppKit drawing code in the dependency graph of a
@@ -8,40 +14,34 @@
 // The glyph is the `chart.line.uptrend.xyaxis` SF Symbol. Taken from the
 // system rather than transcribed as a path, so it stays consistent with
 // whatever the OS draws.
+//
+// Usage: swift Tools/GenerateIcon.swift <AppIcon.icon>
 
 import AppKit
 import Foundation
 
-private enum Tile {
-    /// Proportions of the macOS icon grid: the rounded square occupies the
-    /// middle ~80% of the canvas, leaving the margin the system expects for
-    /// shadows and optical alignment against other icons.
-    static let inset: CGFloat = 100.0 / 1024.0
-    static let cornerRadius: CGFloat = 185.0 / 1024.0
-    /// Glyph size as a fraction of the tile. The chart symbol is wide and
+private enum Icon {
+    /// Icon Composer's canvas. The fill covers all of it; the system applies
+    /// the rounded mask, so nothing here draws a tile or corners.
+    static let canvas = 1024
+    /// Glyph size as a fraction of the canvas. The chart symbol is wide and
     /// squat, so fitting it by its longest side leaves it reading small
     /// unless the nominal box is generous.
     static let glyphFraction: CGFloat = 0.66
 
-    static let top = NSColor(srgbRed: 0.106, green: 0.184, blue: 0.290, alpha: 1)
-    static let bottom = NSColor(srgbRed: 0.035, green: 0.055, blue: 0.098, alpha: 1)
+    static let fillTop = "srgb:0.10600,0.18400,0.29000,1.00000"
+    static let fillBottom = "srgb:0.03500,0.05500,0.09800,1.00000"
     static let stroke = NSColor(srgbRed: 0.549, green: 0.867, blue: 0.678, alpha: 1)
 }
 
-private func render(pixels: Int) -> NSBitmapImageRep? {
-    let side = CGFloat(pixels)
+/// The glyph alone, on a transparent canvas, as the bundle's one layer.
+private func renderGlyph() -> NSBitmapImageRep? {
+    let side = CGFloat(Icon.canvas)
     guard
         let rep = NSBitmapImageRep(
-            bitmapDataPlanes: nil,
-            pixelsWide: pixels,
-            pixelsHigh: pixels,
-            bitsPerSample: 8,
-            samplesPerPixel: 4,
-            hasAlpha: true,
-            isPlanar: false,
-            colorSpaceName: .deviceRGB,
-            bytesPerRow: 0,
-            bitsPerPixel: 0),
+            bitmapDataPlanes: nil, pixelsWide: Icon.canvas, pixelsHigh: Icon.canvas,
+            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+            colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0),
         let context = NSGraphicsContext(bitmapImageRep: rep)
     else { return nil }
 
@@ -51,13 +51,7 @@ private func render(pixels: Int) -> NSBitmapImageRep? {
     context.imageInterpolation = .high
     context.shouldAntialias = true
 
-    let inset = side * Tile.inset
-    let tile = NSRect(x: inset, y: inset, width: side - inset * 2, height: side - inset * 2)
-    let radius = side * Tile.cornerRadius
-    let tilePath = NSBezierPath(roundedRect: tile, xRadius: radius, yRadius: radius)
-    NSGradient(starting: Tile.bottom, ending: Tile.top)?.draw(in: tilePath, angle: 90)
-
-    let box = tile.width * Tile.glyphFraction
+    let box = side * Icon.glyphFraction
     guard
         let symbol = NSImage(systemSymbolName: "chart.line.uptrend.xyaxis",
                              accessibilityDescription: nil)?
@@ -70,58 +64,55 @@ private func render(pixels: Int) -> NSBitmapImageRep? {
     let fit = min(box / symbol.size.width, box / symbol.size.height)
     let drawn = NSSize(width: symbol.size.width * fit, height: symbol.size.height * fit)
     let frame = NSRect(
-        x: tile.midX - drawn.width / 2,
-        y: tile.midY - drawn.height / 2,
+        x: (side - drawn.width) / 2,
+        y: (side - drawn.height) / 2,
         width: drawn.width,
         height: drawn.height)
 
-    // The transparency layer is load-bearing. `.sourceAtop` recolours whatever
-    // it finds underneath it, so without a layer to scope it to, the fill would
-    // land on the gradient tile as well and paint the whole icon flat green.
-    // Inside the layer the only thing under the fill is the glyph's own alpha.
-    context.cgContext.beginTransparencyLayer(auxiliaryInfo: nil)
+    // `.sourceAtop` recolours only what is already there: the symbol's own
+    // alpha. The canvas is otherwise empty, so no transparency layer is needed.
     symbol.draw(in: frame)
-    Tile.stroke.setFill()
+    Icon.stroke.setFill()
     frame.fill(using: .sourceAtop)
-    context.cgContext.endTransparencyLayer()
-
     return rep
 }
 
-/// The exact set `iconutil` expects; anything missing makes it refuse the
-/// directory outright.
-private let variants: [(name: String, pixels: Int)] = [
-    ("icon_16x16.png", 16),
-    ("icon_16x16@2x.png", 32),
-    ("icon_32x32.png", 32),
-    ("icon_32x32@2x.png", 64),
-    ("icon_128x128.png", 128),
-    ("icon_128x128@2x.png", 256),
-    ("icon_256x256.png", 256),
-    ("icon_256x256@2x.png", 512),
-    ("icon_512x512.png", 512),
-    ("icon_512x512@2x.png", 1024),
-]
+private let manifest = """
+{
+  "fill" : {
+    "linear-gradient" : [
+      "\(Icon.fillTop)",
+      "\(Icon.fillBottom)"
+    ]
+  },
+  "groups" : [
+    {
+      "layers" : [ { "image-name" : "glyph.png", "name" : "glyph" } ],
+      "shadow" : { "kind" : "neutral", "opacity" : 0.5 },
+      "translucency" : { "enabled" : true, "value" : 0.3 }
+    }
+  ],
+  "supported-platforms" : { "squares" : [ "macOS" ] }
+}
+
+"""
 
 let arguments = CommandLine.arguments
 guard arguments.count == 2 else {
-    FileHandle.standardError.write(Data("usage: GenerateIcon <output.iconset>\n".utf8))
+    FileHandle.standardError.write(Data("usage: GenerateIcon <AppIcon.icon>\n".utf8))
     exit(2)
 }
 
-let directory = URL(fileURLWithPath: arguments[1])
-try? FileManager.default.removeItem(at: directory)
-try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+let bundle = URL(fileURLWithPath: arguments[1])
+let assets = bundle.appendingPathComponent("Assets")
+try? FileManager.default.removeItem(at: bundle)
+try FileManager.default.createDirectory(at: assets, withIntermediateDirectories: true)
 
-for variant in variants {
-    guard
-        let rep = render(pixels: variant.pixels),
-        let data = rep.representation(using: .png, properties: [:])
-    else {
-        FileHandle.standardError.write(Data("failed to render \(variant.name)\n".utf8))
-        exit(1)
-    }
-    try data.write(to: directory.appendingPathComponent(variant.name))
+guard let rep = renderGlyph(), let png = rep.representation(using: .png, properties: [:]) else {
+    FileHandle.standardError.write(Data("failed to render the glyph\n".utf8))
+    exit(1)
 }
+try png.write(to: assets.appendingPathComponent("glyph.png"))
+try Data(manifest.utf8).write(to: bundle.appendingPathComponent("icon.json"))
 
-print("Wrote \(variants.count) images to \(directory.path)")
+print("Wrote \(bundle.path)")

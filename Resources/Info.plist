@@ -13,6 +13,8 @@
 	     optional just because the app is an agent. -->
 	<key>CFBundleIconFile</key>
 	<string>AppIcon</string>
+	<key>CFBundleIconName</key>
+	<string>AppIcon</string>
 	<key>CFBundleIdentifier</key>
 	<string>com.houlanyit.Squiggle</string>
 	<key>CFBundleInfoDictionaryVersion</key>

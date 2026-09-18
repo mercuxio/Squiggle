@@ -14,24 +14,18 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP="$ROOT/build/Squiggle.app"
-ICONSET="$ROOT/build/AppIcon.iconset"
-ICON="$ROOT/Resources/AppIcon.icns"
 
 cd "$ROOT"
 swift build --build-system native -c release --product Squiggle
-
-# Regenerated every time rather than trusted from the repo, so the icon cannot
-# drift from the generator that defines it. The .icns is committed all the same,
-# for anything that wants the artwork without running a build.
-swift Tools/GenerateIcon.swift "$ICONSET"
-iconutil -c icns "$ICONSET" -o "$ICON"
 
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
 cp "$ROOT/.build/release/Squiggle" "$APP/Contents/MacOS/Squiggle"
 cp "$ROOT/Resources/Info.plist" "$APP/Contents/Info.plist"
-cp "$ICON" "$APP/Contents/Resources/AppIcon.icns"
+# The icon comes prebuilt from scripts/make-icon.sh, which needs Xcode's actool.
+# Assets.car is what macOS 26 and later draw; AppIcon.icns is the fallback.
+cp "$ROOT/Resources/Assets.car" "$ROOT/Resources/AppIcon.icns" "$APP/Contents/Resources/"
 printf 'APPL????' > "$APP/Contents/PkgInfo"
 
 codesign --force --deep --sign - "$APP"
