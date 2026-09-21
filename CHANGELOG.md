@@ -6,6 +6,17 @@ All notable changes to Squiggle are recorded here. The format follows
 
 ## [Unreleased]
 
+## [1.0.3] — 2026-09-21
+
+### Fixed
+
+- Prices now arrive within seconds of logging in. The app used to open before
+  the network was ready. Its first request then failed, and the app waited a
+  full refresh interval before it tried again. When a request cannot leave
+  the Mac, the app now tries again after 5 seconds. The wait doubles on each
+  failure, up to a minute, and a no-internet failure no longer uses up any of
+  the request budget.
+
 ## [1.0.2] — 2026-09-18
 
 ### Changed
