@@ -80,6 +80,15 @@ public struct RequestPacer {
         return true
     }
 
+    /// Hands back the token a request took when that request provably never
+    /// left the Mac. The buckets pace what Yahoo receives, and Yahoo received
+    /// nothing. Capped like a refill, so a refund can never mint a token the
+    /// bucket had no room for.
+    public mutating func refund() {
+        tokens = min(capacity, tokens + 1)
+        dailyTokens = min(Self.dailyBucketCapacity, dailyTokens + 1)
+    }
+
     public mutating func secondsUntilNextToken() -> Double {
         refill()
         // The longer of the two waits, not the first one that happens to be

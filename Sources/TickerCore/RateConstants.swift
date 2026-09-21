@@ -124,6 +124,15 @@ public enum RateConstants {
     /// the same floor to the sleeps it derives.
     public static let minimumWaitSeconds: Double = 1
 
+    /// How long to wait after a request that never left the Mac, doubling per
+    /// consecutive drop up to the cap. Short at the bottom because the common
+    /// case is login, where the network is seconds from ready; capped because
+    /// a laptop offline for an afternoon should not wake every five seconds.
+    /// Not charged to the token bucket, which exists to protect Yahoo, so
+    /// this is the only thing pacing those attempts.
+    public static let offlineRetryBaseSeconds: Double = 5
+    public static let offlineRetryCapSeconds: Double = 60
+
     /// Extended-hours and Low Power Mode both stretch the cycle by this.
     public static let quietMultiplier: Double = 3
 

@@ -76,7 +76,7 @@ final class TickerRunner {
             } catch {
                 // Same reasoning as `WatchLoop`'s catch-all: the protocol
                 // promises `TickerError` and the language does not enforce it.
-                let wrapped = TickerError.transport(TransportFaults.classify(error))
+                let wrapped = TransportFaults.tickerError(for: error)
                 engine.record(wrapped, for: symbol)
                 lastError = wrapped
             }

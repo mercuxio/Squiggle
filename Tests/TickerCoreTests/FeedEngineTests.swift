@@ -58,10 +58,97 @@ struct FeedEngineTests {
         #expect(snapshot.cooldownRemainingSeconds == 0,
                 "the ladder advanced to \(snapshot.cooldownRemainingSeconds)s on a network we never touched")
 
-        // And the point of all three: the very next cycle is allowed. There is
-        // no path-monitor edge to resume on — `TickerCore` takes no `Network`
-        // dependency and the app layer that would own `NWPathMonitor` does not
-        // exist — so retrying on the next cycle is the whole recovery story.
+        // And the point of all three: the next attempt is allowed as soon as
+        // the offline hold has run. There is no path-monitor edge to resume
+        // on — `TickerCore` takes no `Network` dependency — so a short retry
+        // is the whole recovery story. Ten drops have walked the hold to its
+        // cap, so that is how long to wait here.
+        clock.advance(RateConstants.offlineRetryCapSeconds)
+        let action = e.next(openMarket())
+        #expect(action == .fetch(one))
+    }
+
+    @Test func anOfflineFailureGivesTheSymbolItsTurnBack() throws {
+        // At login the network is still coming up, so the first fetch fails
+        // without ever leaving the Mac. Moving the cursor on anyway spent that
+        // symbol's turn on a request nobody received. Do that for every symbol
+        // and the pass is over before the network arrives, and the next one
+        // waits a whole refresh interval.
+        let clock = FakeClock()
+        let one = try sym("AAPL")
+        var e = engine(clock, [one, try sym("MSFT")])
+
+        let first = e.next(openMarket())
+        #expect(first == .fetch(one))
+        e.record(.offline, for: one)
+
+        clock.advance(RateConstants.offlineRetryBaseSeconds)
+        let retry = e.next(openMarket())
+        #expect(retry == .fetch(one))
+    }
+
+    @Test func anOfflineFailureCostsNoToken() throws {
+        // The bucket exists to protect Yahoo, and Yahoo never saw this
+        // request. Charging for it would let a boot spent offline drain the
+        // launch burst, so the watchlist would trickle in at one symbol every
+        // 72 seconds once the network finally arrived.
+        let clock = FakeClock()
+        let one = try sym("AAPL")
+        var e = engine(clock, [one])
+        let before = e.diagnosticSnapshot.tokensAvailable
+
+        _ = e.next(openMarket())
+        e.record(.offline, for: one)
+
+        let after = e.diagnosticSnapshot.tokensAvailable
+        #expect(after == before)
+    }
+
+    @Test func offlineRetriesBackOffGentlyAndResetOnAnyAnswer() throws {
+        // Short enough that the first price lands seconds after the network
+        // comes up. Growing, so that a laptop left offline for an afternoon is
+        // not waking every five seconds to find the same thing out.
+        let clock = FakeClock()
+        let one = try sym("AAPL")
+        var e = engine(clock, [one])
+        let base = RateConstants.offlineRetryBaseSeconds
+        let cap = RateConstants.offlineRetryCapSeconds
+
+        var holds: [Double] = []
+        for _ in 0..<6 {
+            let action = e.next(openMarket())
+            #expect(action == .fetch(one))
+            e.record(.offline, for: one)
+            guard case .sleep(let seconds) = e.next(openMarket()) else {
+                Issue.record("expected a hold after an offline failure")
+                return
+            }
+            holds.append(seconds)
+            clock.advance(seconds)
+        }
+        #expect(holds == [base, base * 2, base * 4, base * 8, cap, cap])
+
+        // Any answer from Yahoo proves the network is back: the next drop
+        // starts again from the bottom of the ladder.
+        _ = e.next(openMarket())
+        e.recordSuccess(stubQuote(one), for: one)
+        e.requestImmediateCycle()
+        _ = e.next(openMarket())
+        e.record(.offline, for: one)
+        let afterReset = e.next(openMarket())
+        #expect(afterReset == .sleep(seconds: base))
+    }
+
+    @Test func refreshNowSkipsTheOfflineHold() throws {
+        // The user pressing the button is the one signal worth trusting over
+        // a timer: they can see their Wi-Fi icon and we cannot.
+        let clock = FakeClock()
+        let one = try sym("AAPL")
+        var e = engine(clock, [one])
+        _ = e.next(openMarket())
+        e.record(.offline, for: one)
+
+        e.requestImmediateCycle()
         let action = e.next(openMarket())
         #expect(action == .fetch(one))
     }

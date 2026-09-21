@@ -70,6 +70,11 @@ public struct FeedEngine {
     /// no price yet, and a pass of `count` fetches from there still covers
     /// every symbol by wrapping.
     private var refreshRemaining = 0
+    /// The pause after a request that never left the Mac: `0` when the last
+    /// answer came from Yahoo, otherwise the hold just applied, so the next
+    /// drop can double it. `offlineRetryAt` is when that hold ends.
+    private var offlineRetryDelay: Double = 0
+    private var offlineRetryAt: Double = 0
 
     private var userIntervalSeconds: Double
 
@@ -131,6 +136,13 @@ public struct FeedEngine {
 
         if case .wait(let seconds) = decision {
             return .sleep(seconds: max(RateConstants.minimumWaitSeconds, seconds))
+        }
+
+        // Below the policy, so an occluded strip or a closed market still
+        // wins with its own longer wait; above everything that spends, so a
+        // held retry costs nothing.
+        if now < offlineRetryAt {
+            return .sleep(seconds: max(RateConstants.minimumWaitSeconds, offlineRetryAt - now))
         }
 
         guard !live.isEmpty else {
@@ -224,6 +236,7 @@ public struct FeedEngine {
 
     public mutating func recordSuccess(_ quote: Quote, for symbol: Symbol) {
         latestQuotes[symbol] = quote
+        clearOfflineHold()
         ladder.recordSuccess()
         networkCircuit.recordSuccess()
         contractCircuit.recordSuccess()
@@ -231,6 +244,9 @@ public struct FeedEngine {
 
     public mutating func record(_ error: TickerError, for symbol: Symbol) {
         let kind = FailureKind(error)
+        // Any answer at all, even a failure, came from Yahoo, so the network
+        // is back and the next drop starts again from the bottom.
+        if kind != .offline { clearOfflineHold() }
         switch kind {
         case .deadSymbol:
             dead.insert(symbol)
@@ -257,12 +273,26 @@ public struct FeedEngine {
             // future kind added to the arm below cannot inherit this
             // behaviour by accident.
             //
-            // There is no path-monitor edge to resume on. `TickerCore` takes
-            // no `Network` dependency and the app layer that would own
-            // `NWPathMonitor` does not exist yet — this is a plain statement
-            // of fact, not a seam waiting for a call. Retrying on the next
-            // cycle is the whole recovery story, and it is the right one:
-            // asking again costs one token and finds out immediately.
+            // The request never left the Mac, so it has not happened as far
+            // as Yahoo or the schedule is concerned. The symbol gets its turn
+            // back and the bucket its token. Moving on instead is what left a
+            // freshly booted Mac on dashes for a whole refresh interval: every
+            // symbol "had its turn" before the network came up, and the pass
+            // was over.
+            //
+            // There is no path-monitor edge to resume on (`TickerCore` takes
+            // no `Network` dependency), so a short, growing hold stands in for
+            // one. It is what paces these attempts, since the bucket no longer
+            // does.
+            if cursor > 0, liveSymbols.indices.contains(cursor - 1),
+               liveSymbols[cursor - 1] == symbol {
+                cursor -= 1
+            }
+            pacer.refund()
+            offlineRetryDelay = offlineRetryDelay == 0
+                ? RateConstants.offlineRetryBaseSeconds
+                : min(RateConstants.offlineRetryCapSeconds, offlineRetryDelay * 2)
+            offlineRetryAt = clock.nowSeconds + offlineRetryDelay
             return
         case .server, .unauthorized:
             networkCircuit.recordFailure()
@@ -371,6 +401,16 @@ public struct FeedEngine {
         // winding the cursor back to zero — is what lets the pass start at
         // whichever symbol the cursor is on and still cover all of them.
         refreshRemaining = liveSymbols.count
+        // The user can see their Wi-Fi icon and the engine cannot, so the
+        // click overrules the offline hold. Only the timer, not the ladder:
+        // the hold's length is kept, and a click that finds the network still
+        // down doubles it as usual.
+        offlineRetryAt = 0
+    }
+
+    private mutating func clearOfflineHold() {
+        offlineRetryDelay = 0
+        offlineRetryAt = 0
     }
 
     public var latest: [Symbol: Quote] { latestQuotes }

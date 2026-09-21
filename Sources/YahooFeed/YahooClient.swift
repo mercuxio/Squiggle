@@ -83,8 +83,6 @@ public struct YahooClient: QuoteFetching, SymbolSearching {
         let response: URLResponse
         do {
             (data, response) = try await session.data(for: request)
-        } catch let error as URLError where error.code == .notConnectedToInternet {
-            throw TickerError.offline
         } catch let error as URLError {
             // The code travels; the error does not. `String(describing:)` on a
             // `URLError` prints its `userInfo`, and URLSession fills that with
@@ -93,7 +91,7 @@ public struct YahooClient: QuoteFetching, SymbolSearching {
             // endpoint. `squigglectl doctor` prints this payload, and a
             // timeout is the single most common way this app fails, so it is
             // the line a user is most likely to paste into a support email.
-            throw TickerError.transport(.urlSession(code: error.code.rawValue))
+            throw TransportFaults.tickerError(for: error)
         } catch {
             throw TickerError.transport(.unrecognized)
         }
