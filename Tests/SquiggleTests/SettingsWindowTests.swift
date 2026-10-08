@@ -69,7 +69,7 @@ private func window(settings: TickerSettings = Settings(),
     var reported: [TickerSettings] = []
     let controller = window(launchAtLogin: spy.seam, onChange: { reported.append($0) })
 
-    controller.model.edit { $0.rows = 1 }
+    controller.model.edit { $0.display = "one" }
     controller.model.edit { $0.maxVisibleWidth = 300 }
 
     #expect(reported.map(\.rows) == [1, 1])
@@ -85,7 +85,7 @@ private func window(settings: TickerSettings = Settings(),
     var reported = 0
     let controller = window(launchAtLogin: spy.seam, onChange: { _ in reported += 1 })
     var settings = Settings()
-    settings.rows = 1
+    settings.display = "one"
 
     controller.apply(settings)
 
@@ -294,5 +294,5 @@ private func window(settings: TickerSettings = Settings(),
             as? [String: Any])
 
     let version = try #require(parsed["CFBundleShortVersionString"] as? String)
-    #expect(version == "1.0.3")
+    #expect(version == "1.0.4")
 }

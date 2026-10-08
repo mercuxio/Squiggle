@@ -6,6 +6,22 @@ All notable changes to Squiggle are recorded here. The format follows
 
 ## [Unreleased]
 
+## [1.0.4] — 2026-10-08
+
+### Added
+
+- A third display option, Flip. One stock at a time fills the menu bar and
+  turns over to the next every two seconds, like a flip clock. The Motion
+  choice is greyed out while Flip is on, because Flip is its own motion. With
+  Reduce Motion enabled the card fades between stocks instead of turning.
+
+### Changed
+
+- One row and two rows now put an interpunct between one stock and the next,
+  so the strip reads as a list rather than as a run of numbers. The dot sits
+  inside the space that was already there, so nothing moved and the scroll
+  takes exactly as long as it did.
+
 ## [1.0.3] — 2026-09-21
 
 ### Fixed

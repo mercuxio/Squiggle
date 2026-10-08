@@ -16,7 +16,7 @@ Requires **macOS 14 or later** on **Apple silicon**.
 
 ## Install
 
-**Download the release.** Get `Squiggle-1.0.3.zip` from
+**Download the release.** Get `Squiggle-1.0.4.zip` from
 [Releases](https://github.com/mercuxio/Squiggle/releases), unzip it, and drag
 `Squiggle.app` into `/Applications`.
 
@@ -39,10 +39,12 @@ interface is the menu bar item, and you quit it from the dropdown.
 
 ## What it does
 
-- **One or two rows.** Two rows is the default: two stacked marquees about
-  10pt tall, each scrolling on its own. One row fills the full menu bar height
-  at 13pt. Squiggle splits the watchlist between the rows by how wide each
-  symbol draws, not by how many symbols each row gets.
+- **One row, two rows, or Flip.** Two rows is the default: two stacked
+  marquees about 10pt tall, each scrolling on its own. One row fills the full
+  menu bar height at 13pt. Squiggle splits the watchlist between the rows by
+  how wide each symbol draws, not by how many symbols each row gets. An
+  interpunct divides one stock from the next. **Flip** shows one stock at a
+  time instead, turning over to the next every two seconds like a flip clock.
 - **Symbol, price, and change.** Each quote shows the symbol, the price, and a
   change marked with `▲`, `▼`, or `–`. The symbol is drawn in a heavier weight
   so it's easy to spot. The arrow always shows the direction, so the colour
@@ -66,7 +68,8 @@ crash. There are no alerts and no notifications.
 
 ### Settings
 
-- **Rows**: one or two.
+- **Display**: **One row**, **Two rows** (the default), or **Flip**. Flip is
+  its own motion, so the Motion choice below is greyed out while it is on.
 - **Refresh**: every 1, 3 (the default), 5, or 15 minutes. Requests are
   always at least 30 seconds apart, so a long watchlist can stretch the
   interval you picked. The setting shows the interval you'll actually get
@@ -75,7 +78,9 @@ crash. There are no alerts and no notifications.
   **Accessible** (blue and orange from the Okabe–Ito palette). Colour applies
   only to the change. The symbol and price always use the menu bar's own text
   colour. If *Differentiate without colour* is on, Squiggle uses Monochrome.
-- **Motion**: **Scroll** or **Step**, plus a **Speed** slider.
+- **Motion**: **Scroll** or **Step**, plus a **Speed** slider. Not used by
+  Flip, which turns its card over on its own two-second cadence — and fades
+  between stocks instead of turning when Reduce Motion is on.
 - **Width**: how much menu bar space the ticker takes up.
 - **Open at Login**, via `SMAppService`. If macOS is waiting for you to
   approve the login item, the setting says so and links to Login Items.
@@ -181,7 +186,7 @@ swift test --build-system native
 
 ## Status
 
-Version 1.0.3. The test suite passes, and the app is in daily use against live
+Version 1.0.4. The test suite passes, and the app is in daily use against live
 Yahoo data.
 
 Releases include an ad-hoc signed `Squiggle.app` in a zip; see
