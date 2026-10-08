@@ -22,9 +22,9 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.0.5</string>
+	<string>1.0.6</string>
 	<key>CFBundleVersion</key>
-	<string>6</string>
+	<string>7</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>14.0</string>
 	<key>NSHighResolutionCapable</key>
@@ -34,6 +34,25 @@
 	     matching activation policy for the case where the binary is run
 	     without a bundle at all. -->
 	<key>LSUIElement</key>
+	<true/>
+	<!-- Sparkle. The appcast is served from the main branch on GitHub, which
+	     is why scripts/appcast.sh ends with "commit and push": an installed
+	     copy reads the raw file, not the release page.
+
+	     SUPublicEDKey is the public half of an EdDSA key pair whose private
+	     half lives in the developer's login keychain and never in this repo.
+	     Sparkle refuses an update whose signature does not match, so a
+	     tampered zip on a mirror cannot be installed. The same key signs
+	     Sniffcast — one developer, one key, two apps.
+
+	     No SUEnableInstallerLauncherService: that key is for sandboxed apps,
+	     which need mach-lookup exceptions to reach Sparkle's XPC installer.
+	     Squiggle is not sandboxed, so Sparkle installs in-process. -->
+	<key>SUFeedURL</key>
+	<string>https://raw.githubusercontent.com/mercuxio/Squiggle/main/appcast.xml</string>
+	<key>SUPublicEDKey</key>
+	<string>10VIpTMQm9DmV5p6kNgsHBI3Fwd06CSUKhUM8HMhbis=</string>
+	<key>SUEnableAutomaticChecks</key>
 	<true/>
 </dict>
 </plist>

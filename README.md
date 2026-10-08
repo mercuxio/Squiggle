@@ -16,7 +16,7 @@ Requires **macOS 14 or later** on **Apple silicon**.
 
 ## Install
 
-**Download the release.** Get `Squiggle-1.0.5.zip` from
+**Download the release.** Get `Squiggle-1.0.6.zip` from
 [Releases](https://github.com/mercuxio/Squiggle/releases), unzip it, and drag
 `Squiggle.app` into `/Applications`.
 
@@ -44,7 +44,7 @@ interface is the menu bar item, and you quit it from the dropdown.
   menu bar height at 12pt. Squiggle splits the watchlist between the rows by
   how wide each symbol draws, not by how many symbols each row gets. An
   interpunct divides one stock from the next. **Flip** shows one stock at a
-  time instead, centred in the item and turning over to the next every two
+  time instead, centred in the item and turning over to the next every five
   seconds like a flip clock.
 - **Symbol, price, and change.** Each quote shows the symbol, the price, and a
   change marked with `▲`, `▼`, or `–`. The symbol is drawn in a heavier weight
@@ -60,6 +60,10 @@ interface is the menu bar item, and you quit it from the dropdown.
   the menu bar, with the full details of every quote and a button to remove a
   symbol. The footer has Refresh Now, Add Symbol…, Settings…, a link to buy me
   a coffee, and Quit.
+- **It updates itself.** Settings has a Check for Updates… button and an
+  automatic-check toggle. Updates come from the GitHub release and are
+  verified against a signature before anything is installed, so a tampered
+  copy on a mirror can't be handed to you as an update.
 - **A symbol picker you search.** Type a company name or a ticker and pick a
   result. Stocks, ETFs, indices, currency pairs, and crypto all work. The
   watchlist holds up to 20 symbols.
@@ -80,9 +84,12 @@ crash. There are no alerts and no notifications.
   only to the change. The symbol and price always use the menu bar's own text
   colour. If *Differentiate without colour* is on, Squiggle uses Monochrome.
 - **Motion**: **Scroll** or **Step**, plus a **Speed** slider. Not used by
-  Flip, which turns its card over on its own two-second cadence — and fades
+  Flip, which turns its card over on its own five-second cadence — and fades
   between stocks instead of turning when Reduce Motion is on.
 - **Width**: how much menu bar space the ticker takes up.
+- **Check for updates automatically**, plus a button to check right now.
+  Sparkle keeps this one preference in its own defaults rather than in
+  Squiggle's JSON, because Sparkle is what reads it.
 - **Open at Login**, via `SMAppService`. If macOS is waiting for you to
   approve the login item, the setting says so and links to Login Items.
 
@@ -149,7 +156,9 @@ swift build --build-system native -c release
 
 `package-app.sh` puts together `build/Squiggle.app`. SwiftPM only produces a
 bare executable and has no idea what an app bundle is, so the script builds
-the folder layout, `Info.plist`, icon, and signature itself. The signature is
+the folder layout, `Info.plist`, icon, embedded `Sparkle.framework`, and
+signature itself. A binary run straight out of `.build` finds Sparkle; a
+bundle assembled any other way does not. The signature is
 ad-hoc: good enough to run the app yourself, not good enough to distribute it.
 Distribution would need a Developer ID and notarization.
 
@@ -167,7 +176,8 @@ interface.
 | `Sources/squigglectl` | The CLI: hand-written argument parsing and text output. |
 | `Tests/Fixtures` | Yahoo responses recorded live, used to test the parser offline. |
 | `Tools/GenerateIcon.swift` | Writes the app icon as an Icon Composer bundle, `Resources/AppIcon.icon`. `./scripts/make-icon.sh` compiles it with Xcode's `actool` into the committed `Resources/Assets.car` and `AppIcon.icns`. |
-| `docs/specs/` | The design spec, which is the final word on behaviour. |
+| `docs/specs/` | The design spec, which is the final word on behaviour. The spec predates the updater and still says `swift-testing` is the only dependency. |
+| `appcast.xml` | The update feed installed copies read from the `main` branch. `./scripts/appcast.sh` adds a signed entry for the current version after a release is packaged. |
 
 `TickerCore` never sleeps and never checks the time. Every decision is a pure
 function that gets the current time from a monotonic clock passed in, so a
@@ -187,7 +197,7 @@ swift test --build-system native
 
 ## Status
 
-Version 1.0.5. The test suite passes, and the app is in daily use against live
+Version 1.0.6. The test suite passes, and the app is in daily use against live
 Yahoo data.
 
 Releases include an ad-hoc signed `Squiggle.app` in a zip; see

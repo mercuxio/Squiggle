@@ -6,6 +6,20 @@ All notable changes to Squiggle are recorded here. The format follows
 
 ## [Unreleased]
 
+## [1.0.6] — 2026-10-08
+
+### Added
+
+- Squiggle checks for its own updates. Settings has a "Check for Updates…"
+  button and an automatic-check toggle; updates are downloaded from the
+  GitHub release and verified against an EdDSA signature before they are
+  installed. Built on Sparkle, the same updater Sniffcast uses.
+
+### Changed
+
+- Flip shows each stock for five seconds rather than two. Two was brief
+  enough that a glance away lost the symbol you were reading.
+
 ## [1.0.5] — 2026-10-08
 
 ### Changed
