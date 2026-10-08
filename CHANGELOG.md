@@ -6,6 +6,16 @@ All notable changes to Squiggle are recorded here. The format follows
 
 ## [Unreleased]
 
+## [1.0.5] — 2026-10-08
+
+### Changed
+
+- Flip centres its stock in the menu bar item rather than aligning it to the
+  left edge, and takes twice as long over the turn — at 0.3s the flip read as
+  a blink rather than as a card turning over.
+- One row and Flip draw at 12pt rather than 13, which sits better beside the
+  clock. Two rows are unchanged at 10pt.
+
 ## [1.0.4] — 2026-10-08
 
 ### Added

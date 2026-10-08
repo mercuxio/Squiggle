@@ -16,7 +16,7 @@ Requires **macOS 14 or later** on **Apple silicon**.
 
 ## Install
 
-**Download the release.** Get `Squiggle-1.0.4.zip` from
+**Download the release.** Get `Squiggle-1.0.5.zip` from
 [Releases](https://github.com/mercuxio/Squiggle/releases), unzip it, and drag
 `Squiggle.app` into `/Applications`.
 
@@ -41,10 +41,11 @@ interface is the menu bar item, and you quit it from the dropdown.
 
 - **One row, two rows, or Flip.** Two rows is the default: two stacked
   marquees about 10pt tall, each scrolling on its own. One row fills the full
-  menu bar height at 13pt. Squiggle splits the watchlist between the rows by
+  menu bar height at 12pt. Squiggle splits the watchlist between the rows by
   how wide each symbol draws, not by how many symbols each row gets. An
   interpunct divides one stock from the next. **Flip** shows one stock at a
-  time instead, turning over to the next every two seconds like a flip clock.
+  time instead, centred in the item and turning over to the next every two
+  seconds like a flip clock.
 - **Symbol, price, and change.** Each quote shows the symbol, the price, and a
   change marked with `▲`, `▼`, or `–`. The symbol is drawn in a heavier weight
   so it's easy to spot. The arrow always shows the direction, so the colour
@@ -186,7 +187,7 @@ swift test --build-system native
 
 ## Status
 
-Version 1.0.4. The test suite passes, and the app is in daily use against live
+Version 1.0.5. The test suite passes, and the app is in daily use against live
 Yahoo data.
 
 Releases include an ad-hoc signed `Squiggle.app` in a zip; see

@@ -294,5 +294,5 @@ private func window(settings: TickerSettings = Settings(),
             as? [String: Any])
 
     let version = try #require(parsed["CFBundleShortVersionString"] as? String)
-    #expect(version == "1.0.4")
+    #expect(version == "1.0.5")
 }
