@@ -29,8 +29,8 @@ import Testing
 // outgoing and incoming halves from overlapping.
 @Test func aCardIsFaceOnThroughItsOwnSlotAndEdgeOnAtItsEnds() {
     let frames = FlipPolicy.rotation(index: 0, count: 2)
-    // Four seconds of cycle, a 0.3s turn, so each half-turn is 0.0375 of it.
-    #expect(frames.keyTimes == [0, 0.0375, 0.4625, 0.5, 1])
+    // Four seconds of cycle, a 0.6s turn, so each half-turn is 0.075 of it.
+    #expect(frames.keyTimes == [0, 0.075, 0.425, 0.5, 1])
     #expect(frames.values == [FlipPolicy.quarterTurn, 0, 0,
                               -FlipPolicy.quarterTurn, -FlipPolicy.quarterTurn])
 }

@@ -16,7 +16,12 @@ enum FlipPolicy {
     static let dwellSeconds: Double = 2
     /// How long the turn itself takes — half of it spent on the card leaving,
     /// half on the card arriving, so only one of the two is ever mid-flip.
-    static let flipSeconds: Double = 0.3
+    ///
+    /// 0.6s, twice the 0.3 it started at: at the shorter duration the turn
+    /// read as a blink rather than as a card turning over, which is the whole
+    /// point of the mode. Still comfortably under `dwellSeconds`, so a card
+    /// is face-on for most of its own slot.
+    static let flipSeconds: Double = 0.6
     /// A quarter turn is edge-on, which is where a card vanishes and where
     /// the next one comes from.
     static let quarterTurn: Double = .pi / 2
@@ -133,7 +138,7 @@ enum FlipPolicy {
     /// overlap.
     ///
     /// The half can never swallow a whole slot: the transition is a fixed
-    /// 0.3s against a slot of `dwellSeconds`, so `half` is 0.075 of a slot
+    /// 0.6s against a slot of `dwellSeconds`, so `half` is 0.15 of a slot
     /// however many cards there are.
     private static func slot(index: Int, count: Int,
                              transitionSeconds: Double) -> (start: Double, end: Double,

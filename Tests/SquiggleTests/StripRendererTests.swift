@@ -7,10 +7,11 @@ import Testing
 // the thing under test and not the machine the test runs on.
 private let barHeight = 22.0
 
-@Test func oneRowIsThirteenPoint() {
+// Flip is a one-row display, so this is the Flip card's size as well.
+@Test func oneRowIsTwelvePoint() {
     let metrics = StripRenderer.metrics(rows: 1, barHeight: barHeight)
     #expect(metrics.rowCount == 1)
-    #expect(metrics.font.pointSize == 13)
+    #expect(metrics.font.pointSize == 12)
     #expect(metrics.rowHeight == 22.0)
 }
 
@@ -245,19 +246,44 @@ private let barHeight = 22.0
 
 // A rotation about the layer's top edge would swing the card out of the menu
 // bar instead of turning it in place. Moving the anchor to the middle and the
-// position down by the same half-height leaves the card drawn exactly where a
-// row would be — which is what this asserts, not just the anchor.
+// position down by the same half-height leaves the card drawn at the right
+// height — which is what this asserts, not just the anchor.
 @Test func aCardTurnsAboutItsOwnCentrelineWithoutMoving() {
     let metrics = StripRenderer.metrics(rows: 1, barHeight: barHeight)
     let card = StripLayout.Row(
         segments: [StripLayout.Segment(text: "AAPL ", role: .label, x: 0, width: 40)],
         contentWidth: 40)
 
-    let layer = StripRenderer.cardLayer(card, metrics: metrics, scale: 2,
+    let layer = StripRenderer.cardLayer(card, metrics: metrics, visibleWidth: 40,
+                                        scale: 2,
                                         color: { _ in NSColor.labelColor.cgColor })
     #expect(layer.anchorPoint == CGPoint(x: 0, y: 0.5))
     #expect(layer.position == CGPoint(x: 0, y: metrics.rowHeight / 2))
     #expect(layer.frame == CGRect(x: 0, y: 0, width: 40, height: metrics.rowHeight))
+}
+
+// The status item is a fixed width (spec §5.1) and a single card is almost
+// always narrower than it, so a left-aligned card leaves a conspicuous gap on
+// the right.
+@Test func aCardSitsInTheMiddleOfTheWindow() {
+    let metrics = StripRenderer.metrics(rows: 1, barHeight: barHeight)
+    let card = StripLayout.Row(
+        segments: [StripLayout.Segment(text: "AAPL ", role: .label, x: 0, width: 40)],
+        contentWidth: 40)
+
+    let layer = StripRenderer.cardLayer(card, metrics: metrics, visibleWidth: 200,
+                                        scale: 2,
+                                        color: { _ in NSColor.labelColor.cgColor })
+    #expect(layer.position.x == 80)
+}
+
+// Centring is arithmetic, so it is tested as arithmetic: the interesting case
+// is the card that does not fit, where a negative origin would hide the symbol
+// off the left edge rather than clip the change off the right.
+@Test func aCardWiderThanTheWindowStartsAtTheLeftEdge() {
+    #expect(StripRenderer.cardOrigin(contentWidth: 260, visibleWidth: 200) == 0)
+    #expect(StripRenderer.cardOrigin(contentWidth: 200, visibleWidth: 200) == 0)
+    #expect(StripRenderer.cardOrigin(contentWidth: 100, visibleWidth: 200) == 50)
 }
 
 // Every card in the deck is built at once and its own keyframes decide when it
@@ -269,7 +295,8 @@ private let barHeight = 22.0
         segments: [StripLayout.Segment(text: "AAPL ", role: .label, x: 0, width: 40)],
         contentWidth: 40)
 
-    let layer = StripRenderer.cardLayer(card, metrics: metrics, scale: 2,
+    let layer = StripRenderer.cardLayer(card, metrics: metrics, visibleWidth: 200,
+                                        scale: 2,
                                         color: { _ in NSColor.labelColor.cgColor })
     #expect(layer.opacity == 0)
     let drawn = try #require(layer.sublayers)

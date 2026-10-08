@@ -43,7 +43,11 @@ enum StripRenderer {
         // than shared because `RowSplitter` lives in TickerCore and takes no
         // interest in fonts; `StripRendererTests` asserts the two agree.
         let rowCount = max(1, min(rows, 2))
-        let size: CGFloat = rowCount == 1 ? 13 : 10
+        // 12, not the 13 this started at: at full menu bar height 13pt sat
+        // heavier than the clock beside it. One point down matches the rest
+        // of the bar and costs no legibility. Flip comes through here too —
+        // a deck is one row by definition — so the two share the figure.
+        let size: CGFloat = rowCount == 1 ? 12 : 10
         return Metrics(
             rowCount: rowCount,
             font: .monospacedDigitSystemFont(ofSize: size, weight: .regular),
@@ -194,14 +198,40 @@ enum StripRenderer {
     ///
     /// One copy, never two: tiling exists to hide a marquee's wrap, and a card
     /// does not scroll.
+    ///
+    /// `visibleWidth` is the only thing a card needs the window for: it is
+    /// centred in it rather than left-aligned. A marquee has no use for
+    /// centring — its content is wider than the window by definition — but a
+    /// deck of one symbol is narrower than the status item almost always, and
+    /// a single short card pinned to the left edge of a fixed-width item
+    /// reads as a layout mistake rather than as a choice.
     static func cardLayer(_ card: StripLayout.Row,
                           metrics: Metrics,
+                          visibleWidth: Double,
                           scale: Double,
                           color: (ColorRole) -> CGColor) -> CALayer {
         let layer = rowLayer(card, metrics: metrics, scale: scale, copies: 1, color: color)
         layer.anchorPoint = CGPoint(x: 0, y: 0.5)
-        layer.position = CGPoint(x: 0, y: metrics.rowHeight / 2)
+        layer.position = CGPoint(x: cardOrigin(contentWidth: card.contentWidth,
+                                               visibleWidth: visibleWidth),
+                                 y: metrics.rowHeight / 2)
         layer.opacity = 0
         return layer
+    }
+
+    /// Where a card's left edge goes so the card sits in the middle of the
+    /// window.
+    ///
+    /// Floored at zero, which is what makes this worth a function. A card
+    /// wider than the window would otherwise get a negative origin and hang
+    /// off the left, hiding the symbol — the one part of a card that is
+    /// always worth reading — behind the edge of the status item. Clipped on
+    /// the right is the lesser loss.
+    ///
+    /// The anchor point plays no part: `rotation.x` turns a layer about a
+    /// horizontal axis, so only `anchorPoint.y` affects the turn and this
+    /// value is the left edge either way.
+    static func cardOrigin(contentWidth: Double, visibleWidth: Double) -> Double {
+        max(0, (visibleWidth - contentWidth) / 2)
     }
 }

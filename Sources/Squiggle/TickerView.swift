@@ -96,6 +96,7 @@ final class TickerView: NSView {
             let inherited = carried.first ?? 0
             for (index, card) in layout.rows.enumerated() {
                 let cardLayer = StripRenderer.cardLayer(card, metrics: metrics,
+                                                        visibleWidth: visibleWidth,
                                                         scale: scale, color: color)
                 host.addSublayer(cardLayer)
                 rowLayers.append(cardLayer)
