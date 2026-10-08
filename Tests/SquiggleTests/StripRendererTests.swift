@@ -302,3 +302,61 @@ private let barHeight = 22.0
     let drawn = try #require(layer.sublayers)
     #expect(drawn.count == 1, "a card does not scroll, so it never tiles")
 }
+
+// A card does not scroll, so anything past the right edge of the status item
+// is never read: an over-wide card shrinks its type to fit instead of being
+// clipped. The arithmetic is the part a test can see.
+@Test func aCardThatFitsKeepsItsTypeAtFullSize() {
+    #expect(StripRenderer.cardShrink(contentWidth: 100, visibleWidth: 200, fontSize: 12) == 1)
+    #expect(StripRenderer.cardShrink(contentWidth: 200, visibleWidth: 200, fontSize: 12) == 1)
+}
+
+@Test func anOverWideCardShrinksExactlyEnoughToFit() {
+    let shrink = StripRenderer.cardShrink(contentWidth: 260, visibleWidth: 200, fontSize: 12)
+    #expect(abs(260 * shrink - 200) < 0.001)
+}
+
+// Past the floor, clipping is the better answer: 5pt digits in the menu bar
+// are not readable at a glance, which is the only thing a card is for.
+@Test func shrinkingStopsAtTheMinimumFontSize() {
+    let shrink = StripRenderer.cardShrink(contentWidth: 1200, visibleWidth: 200, fontSize: 12)
+    #expect(abs(12 * shrink - StripRenderer.minimumCardFontSize) < 0.001)
+}
+
+// Degenerate inputs: a window of no width cannot be fitted into, and dividing
+// by a zero font size is not an answer.
+@Test func shrinkRefusesDegenerateInputs() {
+    #expect(StripRenderer.cardShrink(contentWidth: 260, visibleWidth: 0, fontSize: 12) == 1)
+    #expect(StripRenderer.cardShrink(contentWidth: 260, visibleWidth: 200, fontSize: 0) == 1)
+}
+
+// The whole point, end to end: the built layer is no wider than the window it
+// has to sit in, and its text is set smaller to get there.
+@Test func anOverWideCardIsBuiltSmallEnoughToFit() throws {
+    let metrics = StripRenderer.metrics(rows: 1, barHeight: barHeight)
+    let card = StripLayout.Row(
+        segments: [
+            StripLayout.Segment(text: "BRK-B ", role: .label, x: 0, width: 120,
+                                emphasized: true),
+            StripLayout.Segment(text: "+1.23%", role: .direction(.up), x: 120, width: 140),
+        ],
+        contentWidth: 260)
+
+    let layer = StripRenderer.cardLayer(card, metrics: metrics, visibleWidth: 200,
+                                        scale: 2,
+                                        color: { _ in NSColor.labelColor.cgColor })
+
+    #expect(layer.bounds.width <= 200.001)
+    // Shrunk to *exactly* the window, so flush at the left edge is centred:
+    // there is no slack left to divide. Cards with slack are `cardOrigin`'s.
+    #expect(layer.position.x == 0)
+    let drawn = try #require(layer.sublayers?.compactMap { $0 as? CATextLayer })
+    #expect(drawn.count == 2)
+    for text in drawn {
+        #expect(text.fontSize < metrics.font.pointSize)
+        #expect(text.fontSize >= StripRenderer.minimumCardFontSize)
+    }
+    // The second segment has to move left with the type, or the card would be
+    // small text laid out at full-size offsets — a line full of holes.
+    #expect(drawn[1].frame.minX < 120)
+}

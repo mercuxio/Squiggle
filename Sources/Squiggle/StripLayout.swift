@@ -49,6 +49,26 @@ struct StripLayout: Equatable {
         /// translates by exactly this, and a second copy of the row drawn at
         /// `x + contentWidth` tiles it seamlessly.
         let contentWidth: Double
+
+        /// The same row measured for type a fraction of the size.
+        ///
+        /// Multiplication rather than re-measurement, and that is an
+        /// assumption worth naming: a glyph's advance in a scalable font is
+        /// linear in point size, so a row set at 8pt is a row set at 12pt
+        /// times two thirds. Re-measuring would be exact, but the measurement
+        /// closure belongs to the caller that built the layout (R131) and is
+        /// long gone by the time a renderer discovers the row does not fit.
+        ///
+        /// Used only by Flip, whose cards shrink to fit the status item
+        /// instead of scrolling — see `StripRenderer.cardShrink`.
+        func scaled(by factor: Double) -> Row {
+            Row(segments: segments.map {
+                    Segment(text: $0.text, role: $0.role,
+                            x: $0.x * factor, width: $0.width * factor,
+                            emphasized: $0.emphasized)
+                },
+                contentWidth: contentWidth * factor)
+        }
     }
 
     let rows: [Row]

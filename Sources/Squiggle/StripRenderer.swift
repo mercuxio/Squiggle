@@ -34,7 +34,28 @@ enum StripRenderer {
         /// wrong offsets.
         let emphasisFont: NSFont
         let rowHeight: Double
+
+        /// The same metrics with both fonts a fraction of their size, for a
+        /// Flip card that has to shrink to fit (see `cardShrink`). The row
+        /// height is deliberately untouched: the card still occupies the whole
+        /// menu bar, and `rowLayer` centres the smaller text inside it against
+        /// the font's own ascent and descent.
+        func scaled(by factor: Double) -> Metrics {
+            Metrics(
+                rowCount: rowCount,
+                font: .monospacedDigitSystemFont(
+                    ofSize: font.pointSize * factor, weight: .regular),
+                emphasisFont: .monospacedDigitSystemFont(
+                    ofSize: emphasisFont.pointSize * factor, weight: .semibold),
+                rowHeight: rowHeight)
+        }
     }
+
+    /// How small a Flip card's text may get before clipping is the better
+    /// answer. Eight points is about the floor for the menu bar: below it the
+    /// digits stop being readable at a glance, which is the only thing the
+    /// card is for.
+    static let minimumCardFontSize: Double = 8
 
     /// R135: monospaced digits, so a price changing from `178.11` to `178.88`
     /// does not shift everything to its right.
@@ -210,6 +231,16 @@ enum StripRenderer {
                           visibleWidth: Double,
                           scale: Double,
                           color: (ColorRole) -> CGColor) -> CALayer {
+        // A card too wide for the status item shrinks to fit rather than being
+        // clipped. Both the type and the positions it was measured at have to
+        // come down together — a smaller font with the original offsets would
+        // leave the card full of gaps.
+        let shrink = cardShrink(contentWidth: card.contentWidth,
+                                visibleWidth: visibleWidth,
+                                fontSize: metrics.font.pointSize)
+        let card = shrink < 1 ? card.scaled(by: shrink) : card
+        let metrics = shrink < 1 ? metrics.scaled(by: shrink) : metrics
+
         let layer = rowLayer(card, metrics: metrics, scale: scale, copies: 1, color: color)
         layer.anchorPoint = CGPoint(x: 0, y: 0.5)
         layer.position = CGPoint(x: cardOrigin(contentWidth: card.contentWidth,
@@ -217,6 +248,32 @@ enum StripRenderer {
                                  y: metrics.rowHeight / 2)
         layer.opacity = 0
         return layer
+    }
+
+    /// How far a card's type has to come down to fit the status item, as a
+    /// fraction of its font size — 1 when it already fits.
+    ///
+    /// A marquee answers this problem by scrolling, which is why only Flip
+    /// needs it: a card does not move, so anything past the right edge of the
+    /// status item is simply never read. Shrinking is the only way a long
+    /// symbol at a four-figure price can show all of itself.
+    ///
+    /// Measured against `contentWidth`, which includes the trailing gap, for
+    /// the same reason `cardOrigin` is: the two have to agree about how wide
+    /// the card is or the shrunk card would not end up centred. It makes this
+    /// very slightly conservative — a card overflowing by less than its gap
+    /// shrinks when it need not — and a gap's worth of air at the edges of a
+    /// fixed-width item is worth keeping anyway.
+    ///
+    /// Floored at `minimumCardFontSize`, so a watchlist entry long enough to
+    /// need 5pt type gets clipped by `cardOrigin` as before rather than
+    /// rendered unreadably small.
+    static func cardShrink(contentWidth: Double,
+                           visibleWidth: Double,
+                           fontSize: Double) -> Double {
+        guard contentWidth > visibleWidth, visibleWidth > 0, fontSize > 0 else { return 1 }
+        let smallest = min(1, minimumCardFontSize / fontSize)
+        return max(visibleWidth / contentWidth, smallest)
     }
 
     /// Where a card's left edge goes so the card sits in the middle of the

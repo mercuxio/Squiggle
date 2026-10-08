@@ -380,3 +380,26 @@ private func quote(_ raw: String, price: Double, change: Double?) throws -> Quot
                                    locale: posix, measure: tenPerCharacter)
     #expect(layout.rows.isEmpty)
 }
+
+// Flip's shrink-to-fit (`StripRenderer.cardShrink`) re-measures a row by
+// multiplication, which works because a scalable font's advances are linear in
+// point size. Nothing moves relative to anything else; everything moves in.
+@Test func scalingARowBringsItsOffsetsAndWidthsDownTogether() {
+    let row = StripLayout.Row(
+        segments: [
+            StripLayout.Segment(text: "AAPL ", role: .label, x: 0, width: 50,
+                                emphasized: true),
+            StripLayout.Segment(text: "-0.42%", role: .direction(.down), x: 50, width: 60),
+        ],
+        contentWidth: 130)
+
+    let half = row.scaled(by: 0.5)
+
+    #expect(half.contentWidth == 65)
+    #expect(half.segments.map(\.x) == [0, 25])
+    #expect(half.segments.map(\.width) == [25, 30])
+    // Everything that is not a measurement is carried through untouched.
+    #expect(half.segments.map(\.text) == row.segments.map(\.text))
+    #expect(half.segments.map(\.role) == row.segments.map(\.role))
+    #expect(half.segments.map(\.emphasized) == [true, false])
+}
