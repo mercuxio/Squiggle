@@ -6,6 +6,17 @@ All notable changes to Squiggle are recorded here. The format follows
 
 ## [Unreleased]
 
+## [1.0.7] — 2026-10-08
+
+### Fixed
+
+- Clicking the menu bar item a second time closes the dropdown. It used to
+  appear to do nothing: macOS hands activation to the menu bar before it
+  dispatches the item's own action, so the panel was being closed and
+  immediately reopened.
+- In Flip, a stock whose card drew wider than the menu bar item now shrinks
+  its type to fit rather than having its right-hand side clipped away.
+
 ## [1.0.6] — 2026-10-08
 
 ### Added
