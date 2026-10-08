@@ -3,6 +3,15 @@
   <channel>
     <title>Squiggle</title>
     <item>
+      <title>Squiggle 1.0.8</title>
+      <pubDate>Thu, 08 Oct 2026 03:35:19 +0000</pubDate>
+      <sparkle:version>9</sparkle:version>
+      <sparkle:shortVersionString>1.0.8</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <sparkle:releaseNotesLink>https://github.com/mercuxio/Squiggle/releases/tag/v1.0.8</sparkle:releaseNotesLink>
+      <enclosure url="https://github.com/mercuxio/Squiggle/releases/download/v1.0.8/Squiggle-1.0.8.zip" type="application/octet-stream" sparkle:edSignature="NiuEeabbC3Z4w6X/M+Kruf9I3N4PmhePFjh8eV6awog9qkdKDNEkT4DsiKN+Uoxc0Gxe05sx94TEG8hjU7A9AQ==" length="3145181"/>
+    </item>
+    <item>
       <title>Squiggle 1.0.7</title>
       <pubDate>Thu, 08 Oct 2026 03:22:33 +0000</pubDate>
       <sparkle:version>8</sparkle:version>
