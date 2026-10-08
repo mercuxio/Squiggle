@@ -2,42 +2,52 @@ import AppKit
 import Testing
 @testable import Squiggle
 
-// The status item's rectangle, as `anchorFrame()` would report it: menu bar
-// height, somewhere near the right-hand end of a wide display.
-private let anchor = NSRect(x: 1621, y: 1416, width: 248, height: 24)
+// The window in which a status-item click still counts as the same gesture
+// that deactivated the app. Read from the type rather than written as a
+// literal: a test that hard-coded 0.35 would start lying the moment the
+// window was retuned.
+private let window = StatusPanel.reopenSuppressionWindow
 
-/// `NSApplication.didResignActiveNotification` is Squiggle's only dismissal for
-/// a keyboard-only app switch — a `.popUpMenu` panel otherwise floats over
-/// every other app — but it also fires on the *second* click of the status
-/// item, before the button's own action runs. Closing there left `toggle`
-/// finding nothing showing and reopening immediately, so the click looked dead.
-@Suite struct StatusPanelResignActiveTests {
-    @Test func aClickHeldOnTheStatusItemLeavesThePanelOpen() {
-        #expect(
-            !StatusPanel.shouldClose(
-                onResignActiveWith: 1, at: NSPoint(x: 1745, y: 1427), anchor: anchor))
-    }
+@Test func aClickArrivingRightAfterADeactivationCloseDoesNotReopen() {
+    // The reported defect. Clicking the menu bar while the panel is open
+    // deactivates Squiggle, macOS delivers that before the button's action,
+    // and the panel is already shut by the time `toggleDropdown` looks. Without
+    // this the toggle sees nothing showing and opens it again, so the user's
+    // second click appears to do nothing.
+    #expect(StatusPanel.suppressesReopen(closedAt: 1_000, now: 1_000.01))
+}
 
-    /// ⌘-Tab and Mission Control: no button down, whatever the pointer happens
-    /// to be hovering over — including the status item, which is where a user
-    /// who just opened the dropdown has left the cursor.
-    @Test func aKeyboardSwitchClosesEvenOverTheStatusItem() {
-        #expect(
-            StatusPanel.shouldClose(
-                onResignActiveWith: 0, at: NSPoint(x: 1745, y: 1427), anchor: anchor))
-    }
+@Test func aClickLongAfterADeactivationCloseOpensNormally() {
+    // ⌘-Tab away, come back later and click the icon: that is a first click,
+    // and it must open the panel.
+    #expect(!StatusPanel.suppressesReopen(closedAt: 1_000, now: 1_000 + window + 0.01))
+}
 
-    @Test func aClickHeldElsewhereCloses() {
-        #expect(
-            StatusPanel.shouldClose(
-                onResignActiveWith: 1, at: NSPoint(x: 400, y: 600), anchor: anchor))
-    }
+@Test func aClickWithNoDeactivationCloseBehindItOpensNormally() {
+    // The ordinary first click: nothing has closed the panel, so there is
+    // nothing to suppress.
+    #expect(!StatusPanel.suppressesReopen(closedAt: nil, now: 1_000))
+}
 
-    /// No anchor yet — `anchorFrame()` returns `.zero`, which contains nothing,
-    /// so the rule falls through to closing as usual.
-    @Test func noAnchorClosesOnAnyPress() {
-        #expect(
-            StatusPanel.shouldClose(
-                onResignActiveWith: 1, at: NSPoint(x: 0, y: 0), anchor: .zero))
-    }
+@Test func theWindowIsMeasuredForwardsOnly() {
+    // `systemUptime` is monotonic, so this should not arise — but a negative
+    // gap means the two readings cannot be two halves of one click, and
+    // treating it as one would swallow a real click.
+    #expect(!StatusPanel.suppressesReopen(closedAt: 1_000, now: 999.9))
+}
+
+@Test func theEdgeOfTheWindowIsOutsideIt() {
+    // Named so the boundary is a decision rather than an accident: at exactly
+    // the window the click opens. Half-open keeps the two tests above from
+    // overlapping on one value.
+    #expect(!StatusPanel.suppressesReopen(closedAt: 1_000, now: 1_000 + window))
+}
+
+@MainActor
+@Test func thePanelAnswersTheSuppressionQuestionOnlyOnce() {
+    // `toggleDropdown` consumes the answer: the click after a suppressed one
+    // is a fresh click and must open the panel, even though it arrives inside
+    // the same window.
+    let panel = StatusPanel()
+    #expect(!panel.closedByDeactivation())
 }

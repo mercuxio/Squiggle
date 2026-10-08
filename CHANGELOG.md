@@ -6,6 +6,19 @@ All notable changes to Squiggle are recorded here. The format follows
 
 ## [Unreleased]
 
+## [1.0.8] — 2026-10-08
+
+### Fixed
+
+- A second click on the status item now hides the dropdown. Clicking the menu
+  bar while the panel is open deactivates Squiggle, and macOS delivers that
+  *before* it dispatches the button's action — so the panel was already shut by
+  the time the toggle looked, which found nothing showing and opened it again.
+  The toggle now recognises a close that deactivation has just performed and
+  leaves the panel down. 1.0.7 tried to recognise the click instead, by asking
+  whether a mouse button was still physically held over the status item; that
+  held for a synthesised click and not for a real one.
+
 ## [1.0.7] — 2026-10-08
 
 ### Fixed

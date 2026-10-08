@@ -131,6 +131,7 @@ final class StatusPanel: NSPanel {
     func show(under button: NSStatusBarButton, quit: @escaping () -> Void) {
         guard let buttonWindow = button.window else { return }
         self.anchor = button
+        closedByDeactivationAt = nil
         let frame = buttonWindow.convertToScreen(button.convert(button.bounds, to: nil))
         setFrameTopLeftPoint(origin(under: frame, on: buttonWindow.screen))
         // An `LSUIElement` app is never frontmost on its own, and without this
@@ -209,14 +210,11 @@ final class StatusPanel: NSPanel {
             forName: NSApplication.didResignActiveNotification,
             object: NSApp, queue: .main
         ) { [weak self] _ in
-            // Captured out here: the notification arrives while the press that
-            // caused it is still in flight, and the state is gone by the time a
-            // later run loop turn would look.
-            let buttons = NSEvent.pressedMouseButtons
-            let location = NSEvent.mouseLocation
             MainActor.assumeIsolated {
-                guard let self, self.shouldClose(onResignActiveWith: buttons, at: location)
-                else { return }
+                guard let self, self.isVisible else { return }
+                // Stamped before the close, and read by `toggleDropdown` a
+                // moment later: see `closedByDeactivation`.
+                self.closedByDeactivationAt = ProcessInfo.processInfo.systemUptime
                 self.close()
             }
         }
@@ -245,33 +243,53 @@ final class StatusPanel: NSPanel {
         close()
     }
 
-    /// Whether losing active status should take the panel with it.
+    /// When deactivation last took the panel down, on the uptime clock.
     ///
-    /// Not always, and the exception is the second click on the status item.
-    /// Clicking the menu bar hands activation to it, and macOS delivers that
-    /// *before* the button's own action — so closing here unconditionally left
-    /// `toggleDropdown` finding nothing showing and opening the panel straight
-    /// back up. The user's second click appeared to do nothing at all.
+    /// `systemUptime` rather than `Date`: it is monotonic, so a clock
+    /// correction between the close and the click cannot make the gap
+    /// negative or enormous.
+    private var closedByDeactivationAt: TimeInterval?
+
+    /// How long after a deactivation close a status-item click still counts as
+    /// the same gesture. Long enough to cover the run loop turns between the
+    /// notification and the button's action, short enough that a deliberate
+    /// second click is never swallowed.
+    nonisolated static let reopenSuppressionWindow: TimeInterval = 0.35
+
+    /// Whether the panel was just closed by deactivation — meaning the click
+    /// now reaching the status item is the *same* click that closed it.
     ///
-    /// A mouse button still physically down with the pointer inside the status
-    /// item is exactly that press and nothing else. ⌘-Tab, Mission Control and
-    /// a click on another app all arrive with no button held, or held somewhere
-    /// other than the anchor, so they still dismiss.
+    /// This is the second click on the status item, and it is why the rule
+    /// cannot be a judgement about the press itself. `show` activates the app,
+    /// so while the panel is open Squiggle is frontmost; clicking the menu bar
+    /// hands activation away, and macOS delivers `didResignActive` *before* it
+    /// dispatches the button's action. The panel is therefore already shut by
+    /// the time `toggleDropdown` runs, which finds nothing showing and opens it
+    /// straight back up: the user's second click appears to do nothing.
     ///
-    /// - Parameters:
-    ///   - buttons: `NSEvent.pressedMouseButtons` as of the notification.
-    ///   - location: the pointer position as of the notification.
-    func shouldClose(onResignActiveWith buttons: Int, at location: NSPoint) -> Bool {
-        Self.shouldClose(onResignActiveWith: buttons, at: location, anchor: anchorFrame())
+    /// Reading the close rather than the press is what makes this immune to
+    /// timing. An earlier attempt asked whether a mouse button was still
+    /// physically down over the status item, which held for a synthesised
+    /// click and not for a real one.
+    ///
+    /// Consuming: the answer is true once. A click outside the window — the
+    /// user ⌘-Tabbed away and then went for the icon — must open the panel
+    /// normally, and so must the click after a suppressed one.
+    func closedByDeactivation(
+        now: TimeInterval = ProcessInfo.processInfo.systemUptime
+    ) -> Bool {
+        defer { closedByDeactivationAt = nil }
+        return Self.suppressesReopen(closedAt: closedByDeactivationAt, now: now)
     }
 
-    /// The rule itself, free of the status bar — and of the main actor, since
-    /// it touches nothing but its arguments — so it can be tested directly.
-    nonisolated static func shouldClose(
-        onResignActiveWith buttons: Int, at location: NSPoint, anchor: NSRect
+    /// The rule itself, free of AppKit — and of the main actor, since it
+    /// touches nothing but its arguments — so it can be tested directly.
+    nonisolated static func suppressesReopen(
+        closedAt: TimeInterval?, now: TimeInterval
     ) -> Bool {
-        guard buttons != 0 else { return true }
-        return !anchor.contains(location)
+        guard let closedAt else { return false }
+        let elapsed = now - closedAt
+        return elapsed >= 0 && elapsed < reopenSuppressionWindow
     }
 
     private func anchorFrame() -> NSRect {

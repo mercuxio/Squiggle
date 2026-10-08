@@ -397,6 +397,11 @@ final class StatusItemController: NSObject {
     @objc private func toggleDropdown() {
         if dropdown.isShowing {
             dropdown.close()
+        } else if dropdown.closedByDeactivation() {
+            // This same click already closed it, by deactivating the app
+            // before AppKit got here — see `StatusPanel.closedByDeactivation`.
+            // Reopening now is what made a second click look inert.
+            return
         } else {
             presentDropdown()
         }
