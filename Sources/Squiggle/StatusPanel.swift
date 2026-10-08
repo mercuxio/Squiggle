@@ -209,7 +209,16 @@ final class StatusPanel: NSPanel {
             forName: NSApplication.didResignActiveNotification,
             object: NSApp, queue: .main
         ) { [weak self] _ in
-            MainActor.assumeIsolated { self?.close() }
+            // Captured out here: the notification arrives while the press that
+            // caused it is still in flight, and the state is gone by the time a
+            // later run loop turn would look.
+            let buttons = NSEvent.pressedMouseButtons
+            let location = NSEvent.mouseLocation
+            MainActor.assumeIsolated {
+                guard let self, self.shouldClose(onResignActiveWith: buttons, at: location)
+                else { return }
+                self.close()
+            }
         }
         keys = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             // Classified out here rather than inside `assumeIsolated`, which can
@@ -234,6 +243,35 @@ final class StatusPanel: NSPanel {
     private func dismiss(clickedAt location: NSPoint) {
         guard !anchorFrame().contains(location) else { return }
         close()
+    }
+
+    /// Whether losing active status should take the panel with it.
+    ///
+    /// Not always, and the exception is the second click on the status item.
+    /// Clicking the menu bar hands activation to it, and macOS delivers that
+    /// *before* the button's own action — so closing here unconditionally left
+    /// `toggleDropdown` finding nothing showing and opening the panel straight
+    /// back up. The user's second click appeared to do nothing at all.
+    ///
+    /// A mouse button still physically down with the pointer inside the status
+    /// item is exactly that press and nothing else. ⌘-Tab, Mission Control and
+    /// a click on another app all arrive with no button held, or held somewhere
+    /// other than the anchor, so they still dismiss.
+    ///
+    /// - Parameters:
+    ///   - buttons: `NSEvent.pressedMouseButtons` as of the notification.
+    ///   - location: the pointer position as of the notification.
+    func shouldClose(onResignActiveWith buttons: Int, at location: NSPoint) -> Bool {
+        Self.shouldClose(onResignActiveWith: buttons, at: location, anchor: anchorFrame())
+    }
+
+    /// The rule itself, free of the status bar — and of the main actor, since
+    /// it touches nothing but its arguments — so it can be tested directly.
+    nonisolated static func shouldClose(
+        onResignActiveWith buttons: Int, at location: NSPoint, anchor: NSRect
+    ) -> Bool {
+        guard buttons != 0 else { return true }
+        return !anchor.contains(location)
     }
 
     private func anchorFrame() -> NSRect {
