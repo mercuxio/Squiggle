@@ -205,3 +205,73 @@ private let barHeight = 22.0
     #expect(StripRenderer.rebuiltBeginTime(nowInLayerTime: 100,
                                            phase: 0, duration: 20) == 100)
 }
+
+// MARK: - The divider and the card
+
+// `StripLayout` emits an interpunct in every gap, the trailing one included,
+// because in a tiling marquee that gap is the join to the repeat of the first
+// entry. A row that fits its window never tiles, so there is nothing to the
+// dot's right to divide — and dropping it belongs here, where the authoritative
+// `copies` answer arrives, rather than in a layout that never saw the window.
+@Test func anUntiledRowDropsTheDividerThatWouldHangOffItsEnd() throws {
+    let metrics = StripRenderer.metrics(rows: 1, barHeight: barHeight)
+    let row = StripLayout.Row(
+        segments: [
+            StripLayout.Segment(text: "AAPL ", role: .label, x: 0, width: 40),
+            StripLayout.Segment(text: "\u{00B7}", role: .separator, x: 45, width: 10),
+        ],
+        contentWidth: 60)
+
+    let one = StripRenderer.rowLayer(row, metrics: metrics, scale: 2, copies: 1,
+                                     color: { _ in NSColor.labelColor.cgColor })
+    let drawn = try #require(one.sublayers as? [CATextLayer])
+    #expect(drawn.map { $0.string as? String } == ["AAPL "])
+}
+
+@Test func aTiledRowKeepsTheDividerBecauseItIsTheJoin() throws {
+    let metrics = StripRenderer.metrics(rows: 1, barHeight: barHeight)
+    let row = StripLayout.Row(
+        segments: [
+            StripLayout.Segment(text: "AAPL ", role: .label, x: 0, width: 40),
+            StripLayout.Segment(text: "\u{00B7}", role: .separator, x: 45, width: 10),
+        ],
+        contentWidth: 60)
+
+    let two = StripRenderer.rowLayer(row, metrics: metrics, scale: 2, copies: 2,
+                                     color: { _ in NSColor.labelColor.cgColor })
+    let drawn = try #require(two.sublayers as? [CATextLayer])
+    #expect(drawn.map { $0.string as? String } == ["AAPL ", "\u{00B7}", "AAPL ", "\u{00B7}"])
+}
+
+// A rotation about the layer's top edge would swing the card out of the menu
+// bar instead of turning it in place. Moving the anchor to the middle and the
+// position down by the same half-height leaves the card drawn exactly where a
+// row would be — which is what this asserts, not just the anchor.
+@Test func aCardTurnsAboutItsOwnCentrelineWithoutMoving() {
+    let metrics = StripRenderer.metrics(rows: 1, barHeight: barHeight)
+    let card = StripLayout.Row(
+        segments: [StripLayout.Segment(text: "AAPL ", role: .label, x: 0, width: 40)],
+        contentWidth: 40)
+
+    let layer = StripRenderer.cardLayer(card, metrics: metrics, scale: 2,
+                                        color: { _ in NSColor.labelColor.cgColor })
+    #expect(layer.anchorPoint == CGPoint(x: 0, y: 0.5))
+    #expect(layer.position == CGPoint(x: 0, y: metrics.rowHeight / 2))
+    #expect(layer.frame == CGRect(x: 0, y: 0, width: 40, height: metrics.rowHeight))
+}
+
+// Every card in the deck is built at once and its own keyframes decide when it
+// is on screen, so a card built visible would flash for the frame before the
+// animation's first value lands.
+@Test func aCardStartsInvisibleAndUntiled() throws {
+    let metrics = StripRenderer.metrics(rows: 1, barHeight: barHeight)
+    let card = StripLayout.Row(
+        segments: [StripLayout.Segment(text: "AAPL ", role: .label, x: 0, width: 40)],
+        contentWidth: 40)
+
+    let layer = StripRenderer.cardLayer(card, metrics: metrics, scale: 2,
+                                        color: { _ in NSColor.labelColor.cgColor })
+    #expect(layer.opacity == 0)
+    let drawn = try #require(layer.sublayers)
+    #expect(drawn.count == 1, "a card does not scroll, so it never tiles")
+}

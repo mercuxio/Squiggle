@@ -177,7 +177,7 @@ enum ErrorText {
 
     static let settingsTitle = "Squiggle Settings"
 
-    static let rowsLabel = "Rows"
+    static let displayLabel = "Display"
     static let intervalLabel = "Refresh"
     // The spec spells §5.3 "Colour", and so does the rest of this project's
     // prose. Deliberate, not an oversight.
@@ -186,7 +186,10 @@ enum ErrorText {
     static let widthLabel = "Width"
     static let speedLabel = "Speed"
 
-    static let rowTitles = ["One", "Two"]
+    /// In the order of `Settings.displayChoices`. "Flip" names the motion
+    /// rather than a count because that is what distinguishes it: it shows one
+    /// stock, like One row, but turns to the next every couple of seconds.
+    static let displayTitles = ["One row", "Two rows", "Flip"]
     /// In the order of `RateConstants.refreshIntervalChoices`. `SettingsFormTests`
     /// asserts the two have the same length; nothing can assert they mean the
     /// same thing, so keep them adjacent in any edit.

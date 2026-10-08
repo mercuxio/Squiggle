@@ -9,6 +9,11 @@ import TickerCore
 enum ColorRole: Equatable, Sendable {
     case label
     case direction(Direction)
+    /// The interpunct between one entry and the next. Its own role rather
+    /// than `.label`, because it is punctuation and not content: it is drawn
+    /// quieter than the numbers it divides, and a scheme that wanted to drop
+    /// it entirely could do so here without touching the layout.
+    case separator
 }
 
 /// The whole strip as data: segments, widths, offsets and colour roles, with
@@ -47,6 +52,12 @@ struct StripLayout: Equatable {
     }
 
     let rows: [Row]
+
+    /// What divides one entry from the next: U+00B7, the interpunct. A middle
+    /// dot rather than a bullet or a pipe because it sits on the x-height's
+    /// midline and takes almost no width — the strip gains a reading aid
+    /// without gaining a lap.
+    static let separatorText = "\u{00B7}"
 
     var widestRowWidth: Double {
         rows.map(\.contentWidth).max() ?? 0
@@ -110,7 +121,54 @@ struct StripLayout: Equatable {
                                             emphasized: piece.emphasized))
                     x += width
                 }
+                // The interpunct is centred *inside* the gap rather than
+                // added to it, so `contentWidth` — and with it the lap, the
+                // tiling seam and the scroll duration — is exactly what it
+                // was before the separator existed. Emitted after every
+                // entry, the last one included: in a scrolling row the
+                // trailing gap is the join to the repeat of the first entry,
+                // so that gap divides two entries like any other. A row that
+                // does not scroll has nothing after it, and `rowLayer` drops
+                // the dangling dot when it draws a single untiled copy.
+                let separatorWidth = measure(separatorText, false)
+                if separatorWidth < gap {
+                    segments.append(Segment(text: separatorText, role: .separator,
+                                            x: x + (gap - separatorWidth) / 2,
+                                            width: separatorWidth))
+                }
                 x += gap
+            }
+            return Row(segments: segments, contentWidth: x)
+        })
+    }
+
+    /// One card per watchlist entry, for Flip.
+    ///
+    /// A `StripLayout` again, rather than a type of its own: a card is a row
+    /// of exactly one entry, and reusing `Row` means `StripRenderer` builds a
+    /// card out of the same text layers it builds a strip out of, with the
+    /// same emphasis and the same measurement. A parallel `Card` type would
+    /// be the second place that `SYMBOL price ▲delta (pct%)` is assembled,
+    /// and the two would drift the first time the format changed.
+    ///
+    /// No gap and no tiling: a card has nothing beside it to be spaced from
+    /// and nothing to wrap into, so `contentWidth` is the text's own width —
+    /// which is also what tells the view whether the card overflows the
+    /// window.
+    static func cards(symbols: [Symbol],
+                      quotes: [Symbol: Quote],
+                      dead: Set<Symbol>,
+                      locale: Locale = .autoupdatingCurrent,
+                      measure: (String, Bool) -> Double) -> StripLayout {
+        StripLayout(rows: symbols.map { symbol in
+            var segments: [Segment] = []
+            var x = 0.0
+            for piece in pieces(for: symbol, quotes: quotes, dead: dead, locale: locale) {
+                let width = measure(piece.text, piece.emphasized)
+                segments.append(Segment(text: piece.text, role: piece.role,
+                                        x: x, width: width,
+                                        emphasized: piece.emphasized))
+                x += width
             }
             return Row(segments: segments, contentWidth: x)
         })

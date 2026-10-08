@@ -349,26 +349,35 @@ final class StatusItemController: NSObject {
         let metrics = StripRenderer.metrics(rows: settings.rows,
                                             barHeight: Double(NSStatusBar.system.thickness))
         let measure = Self.measurer(metrics)
-        let layout = StripLayout.build(symbols: runner.symbols,
-                                       quotes: runner.quotes,
-                                       dead: runner.deadSymbols,
-                                       rows: metrics.rowCount,
-                                       gap: Self.entryGap,
-                                       rowOneCount: document.rowOneCount,
-                                       measure: measure)
+        let display = DisplayMode(setting: settings.display)
+        // Flip asks `StripLayout` a different question — one card per symbol
+        // rather than a strip split across rows — and gets the same answer
+        // type back, so everything downstream of here is unchanged.
+        let layout = display == .flip
+            ? StripLayout.cards(symbols: runner.symbols,
+                                quotes: runner.quotes,
+                                dead: runner.deadSymbols,
+                                measure: measure)
+            : StripLayout.build(symbols: runner.symbols,
+                                quotes: runner.quotes,
+                                dead: runner.deadSymbols,
+                                rows: metrics.rowCount,
+                                gap: Self.entryGap,
+                                rowOneCount: document.rowOneCount,
+                                measure: measure)
         // Spec §5.1: a *fixed*-width status item. Task 6 created it
         // `variableLength` because a button sized to its title was the honest
         // thing while a title was what it drew; a marquee needs a window that
         // does not resize itself to the content it is meant to clip.
         statusItem.length = settings.maxVisibleWidth
-        let requested = MotionMode(setting: settings.motionMode)
-        let mode = MotionPolicy.effective(
-            requested: requested,
+        let motion = MotionPolicy.stripMotion(
+            display: display,
+            requested: MotionMode(setting: settings.motionMode),
             reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)
         tickerView.apply(layout: layout,
                          metrics: metrics,
                          visibleWidth: settings.maxVisibleWidth,
-                         mode: mode,
+                         motion: motion,
                          pointsPerSecond: settings.scrollPointsPerSecond,
                          // A rebuild starts from nothing, so the pause has to
                          // be re-asserted here or the next refresh tick,

@@ -72,7 +72,7 @@ private func write(_ json: String, to url: URL) throws {
     let original = Store(
         schemaVersion: 1,
         symbols: [try #require(Symbol("AAPL")), try #require(Symbol("BTC-USD"))],
-        settings: Settings(refreshIntervalSeconds: 300, rows: 2, scrollPointsPerSecond: 24,
+        settings: Settings(refreshIntervalSeconds: 300, display: "two", scrollPointsPerSecond: 24,
                            colorScheme: "monochrome", motionMode: "step", maxVisibleWidth: 320),
         cooldownUntilEpoch: 1_757_000_000)
 
@@ -122,7 +122,7 @@ private func write(_ json: String, to url: URL) throws {
 
     #expect(topLevel == ["cooldownUntilEpoch", "schemaVersion", "settings", "symbols"],
             "top-level keys are not sorted: \(topLevel)")
-    #expect(settingsKeys.count == 6, "did not find the settings keys: \(settingsKeys)")
+    #expect(settingsKeys.count == 7, "did not find the settings keys: \(settingsKeys)")
     #expect(settingsKeys == settingsKeys.sorted(),
             "settings keys are not sorted: \(settingsKeys)")
 }
@@ -223,7 +223,7 @@ private func write(_ json: String, to url: URL) throws {
     }
     let fat = Store(schemaVersion: Store.currentSchemaVersion,
                     symbols: symbols,
-                    settings: Settings(refreshIntervalSeconds: 900, rows: 2,
+                    settings: Settings(refreshIntervalSeconds: 900, display: "two",
                                        scrollPointsPerSecond: 24,
                                        colorScheme: "monochrome", motionMode: "step",
                                        maxVisibleWidth: 320),
@@ -973,4 +973,68 @@ private func write(_ json: String, to url: URL) throws {
 
     let store = try FileWatchlistStore(url: url).load()
     #expect(store.rowOneCount == 0)
+}
+
+// MARK: - The display setting
+
+// Flip arrived after 1.0.3, and `rows` was the stored field until then. The
+// migration reads the old key when the new one is absent, so a file written
+// by an earlier build opens on the mode its owner chose rather than on the
+// default.
+@Test func aFileWrittenBeforeFlipExistedKeepsItsRowChoice() throws {
+    let one = tempURL()
+    try write(#"{"schemaVersion":1,"symbols":["AAPL"],"settings":{"rows":1}}"#, to: one)
+    #expect(try FileWatchlistStore(url: one).load().settings.display == "one")
+
+    let two = tempURL()
+    try write(#"{"schemaVersion":1,"symbols":["AAPL"],"settings":{"rows":2}}"#, to: two)
+    #expect(try FileWatchlistStore(url: two).load().settings.display == "two")
+}
+
+// `display` is the source of truth where both keys are present: a 1.0.3 build
+// that wrote `rows` cannot have written `display`, so the only way to see both
+// is a newer file, and the newer key is the one that means something.
+@Test func displayWinsOverTheLegacyRowCount() throws {
+    let url = tempURL()
+    try write(#"{"schemaVersion":1,"settings":{"display":"flip","rows":2}}"#, to: url)
+
+    let settings = try FileWatchlistStore(url: url).load().settings
+    #expect(settings.display == "flip")
+    #expect(settings.rows == 1, "Flip draws one strip's worth of card")
+}
+
+// R119, as for every other stored string: a word this build has never heard
+// of costs the setting and nothing else, and stays in the file untouched so a
+// newer build still finds it.
+@Test func anUnknownDisplayIsCarriedThroughRatherThanRejected() throws {
+    let url = tempURL()
+    try write(#"{"schemaVersion":1,"symbols":["AAPL"],"settings":{"display":"carousel"}}"#,
+              to: url)
+
+    let settings = try FileWatchlistStore(url: url).load().settings
+    #expect(settings.display == "carousel")
+    #expect(settings.rows == 1, "only \"two\" means two strips")
+}
+
+@Test func aDisplayOfTheWrongTypeCostsOnlyItself() throws {
+    let url = tempURL()
+    try write(#"{"schemaVersion":1,"symbols":["AAPL"],"settings":{"display":7}}"#, to: url)
+
+    let store = try FileWatchlistStore(url: url).load()
+    #expect(store.settings.display == "two")
+    #expect(store.symbols.map(\.raw) == ["AAPL"], "the watchlist must survive a typo")
+}
+
+// The derived key is written as well as the authoritative one, so that
+// downgrading to a build that only knows `rows` does not silently move the
+// user to two rows.
+@Test func savingWritesBothTheDisplayAndTheRowCountItImplies() throws {
+    let url = tempURL()
+    var settings = Settings()
+    settings.display = "flip"
+    try FileWatchlistStore(url: url).save(Store(symbols: [], settings: settings))
+
+    let json = try String(contentsOf: url, encoding: .utf8)
+    #expect(json.contains(#""display" : "flip""#), "\(json)")
+    #expect(json.contains(#""rows" : 1"#), "\(json)")
 }

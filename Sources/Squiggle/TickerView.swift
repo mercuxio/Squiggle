@@ -51,7 +51,7 @@ final class TickerView: NSView {
     func apply(layout: StripLayout,
                metrics: StripRenderer.Metrics,
                visibleWidth: Double,
-               mode: MotionMode,
+               motion: StripMotion,
                pointsPerSecond: Double,
                paused: Bool,
                color: (ColorRole) -> CGColor) {
@@ -67,12 +67,54 @@ final class TickerView: NSView {
         // back to its first character — and `apply` runs on every refresh,
         // every appearance change, every Reduce Motion toggle and every
         // settings edit, which is what the user sees as the strip skipping.
-        let key = Self.animationKey(for: mode)
+        let key = Self.animationKey(for: motion)
         let carried = rowLayers.map { phase(of: $0, key: key) }
 
         for existing in rowLayers { existing.removeFromSuperlayer() }
         rowLayers = []
         isPaused = paused
+
+        // The perspective lives on the *host* and not on the card, because a
+        // `rotation.x` applied under an identity transform is an orthographic
+        // squash: the card gets shorter and no nearer. `m34` on the parent's
+        // `sublayerTransform` is what gives the turn a vanishing point, and
+        // it is reset to the identity for Scroll and Step so a mode switch
+        // cannot leave a strip being drawn through a camera.
+        var perspective = CATransform3DIdentity
+        if case .flip = motion { perspective.m34 = FlipPolicy.perspective }
+        host.sublayerTransform = perspective
+
+        if case .flip(let crossfading) = motion {
+            let count = layout.rows.count
+            let animates = FlipPolicy.animates(cardCount: count)
+            // One phase for the whole deck, not one per card: the cards share
+            // a single cycle and their windows are slices of it, so a rebuild
+            // has to move all of them by the same amount or the deck would
+            // come back showing two cards at once. The first card's phase is
+            // the deck's phase — every card's animation has the same
+            // `beginTime` and the same duration.
+            let inherited = carried.first ?? 0
+            for (index, card) in layout.rows.enumerated() {
+                let cardLayer = StripRenderer.cardLayer(card, metrics: metrics,
+                                                        scale: scale, color: color)
+                host.addSublayer(cardLayer)
+                rowLayers.append(cardLayer)
+                flip(cardLayer, index: index, count: count,
+                     crossfading: crossfading, animates: animates,
+                     startingAt: inherited)
+                if paused { freeze(cardLayer) }
+            }
+            return
+        }
+
+        let mode: MotionMode = {
+            switch motion {
+            case .step: return .step
+            // Unreachable — the flip branch above returns — but spelling it
+            // as a default would hide the next case someone adds.
+            case .scroll, .flip: return .scroll
+            }
+        }()
 
         for (index, row) in layout.rows.enumerated() {
             // Spec §5.2's first stopping condition, decided once here and
@@ -184,14 +226,100 @@ final class TickerView: NSView {
         }
     }
 
+    /// One card's whole turn: a repeating cycle whose length is the deck's,
+    /// of which this card owns one slice.
+    ///
+    /// No timer anywhere. The 2s cadence the user asked for is the cycle
+    /// divided by the number of cards, expressed as key times — which is what
+    /// keeps `pause()`, `resume()` and the phase carried across rebuilds
+    /// working for Flip exactly as they work for the marquee. A timer firing
+    /// into `apply` would have had to reimplement all three.
+    ///
+    /// - Parameter animates: a deck of one card has nothing to turn to, so it
+    ///   is drawn as plain static text — and drawn *opaque*, because
+    ///   `cardLayer` builds every card transparent and lets its animation
+    ///   decide when it shows.
+    private func flip(_ cardLayer: CALayer,
+                      index: Int,
+                      count: Int,
+                      crossfading: Bool,
+                      animates: Bool,
+                      startingAt phase: Double) {
+        guard animates else {
+            cardLayer.opacity = 1
+            return
+        }
+        let cycle = FlipPolicy.cycleSeconds(cardCount: count)
+        let now = cardLayer.convertTime(CACurrentMediaTime(), from: nil)
+
+        var animations: [CAAnimation] = []
+        if crossfading {
+            // Reduce Motion: the card still changes every two seconds, but it
+            // dips through transparent instead of rotating. The same answer
+            // Step gives — the information arrives, the movement does not.
+            animations.append(Self.keyframes(FlipPolicy.fade(index: index, count: count),
+                                             keyPath: "opacity",
+                                             duration: cycle,
+                                             discrete: false))
+        } else {
+            animations.append(Self.keyframes(FlipPolicy.rotation(index: index, count: count),
+                                             keyPath: "transform.rotation.x",
+                                             duration: cycle,
+                                             discrete: false))
+            // Discrete, and it has to be: an interpolated opacity would fade
+            // a card out across its neighbour's entire dwell, leaving two
+            // cards faintly superimposed for most of the cycle. Edge-on at
+            // ±90° the card is still drawn, so something has to switch it
+            // off outside its own window.
+            animations.append(Self.keyframes(FlipPolicy.visibility(index: index, count: count),
+                                             keyPath: "opacity",
+                                             duration: cycle,
+                                             discrete: true))
+        }
+
+        // One group, for the reason Step groups its two: paused a frame
+        // apart, the rotation and the opacity would disagree about which card
+        // is on screen. The frame rate cap goes on the group, not the
+        // children — see `animate`.
+        let turn = CAAnimationGroup()
+        turn.animations = animations
+        turn.duration = cycle
+        turn.beginTime = StripRenderer.rebuiltBeginTime(nowInLayerTime: now,
+                                                        phase: phase,
+                                                        duration: cycle)
+        turn.repeatCount = .infinity
+        turn.preferredFrameRateRange = StripRenderer.frameRate
+        cardLayer.add(turn, forKey: "flip")
+    }
+
+    /// A `FlipPolicy.Keyframes` as a Core Animation keyframe animation. The
+    /// arithmetic is all in `FlipPolicy`, where a test can see it; this is the
+    /// bridge, and the one place `NSNumber` appears.
+    private static func keyframes(_ frames: FlipPolicy.Keyframes,
+                                  keyPath: String,
+                                  duration: Double,
+                                  discrete: Bool) -> CAKeyframeAnimation {
+        let animation = CAKeyframeAnimation(keyPath: keyPath)
+        animation.values = frames.values
+        animation.keyTimes = frames.keyTimes.map { NSNumber(value: $0) }
+        if discrete { animation.calculationMode = .discrete }
+        animation.duration = duration
+        animation.repeatCount = .infinity
+        return animation
+    }
+
     /// The key each mode's animation is filed under. One function rather than
     /// two string literals at opposite ends of the file: `animate` adds under
     /// this key and `phase(of:key:)` looks it up, and a typo in either would
     /// show only as a strip that silently stopped carrying its place.
-    private static func animationKey(for mode: MotionMode) -> String {
-        switch mode {
+    private static func animationKey(for motion: StripMotion) -> String {
+        switch motion {
         case .scroll: return "scroll"
         case .step: return "step"
+        // One key for both Flip variants on purpose: a Reduce Motion toggle
+        // mid-cycle should keep the deck's place and swap how the change is
+        // drawn, not restart the deck at its first symbol.
+        case .flip: return "flip"
         }
     }
 

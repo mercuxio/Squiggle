@@ -55,6 +55,12 @@ enum ColorPolicy {
             // put in the colour space; one small triangle moves.
             return .labelColor
 
+        case .separator:
+            // Quieter than the text either side of it in every scheme. A
+            // divider drawn at full label colour competes with the prices
+            // for attention, which is the opposite of what it is for.
+            return .tertiaryLabelColor
+
         case .direction(let direction):
             switch scheme {
             case .monochrome:

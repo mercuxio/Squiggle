@@ -135,6 +135,16 @@ enum StripRenderer {
         // cheapest safe answer.
         let copyCount = max(1, copies)
 
+        // An untiled row has nothing after its last entry, so the interpunct
+        // `StripLayout` put in the trailing gap would hang off the end with
+        // nothing on its right to divide. Dropped here rather than left out
+        // of the layout, because whether a row tiles is the caller's answer
+        // (`fits`) and the layout is built before anyone has asked.
+        var segments = row.segments
+        if copyCount == 1, segments.last?.role == ColorRole.separator {
+            segments.removeLast()
+        }
+
         let container = CALayer()
         container.contentsScale = scale
         container.bounds = CGRect(x: 0, y: 0,
@@ -150,7 +160,7 @@ enum StripRenderer {
 
         for copy in 0..<copyCount {
             let shift = Double(copy) * row.contentWidth
-            for segment in row.segments {
+            for segment in segments {
                 let text = CATextLayer()
                 text.contentsScale = scale
                 let font = segment.emphasized ? metrics.emphasisFont : metrics.font
@@ -169,5 +179,29 @@ enum StripRenderer {
             }
         }
         return container
+    }
+
+    /// One Flip card: the same layers a row is made of, hung so it can turn.
+    ///
+    /// Two differences from a row, and both are about the rotation. The anchor
+    /// moves to the layer's vertical middle, so the card turns about its own
+    /// centreline rather than swinging from the top edge of the menu bar — the
+    /// `position` moves by the same half-height, which leaves the card drawn
+    /// exactly where a row would be. And it starts fully transparent: every
+    /// card in the deck is built at once and its own keyframes decide when it
+    /// is on screen, so a card built visible would flash for the frame before
+    /// the animation's first value lands.
+    ///
+    /// One copy, never two: tiling exists to hide a marquee's wrap, and a card
+    /// does not scroll.
+    static func cardLayer(_ card: StripLayout.Row,
+                          metrics: Metrics,
+                          scale: Double,
+                          color: (ColorRole) -> CGColor) -> CALayer {
+        let layer = rowLayer(card, metrics: metrics, scale: scale, copies: 1, color: color)
+        layer.anchorPoint = CGPoint(x: 0, y: 0.5)
+        layer.position = CGPoint(x: 0, y: metrics.rowHeight / 2)
+        layer.opacity = 0
+        return layer
     }
 }

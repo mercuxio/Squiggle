@@ -33,11 +33,12 @@ private let narrowWidth = 40.0
 private let labelColor: @Sendable (ColorRole) -> CGColor = { _ in NSColor.labelColor.cgColor }
 
 @MainActor
-private func apply(_ view: TickerView, layout: StripLayout, paused: Bool) {
+private func apply(_ view: TickerView, layout: StripLayout, paused: Bool,
+                   motion: StripMotion = .scroll) {
     view.apply(layout: layout,
                metrics: StripRenderer.metrics(rows: 2, barHeight: 22),
                visibleWidth: narrowWidth,
-               mode: .scroll,
+               motion: motion,
                pointsPerSecond: 30,
                paused: paused,
                color: labelColor)

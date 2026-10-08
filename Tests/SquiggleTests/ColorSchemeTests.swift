@@ -109,3 +109,26 @@ private func color(_ role: ColorRole, _ scheme: ColorScheme,
     let dimmed = color(.label, .monochrome, stale: false) == NSColor.tertiaryLabelColor
     #expect(!dimmed)
 }
+
+// MARK: - The divider
+
+// The interpunct is punctuation, not content: drawn at full label colour it
+// competes with the prices for attention, which is the opposite of its job.
+// Quieter in every scheme, because the schemes differ over *direction* and a
+// divider has no direction.
+@Test func theDividerIsQuieterThanTheTextEitherSideOfIt() {
+    for scheme in everyScheme {
+        #expect(color(.separator, scheme) == .tertiaryLabelColor,
+                "the divider is not quiet under \(scheme)")
+        #expect(color(.separator, scheme) != color(.label, scheme),
+                "the divider matches its neighbours under \(scheme)")
+    }
+}
+
+// The `isStale` guard comes first for every role, divider included — a strip
+// that greyed out except for its dots would read as a rendering fault.
+@Test func aStaleStripsDividersGreyOutWithTheRestOfIt() {
+    for scheme in everyScheme {
+        #expect(color(.separator, scheme, stale: true) == .tertiaryLabelColor)
+    }
+}

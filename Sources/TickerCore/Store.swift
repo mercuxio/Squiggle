@@ -51,8 +51,16 @@ private struct WatchlistEntry: Decodable {
 /// rather than the file.
 public struct Settings: Codable, Equatable, Sendable {
     public var refreshIntervalSeconds: Double
-    /// 1 or 2. Anything else is nonsense from a hand-edited file.
-    public var rows: Int
+    /// "one" | "two" | "flip" (spec §5.1 plus Flip), stored verbatim with the
+    /// same carry-through contract as `colorScheme`: an unknown word is kept
+    /// rather than rejected, so a file written by a later Squiggle survives a
+    /// downgrade unchanged.
+    ///
+    /// This is the display setting; `rows` is derived from it. The other way
+    /// round would not work — "flip" is not a row count — and storing both
+    /// independently would let them contradict each other in a file the user
+    /// is invited to hand-edit.
+    public var display: String
     public var scrollPointsPerSecond: Double
     /// "monochrome" | "classic" | "accessible" (spec §5.3), stored verbatim:
     /// an unknown value is carried through rather than rejected, so a file
@@ -74,17 +82,35 @@ public struct Settings: Codable, Equatable, Sendable {
     /// with nothing anywhere reporting the reversal.
     public static let speedRange: ClosedRange<Double> = 4...200
     public static let widthRange: ClosedRange<Double> = 60...1200
-    /// Spec §5.1 offers one row or two. Anything else is a hand-edited file.
-    public static let rowChoices: [Int] = [1, 2]
+    /// Spec §5.1 offers one row or two; Flip is the third. Anything else is a
+    /// hand-edited file or a later version's word.
+    public static let displayChoices: [String] = ["one", "two", "flip"]
+
+    /// How many strips a display mode draws. Two rows means two; one row and
+    /// Flip — which shows a single stock at a time — both mean one, and so
+    /// does a word this build does not recognise.
+    ///
+    /// The whole app asks `settings.rows` and gets this answer, which is what
+    /// keeps Flip from needing its own guard in every place that cares about
+    /// the row count: the dropdown's columns, the manual row split and the
+    /// strip metrics all see one row and behave as they already did.
+    public static func rowCount(for display: String) -> Int {
+        display == "two" ? 2 : 1
+    }
+
+    /// 1 or 2, derived from `display` and never stored on its own. Still
+    /// *written* to the file by `encode(to:)` so that a build which has never
+    /// heard of `display` reads a row count it understands.
+    public var rows: Int { Settings.rowCount(for: display) }
 
     public init(refreshIntervalSeconds: Double = RateConstants.defaultRefreshInterval,
-                rows: Int = 2,
+                display: String = "two",
                 scrollPointsPerSecond: Double = 24,
                 colorScheme: String = "monochrome",
                 motionMode: String = "scroll",
                 maxVisibleWidth: Double = 260) {
         self.refreshIntervalSeconds = refreshIntervalSeconds
-        self.rows = rows
+        self.display = display
         self.scrollPointsPerSecond = scrollPointsPerSecond
         self.colorScheme = colorScheme
         self.motionMode = motionMode
@@ -127,8 +153,16 @@ public struct Settings: Codable, Equatable, Sendable {
             ? interval
             : RateConstants.defaultRefreshInterval
 
-        let rawRows = c.lenient(Int.self, .rows, default: defaults.rows)
-        rows = Settings.rowChoices.contains(rawRows) ? rawRows : defaults.rows
+        // Carried through verbatim when present, migrated from the legacy
+        // `rows` key when not: every file written before Flip existed says
+        // `"rows": 1` or `"rows": 2` and nothing else, and reading those as
+        // the default would silently move a one-row user to two.
+        if let storedDisplay = c.lenient(String.self, .display) {
+            display = storedDisplay
+        } else {
+            let rawRows = c.lenient(Int.self, .rows, default: defaults.rows)
+            display = rawRows == 1 ? "one" : defaults.display
+        }
 
         let speed = finiteOrDefault(.scrollPointsPerSecond, defaults.scrollPointsPerSecond)
         scrollPointsPerSecond = min(max(speed, Settings.speedRange.lowerBound),
@@ -140,6 +174,39 @@ public struct Settings: Codable, Equatable, Sendable {
         let width = finiteOrDefault(.maxVisibleWidth, defaults.maxVisibleWidth)
         maxVisibleWidth = min(max(width, Settings.widthRange.lowerBound),
                               Settings.widthRange.upperBound)
+    }
+
+    /// Spelled out because `rows` is computed, and a synthesised enum lists
+    /// stored properties only — `init(from:)` has to be able to read the
+    /// legacy key, and `encode(to:)` has to be able to write it.
+    enum CodingKeys: String, CodingKey {
+        case refreshIntervalSeconds
+        case display
+        case rows
+        case scrollPointsPerSecond
+        case colorScheme
+        case motionMode
+        case maxVisibleWidth
+    }
+
+    /// Writes `rows` alongside `display` even though nothing here reads it
+    /// back as state.
+    ///
+    /// It is there for the *other* Squiggle: the user who keeps 1.0.3 in
+    /// /Applications and runs this build from a download. That version knows
+    /// only `rows`, and a file without it would move them to two rows the
+    /// first time they opened it. One derived key is a cheaper bargain than
+    /// a settings file that reads differently depending on which copy of the
+    /// app opens it.
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(refreshIntervalSeconds, forKey: .refreshIntervalSeconds)
+        try c.encode(display, forKey: .display)
+        try c.encode(rows, forKey: .rows)
+        try c.encode(scrollPointsPerSecond, forKey: .scrollPointsPerSecond)
+        try c.encode(colorScheme, forKey: .colorScheme)
+        try c.encode(motionMode, forKey: .motionMode)
+        try c.encode(maxVisibleWidth, forKey: .maxVisibleWidth)
     }
 }
 

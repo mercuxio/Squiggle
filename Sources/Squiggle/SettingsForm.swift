@@ -35,13 +35,18 @@ struct Choice<Value: Equatable & Sendable>: Sendable {
 /// The four fixed-choice controls in the Settings window, as data.
 ///
 /// Each one's values come from the type that owns them — the spec's interval
-/// menu from `RateConstants`, the row count from `Settings` — rather than
+/// menu from `RateConstants`, the display modes from `Settings` — rather than
 /// being listed again here, so that adding a fifth interval widens the popup
-/// without anyone remembering to.
+/// without anyone remembering to. Flip arrived as one word in
+/// `Settings.displayChoices` and one title in `ErrorText`, and the control
+/// grew a third segment on its own.
 enum SettingsForm {
-    static let rows = Choice(values: Settings.rowChoices,
-                             titles: ErrorText.rowTitles,
-                             fallback: 2)
+    // Strings, like `scheme` and `motion` and for the same reason: this is
+    // the mapping to what `Settings` stores, and it stores the word so that a
+    // later version's display mode survives a downgrade (R119).
+    static let display = Choice(values: Settings.displayChoices,
+                                titles: ErrorText.displayTitles,
+                                fallback: "two")
 
     static let interval = Choice(values: RateConstants.refreshIntervalChoices,
                                  titles: ErrorText.intervalTitles,

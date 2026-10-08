@@ -113,3 +113,49 @@ import Testing
 @Test func withoutReduceMotionTheIconSpins() {
     #expect(MotionPolicy.refreshIndicator(reduceMotion: false) == .spin)
 }
+
+// MARK: - Display modes
+
+@Test func displayModesDecodeFromSettings() {
+    #expect(DisplayMode(setting: "one") == .one)
+    #expect(DisplayMode(setting: "two") == .two)
+    #expect(DisplayMode(setting: "flip") == .flip)
+}
+
+// Same contract as `MotionMode` and `ColorScheme`: a word written by a later
+// Squiggle shows the default rather than refusing to start, and spec §5.1
+// names two rows as that default.
+@Test func anUnknownDisplayFallsBackToTwoRows() {
+    #expect(DisplayMode(setting: "carousel") == .two)
+    #expect(DisplayMode(setting: "Flip") == .two)
+    #expect(DisplayMode(setting: "") == .two)
+}
+
+// Flip is its own motion, so it overrides the scroll/step choice rather than
+// combining with it — which is why Settings greys that control out while Flip
+// is selected. The stored choice is untouched and comes back after.
+@Test func flipOverridesTheStoredMotionWithoutOverwritingIt() {
+    for requested in [MotionMode.scroll, .step] {
+        #expect(MotionPolicy.stripMotion(display: .flip, requested: requested,
+                                         reduceMotion: false) == .flip(crossfading: false))
+    }
+}
+
+// Reduce Motion cannot turn Flip off — a display mode is what the user chose
+// to see — so it takes the rotation away and leaves the cadence.
+@Test func reduceMotionMakesFlipCrossfadeRatherThanTurn() {
+    #expect(MotionPolicy.stripMotion(display: .flip, requested: .scroll,
+                                     reduceMotion: true) == .flip(crossfading: true))
+}
+
+@Test func theOtherDisplaysResolveToTheMotionTheyWereAsked() {
+    for display in [DisplayMode.one, .two] {
+        #expect(MotionPolicy.stripMotion(display: display, requested: .scroll,
+                                         reduceMotion: false) == .scroll)
+        #expect(MotionPolicy.stripMotion(display: display, requested: .step,
+                                         reduceMotion: false) == .step)
+        // Spec §5.1: Step is forced when Reduce Motion is enabled.
+        #expect(MotionPolicy.stripMotion(display: display, requested: .scroll,
+                                         reduceMotion: true) == .step)
+    }
+}

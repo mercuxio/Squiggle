@@ -12,8 +12,9 @@ struct SettingsView: View {
     var body: some View {
         Form {
             Section {
-                Picker(ErrorText.rowsLabel, selection: choice(SettingsForm.rows, \.rows)) {
-                    titles(SettingsForm.rows)
+                Picker(ErrorText.displayLabel,
+                       selection: choice(SettingsForm.display, \.display)) {
+                    titles(SettingsForm.display)
                 }
                 .pickerStyle(.segmented)
                 Picker(ErrorText.intervalLabel,
@@ -32,6 +33,11 @@ struct SettingsView: View {
                     titles(SettingsForm.motion)
                 }
                 .pickerStyle(.segmented)
+                // Flip is its own motion, so Scroll and Step have nothing to
+                // say while it is on. Disabled rather than hidden: the control
+                // keeps its place in the form, and the stored choice is
+                // untouched and comes back when the user leaves Flip.
+                .disabled(DisplayMode(setting: model.settings.display) == .flip)
                 // R143: the decoder's clamps, not numbers typed again here.
                 // Sliders are continuous, so the strip previews as the handle
                 // moves; the write to disk is coalesced by the controller.

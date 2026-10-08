@@ -14,6 +14,17 @@ private let tenPerCharacter: @Sendable (String, Bool) -> Double = { text, _ in
 
 private let posix = Locale(identifier: "en_US_POSIX")
 
+/// A row's entries, with the dividers between them taken out.
+///
+/// The interpunct sits *in* the gap and so is not part of any entry: the tests
+/// below are about what one watchlist entry is made of and where its pieces
+/// land, and a divider threaded through every expected list would bury that.
+/// The dividers have their own tests, further down, which is where a build
+/// that stopped emitting them fails.
+private func entries(of row: StripLayout.Row) -> [StripLayout.Segment] {
+    row.segments.filter { $0.role != .separator }
+}
+
 private func symbol(_ raw: String) throws -> Symbol {
     try #require(Symbol(raw))
 }
@@ -39,7 +50,7 @@ private func quote(_ raw: String, price: Double, change: Double?) throws -> Quot
         quotes: [aapl: try quote("AAPL", price: 232.1, change: -1.1)],
         dead: [], rows: 1, gap: 20, locale: posix, measure: tenPerCharacter)
 
-    let texts = layout.rows[0].segments.map(\.text)
+    let texts = entries(of: layout.rows[0]).map(\.text)
     #expect(texts == ["AAPL ", "232.10 ", "▼", "1.10 (0.47%)"])
 }
 
@@ -52,7 +63,7 @@ private func quote(_ raw: String, price: Double, change: Double?) throws -> Quot
         quotes: [aapl: try quote("AAPL", price: 232.1, change: 1.1)],
         dead: [], rows: 1, gap: 20, locale: posix, measure: tenPerCharacter)
 
-    let segments = layout.rows[0].segments
+    let segments = entries(of: layout.rows[0])
     #expect(segments.map(\.emphasized) == [true, false, false, false])
 }
 
@@ -66,7 +77,7 @@ private func quote(_ raw: String, price: Double, change: Double?) throws -> Quot
         symbols: [vod], quotes: [:],
         dead: [], rows: 1, gap: 20, locale: posix, measure: tenPerCharacter)
 
-    let segments = layout.rows[0].segments
+    let segments = entries(of: layout.rows[0])
     #expect(segments[0].text == "VOD.L ")
     #expect(segments.map(\.emphasized) == [true, false])
 }
@@ -85,7 +96,7 @@ private func quote(_ raw: String, price: Double, change: Double?) throws -> Quot
         quotes: [aapl: try quote("AAPL", price: 232.1, change: 1.1)],
         dead: [], rows: 1, gap: 20, locale: posix, measure: doubleWhenHeavy)
 
-    let segments = layout.rows[0].segments
+    let segments = entries(of: layout.rows[0])
     #expect(segments[0].width == 100)   // "AAPL " at the heavier weight
     #expect(segments[1].x == 100)       // and the price starts after all of it
 }
@@ -100,7 +111,7 @@ private func quote(_ raw: String, price: Double, change: Double?) throws -> Quot
         quotes: [aapl: try quote("AAPL", price: 232.1, change: 1.1)],
         dead: [], rows: 1, gap: 20, locale: posix, measure: tenPerCharacter)
 
-    let segments = layout.rows[0].segments
+    let segments = entries(of: layout.rows[0])
     #expect(segments.map(\.role) == [.label, .label, .direction(.up), .label])
     #expect(segments[2].text == "▲")
     #expect(segments[3].text == "1.10 (0.48%)")
@@ -116,7 +127,7 @@ private func quote(_ raw: String, price: Double, change: Double?) throws -> Quot
         quotes: [msft: try quote("MSFT", price: 410.0, change: 0)],
         dead: [], rows: 1, gap: 20, locale: posix, measure: tenPerCharacter)
 
-    let segments = layout.rows[0].segments
+    let segments = entries(of: layout.rows[0])
     #expect(segments.map(\.role) == [.label, .label, .direction(.flat), .label])
     #expect(segments[2].text == "–")
 }
@@ -137,7 +148,7 @@ private func quote(_ raw: String, price: Double, change: Double?) throws -> Quot
         quotes: [ipo: try quote("IPO", price: 12.5, change: nil)],
         dead: [], rows: 1, gap: 20, locale: posix, measure: tenPerCharacter)
 
-    let segments = layout.rows[0].segments
+    let segments = entries(of: layout.rows[0])
     #expect(segments.map(\.role) == [.label, .label])
     #expect(segments.count == 2)
     let text = segments.map(\.text).joined()
@@ -154,8 +165,8 @@ private func quote(_ raw: String, price: Double, change: Double?) throws -> Quot
         symbols: [dead], quotes: [:], dead: [dead],
         rows: 1, gap: 20, locale: posix, measure: tenPerCharacter)
 
-    #expect(layout.rows[0].segments.map(\.text) == ["VOD.L ", "——"])
-    #expect(layout.rows[0].segments.map(\.role) == [.label, .label])
+    #expect(entries(of: layout.rows[0]).map(\.text) == ["VOD.L ", "——"])
+    #expect(entries(of: layout.rows[0]).map(\.role) == [.label, .label])
 }
 
 @Test func aSymbolWithNoQuoteYetIsRenderedLikeADeadOne() throws {
@@ -165,7 +176,7 @@ private func quote(_ raw: String, price: Double, change: Double?) throws -> Quot
     let layout = StripLayout.build(
         symbols: [aapl], quotes: [:], dead: [],
         rows: 1, gap: 20, locale: posix, measure: tenPerCharacter)
-    #expect(layout.rows[0].segments.map(\.text) == ["AAPL ", "——"])
+    #expect(entries(of: layout.rows[0]).map(\.text) == ["AAPL ", "——"])
 }
 
 @Test func anUnknownDirectionShowsTheNumbersWithoutAGlyphOrAColour() throws {
@@ -177,8 +188,8 @@ private func quote(_ raw: String, price: Double, change: Double?) throws -> Quot
         quotes: [btc: try quote("BTC-USD", price: 64000, change: nil)],
         dead: [], rows: 1, gap: 20, locale: posix, measure: tenPerCharacter)
 
-    #expect(layout.rows[0].segments.map(\.text) == ["BTC-USD ", "64,000.00"])
-    #expect(layout.rows[0].segments.map(\.role) == [.label, .label])
+    #expect(entries(of: layout.rows[0]).map(\.text) == ["BTC-USD ", "64,000.00"])
+    #expect(entries(of: layout.rows[0]).map(\.role) == [.label, .label])
 }
 
 @Test func segmentsAreLaidOutLeftToRightWithNoGapsInsideAnEntry() throws {
@@ -188,7 +199,7 @@ private func quote(_ raw: String, price: Double, change: Double?) throws -> Quot
         quotes: [aapl: try quote("AAPL", price: 232.1, change: -1.1)],
         dead: [], rows: 1, gap: 20, locale: posix, measure: tenPerCharacter)
 
-    let segments = layout.rows[0].segments
+    let segments = entries(of: layout.rows[0])
     #expect(segments[0].x == 0)
     for (previous, next) in zip(segments, segments.dropFirst()) {
         #expect(next.x == previous.x + previous.width)
@@ -205,7 +216,7 @@ private func quote(_ raw: String, price: Double, change: Double?) throws -> Quot
         dead: [], rows: 1, gap: 20, locale: posix, measure: tenPerCharacter)
 
     let row = layout.rows[0]
-    let painted = row.segments.reduce(0.0) { $0 + $1.width }
+    let painted = entries(of: row).reduce(0.0) { $0 + $1.width }
     #expect(row.contentWidth == painted + 20)
 }
 
@@ -237,11 +248,11 @@ private func quote(_ raw: String, price: Double, change: Double?) throws -> Quot
     #expect(layout.rows.count == 2)
     // Two segments per entry. One entry in row 0, three in row 1 — a
     // count-based splitter would put two entries (four segments) in each.
-    #expect(layout.rows[0].segments.count == 2)
-    #expect(layout.rows[1].segments.count == 6)
+    #expect(entries(of: layout.rows[0]).count == 2)
+    #expect(entries(of: layout.rows[1]).count == 6)
     // And the partition is the one the widths argue for, not merely some
     // one-against-three split.
-    #expect(layout.rows[0].segments[0].text == "LONGLONGLONGLONG ")
+    #expect(entries(of: layout.rows[0])[0].text == "LONGLONGLONGLONG ")
     let widths = layout.rows.map(\.contentWidth)
     #expect(widths == [210, 180])
 }
@@ -253,7 +264,7 @@ private func quote(_ raw: String, price: Double, change: Double?) throws -> Quot
                                    measure: tenPerCharacter)
     #expect(layout.rows.count == 1)
     // Two segments per entry (`SYMBOL ` and `——`), three entries.
-    #expect(layout.rows[0].segments.count == 6)
+    #expect(entries(of: layout.rows[0]).count == 6)
 }
 
 @Test func anEmptyWatchlistProducesEmptyRowsRatherThanNoRows() throws {
@@ -285,7 +296,87 @@ private func quote(_ raw: String, price: Double, change: Double?) throws -> Quot
     let layout = StripLayout.build(symbols: symbols, quotes: [:], dead: [],
                                    rows: 1, gap: 20, locale: posix,
                                    measure: tenPerCharacter)
-    let rendered = layout.rows[0].segments.map(\.text).filter { $0 != "——" }
+    let rendered = entries(of: layout.rows[0]).map(\.text).filter { $0 != "——" }
     let expected = raws.map { $0 + " " }
     #expect(rendered == expected)
+}
+
+// MARK: - The dividers
+
+@Test func anInterpunctDividesOneEntryFromTheNext() throws {
+    let symbols = try ["A", "B"].map { try symbol($0) }
+    let layout = StripLayout.build(symbols: symbols, quotes: [:], dead: [],
+                                   rows: 1, gap: 20, locale: posix,
+                                   measure: tenPerCharacter)
+
+    // One after each entry, the last included: in a scrolling row the
+    // trailing gap is the join to the repeat of the first entry, so it
+    // divides two entries like any other. `StripRenderer.rowLayer` is what
+    // drops the dangling one from a row that does not tile.
+    #expect(layout.rows[0].segments.map(\.text) == ["A ", "——", "·", "B ", "——", "·"])
+    let roles = layout.rows[0].segments.map(\.role)
+    #expect(roles == [.label, .label, .separator, .label, .label, .separator])
+}
+
+@Test func theInterpunctIsCentredInTheGapAndCostsNoWidth() throws {
+    // The whole point of centring it inside the gap rather than adding it to
+    // the gap: `contentWidth` is the lap, the tiling seam and the scroll
+    // duration, and a divider that moved it would have changed all three.
+    let a = try symbol("A")
+    let layout = StripLayout.build(symbols: [a], quotes: [:], dead: [],
+                                   rows: 1, gap: 20, locale: posix,
+                                   measure: tenPerCharacter)
+
+    let row = layout.rows[0]
+    // `A ` is 20 and `——` is 20, so the entry ends at 40 and the 20-point gap
+    // runs to 60. A 10-point dot centred in it starts at 45.
+    let divider = try #require(row.segments.last)
+    #expect(divider.role == .separator)
+    #expect(divider.x == 45)
+    #expect(divider.width == 10)
+    #expect(row.contentWidth == 60)
+}
+
+@Test func aGapTooNarrowToHoldTheDividerGetsNone() throws {
+    // At ten points per character the dot is 10 wide, so a 10-point gap has
+    // no room for it with air either side. Skipped rather than squeezed:
+    // overlapping the price is worse than no divider at all.
+    let symbols = try ["A", "B"].map { try symbol($0) }
+    let layout = StripLayout.build(symbols: symbols, quotes: [:], dead: [],
+                                   rows: 1, gap: 10, locale: posix,
+                                   measure: tenPerCharacter)
+
+    #expect(!layout.rows[0].segments.contains { $0.role == .separator })
+}
+
+@Test func cardsCarryNoDividers() throws {
+    // A card is one entry alone in the menu bar. Nothing is beside it, so
+    // there is nothing to divide it from.
+    let symbols = try ["A", "B"].map { try symbol($0) }
+    let layout = StripLayout.cards(symbols: symbols, quotes: [:], dead: [],
+                                   locale: posix, measure: tenPerCharacter)
+
+    #expect(layout.rows.count == 2)
+    #expect(!layout.rows.contains { $0.segments.contains { $0.role == .separator } })
+}
+
+// A card is one entry, measured and emphasised exactly as the strip measures
+// and emphasises it — the point of reusing `pieces` rather than assembling
+// `SYMBOL price ▲delta (pct%)` a second time.
+@Test func aCardIsOneEntryAtItsOwnWidth() throws {
+    let symbols = try ["A", "BB"].map { try symbol($0) }
+    let layout = StripLayout.cards(symbols: symbols, quotes: [:], dead: [],
+                                   locale: posix, measure: tenPerCharacter)
+
+    #expect(layout.rows.count == 2)
+    // `A ` plus `——`, then `BB ` plus `——`: no gap, so the width is the text's.
+    #expect(layout.rows.map(\.contentWidth) == [40, 50])
+    #expect(layout.rows[0].segments.map(\.x) == [0, 20])
+    #expect(layout.rows.allSatisfy { $0.segments.first?.emphasized == true })
+}
+
+@Test func anEmptyWatchlistProducesNoCards() {
+    let layout = StripLayout.cards(symbols: [], quotes: [:], dead: [],
+                                   locale: posix, measure: tenPerCharacter)
+    #expect(layout.rows.isEmpty)
 }

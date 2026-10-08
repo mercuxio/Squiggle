@@ -20,8 +20,8 @@ import Testing
     for (index, value) in SettingsForm.motion.values.enumerated() {
         #expect(SettingsForm.motion.index(of: value) == index)
     }
-    for (index, value) in SettingsForm.rows.values.enumerated() {
-        #expect(SettingsForm.rows.index(of: value) == index)
+    for (index, value) in SettingsForm.display.values.enumerated() {
+        #expect(SettingsForm.display.index(of: value) == index)
     }
 }
 
@@ -35,21 +35,21 @@ import Testing
 // An index outside the range at either end — past the last item or negative —
 // yields the fallback rather than trapping.
 @Test func anImpossibleIndexIsSurvivable() {
-    #expect(SettingsForm.rows.value(at: 99) == SettingsForm.rows.fallback)
-    #expect(SettingsForm.rows.value(at: -1) == SettingsForm.rows.fallback)
+    #expect(SettingsForm.display.value(at: 99) == SettingsForm.display.fallback)
+    #expect(SettingsForm.display.value(at: -1) == SettingsForm.display.fallback)
 }
 
 // A control whose titles and values have drifted apart shows the wrong
 // label on the right value, which is worse than either alone.
 @Test func titlesAndValuesAgree() {
-    #expect(SettingsForm.rows.values.count == SettingsForm.rows.titles.count)
+    #expect(SettingsForm.display.values.count == SettingsForm.display.titles.count)
     #expect(SettingsForm.interval.values.count == SettingsForm.interval.titles.count)
     #expect(SettingsForm.scheme.values.count == SettingsForm.scheme.titles.count)
     #expect(SettingsForm.motion.values.count == SettingsForm.motion.titles.count)
 }
 
 @Test func theFallbacksAreReachable() {
-    #expect(SettingsForm.rows.values.contains(SettingsForm.rows.fallback))
+    #expect(SettingsForm.display.values.contains(SettingsForm.display.fallback))
     #expect(SettingsForm.interval.values.contains(SettingsForm.interval.fallback))
     #expect(SettingsForm.scheme.values.contains(SettingsForm.scheme.fallback))
     #expect(SettingsForm.motion.values.contains(SettingsForm.motion.fallback))
@@ -59,7 +59,7 @@ import Testing
 // of these drift the control offers something the app cannot honour.
 @Test func theMenusAreTheSpecs() {
     #expect(SettingsForm.interval.values == RateConstants.refreshIntervalChoices)
-    #expect(SettingsForm.rows.values == [1, 2])
+    #expect(SettingsForm.display.values == ["one", "two", "flip"])
     #expect(SettingsForm.scheme.values == ["monochrome", "classic", "accessible"])
     #expect(SettingsForm.motion.values == ["scroll", "step"])
 }

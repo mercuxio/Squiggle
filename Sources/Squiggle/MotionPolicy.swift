@@ -15,6 +15,39 @@ enum MotionMode: String, Equatable, Sendable {
     }
 }
 
+/// What the menu bar shows: one strip, two strips, or one stock at a time.
+/// The raw values are the stored vocabulary `Settings.display` keeps, so the
+/// settings file and this type cannot drift apart — the same contract
+/// `MotionMode` has.
+enum DisplayMode: String, Equatable, Sendable {
+    case one
+    case two
+    case flip
+
+    /// Decodes a stored setting, defaulting the way `MotionMode(setting:)`
+    /// does. A word this build has never heard of — a file written by a later
+    /// Squiggle — shows two rows rather than refusing to start, and the
+    /// unknown word stays in the file untouched.
+    init(setting: String) {
+        self = DisplayMode(rawValue: setting) ?? .two
+    }
+}
+
+/// How the strip moves, once the display mode and Reduce Motion have both had
+/// their say. `TickerView` switches on this and nothing else.
+///
+/// Flip carries whether it must do without the rotation, rather than leaving
+/// the view to ask the workspace a second time: the answer has to be the same
+/// one `StatusItemController` used when it chose the layout, and two reads of
+/// a system setting a few lines apart is exactly how they would differ.
+enum StripMotion: Equatable, Sendable {
+    case scroll
+    case step
+    /// - Parameter crossfading: Reduce Motion is on, so the card dips through
+    ///   transparent instead of turning.
+    case flip(crossfading: Bool)
+}
+
 /// How the footer's refresh icon says a fetch is under way.
 ///
 /// Two cases rather than an optional `Bool`, because "not refreshing" is the
@@ -39,6 +72,24 @@ enum MotionPolicy {
     /// their choice was never overwritten — only overruled.
     static func effective(requested: MotionMode, reduceMotion: Bool) -> MotionMode {
         reduceMotion ? .step : requested
+    }
+
+    /// The one place display mode, the stored motion mode and Reduce Motion
+    /// are reconciled.
+    ///
+    /// Flip is its own motion, so it overrides the scroll/step choice rather
+    /// than combining with it — which is why Settings disables that control
+    /// while Flip is selected. The stored choice is untouched and comes back
+    /// when the user leaves Flip, exactly as Reduce Motion overrules without
+    /// overwriting.
+    static func stripMotion(display: DisplayMode,
+                            requested: MotionMode,
+                            reduceMotion: Bool) -> StripMotion {
+        guard display != .flip else { return .flip(crossfading: reduceMotion) }
+        switch effective(requested: requested, reduceMotion: reduceMotion) {
+        case .scroll: return .scroll
+        case .step: return .step
+        }
     }
 
     /// The same rule `effective` applies to the strip, applied to the footer:
