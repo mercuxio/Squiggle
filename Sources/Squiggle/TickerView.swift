@@ -255,7 +255,7 @@ final class TickerView: NSView {
 
         var animations: [CAAnimation] = []
         if crossfading {
-            // Reduce Motion: the card still changes every two seconds, but it
+            // Reduce Motion: the card still changes on the same cadence, but it
             // dips through transparent instead of rotating. The same answer
             // Step gives — the information arrives, the movement does not.
             animations.append(Self.keyframes(FlipPolicy.fade(index: index, count: count),

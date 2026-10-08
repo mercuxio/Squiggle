@@ -2,20 +2,20 @@ import Testing
 @testable import Squiggle
 
 // Everything `FlipPolicy` returns is a fraction of one cycle, so these tests
-// convert back by hand where a reader would want seconds: a 0.0375 key time
-// against a four-second cycle is the 0.15s half-turn the policy promises.
+// convert back by hand where a reader would want seconds: a 0.03 key time
+// against a ten-second cycle is the 0.3s half-turn the policy promises.
 
-@Test func theCycleIsTwoSecondsPerCard() {
-    #expect(FlipPolicy.cycleSeconds(cardCount: 1) == 2)
-    #expect(FlipPolicy.cycleSeconds(cardCount: 3) == 6)
-    #expect(FlipPolicy.cycleSeconds(cardCount: 10) == 20)
+@Test func theCycleIsFiveSecondsPerCard() {
+    #expect(FlipPolicy.cycleSeconds(cardCount: 1) == 5)
+    #expect(FlipPolicy.cycleSeconds(cardCount: 3) == 15)
+    #expect(FlipPolicy.cycleSeconds(cardCount: 10) == 50)
 }
 
 // Spec §5.2: a zero duration renders a frozen layer, and a frozen bar reads
 // as a crash. An empty deck is reachable — the watchlist mid-removal.
 @Test func anEmptyDeckStillNamesAFiniteCycle() {
-    #expect(FlipPolicy.cycleSeconds(cardCount: 0) == 2)
-    #expect(FlipPolicy.cycleSeconds(cardCount: -3) == 2)
+    #expect(FlipPolicy.cycleSeconds(cardCount: 0) == 5)
+    #expect(FlipPolicy.cycleSeconds(cardCount: -3) == 5)
 }
 
 @Test func oneCardHasNothingToFlipTo() {
@@ -29,8 +29,8 @@ import Testing
 // outgoing and incoming halves from overlapping.
 @Test func aCardIsFaceOnThroughItsOwnSlotAndEdgeOnAtItsEnds() {
     let frames = FlipPolicy.rotation(index: 0, count: 2)
-    // Four seconds of cycle, a 0.6s turn, so each half-turn is 0.075 of it.
-    #expect(frames.keyTimes == [0, 0.075, 0.425, 0.5, 1])
+    // Ten seconds of cycle, a 0.6s turn, so each half-turn is 0.03 of it.
+    #expect(frames.keyTimes == [0, 0.03, 0.47, 0.5, 1])
     #expect(frames.values == [FlipPolicy.quarterTurn, 0, 0,
                               -FlipPolicy.quarterTurn, -FlipPolicy.quarterTurn])
 }
@@ -90,7 +90,7 @@ import Testing
         == FlipPolicy.Keyframes(values: [0, 1], keyTimes: [0, 2.0 / 3, 1]))
 }
 
-// Reduce Motion keeps the two-second cadence and drops the rotation. The dip
+// Reduce Motion keeps the same cadence and drops the rotation. The dip
 // borrows `MotionPolicy.fadeSeconds` so Step's fade and Flip's fade are one
 // vocabulary rather than two numbers that happen to be close.
 @Test func theReduceMotionFadeDipsThroughTransparentOnTheSameCadence() {

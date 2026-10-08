@@ -12,8 +12,10 @@ import Foundation
 /// because that is the vocabulary `CAKeyframeAnimation.keyTimes` speaks. The
 /// cycle those fractions are of is `cycleSeconds`.
 enum FlipPolicy {
-    /// The user's figure: a stock is readable for two seconds before it turns.
-    static let dwellSeconds: Double = 2
+    /// The user's figure: a stock is readable for five seconds before it
+    /// turns. Two was the original figure and proved too brief — a glance
+    /// away and the symbol you were reading had already gone.
+    static let dwellSeconds: Double = 5
     /// How long the turn itself takes — half of it spent on the card leaving,
     /// half on the card arriving, so only one of the two is ever mid-flip.
     ///
@@ -49,7 +51,7 @@ enum FlipPolicy {
     }
 
     /// Whether the deck turns at all. A single stock has nothing to flip to,
-    /// and a one-card cycle animating to itself would be two seconds of
+    /// and a one-card cycle animating to itself would be five seconds of
     /// pointless rotation — the same rule `StripRenderer.fits` applies to a
     /// strip that does not need to scroll.
     static func animates(cardCount: Int) -> Bool {
