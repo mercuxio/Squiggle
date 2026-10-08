@@ -33,12 +33,18 @@ final class SettingsWindowController: NSWindowController {
     /// - Parameter onChange: called with the edited settings after every
     ///   change. The controller re-renders immediately and persists on a short
     ///   delay — see `StatusItemController.settingsChanged`.
+    /// - Parameter updater: the update seam. `.sparkle` is a computed
+    ///   property, so naming it here starts nothing until a real window is
+    ///   built; a test that constructs the model directly gets
+    ///   `.unavailable` and never loads Sparkle.
     init(settings: TickerSettings,
          launchAtLogin: LaunchAtLogin = .system,
+         updater: UpdateChecker = .sparkle,
          version: String? = AppVersion.current,
          onChange: @escaping (TickerSettings) -> Void) {
         model = SettingsModel(settings: settings,
                               launchAtLogin: launchAtLogin,
+                              updater: updater,
                               version: version,
                               onChange: onChange)
 

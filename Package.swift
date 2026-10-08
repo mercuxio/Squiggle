@@ -11,6 +11,12 @@ let package = Package(
     ],
     dependencies: [
         .package(url: "https://github.com/swiftlang/swift-testing.git", from: "0.10.0"),
+        // The second dependency, and the only one that ships inside the app:
+        // Sparkle does the update check. SwiftPM links it but cannot embed a
+        // binary framework into an executable product, so
+        // scripts/package-app.sh copies Sparkle.framework into the bundle by
+        // hand. See that script for the embedding and signing order.
+        .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.6.0"),
     ],
     targets: [
         .target(name: "TickerCore"),
@@ -19,7 +25,13 @@ let package = Package(
         // "One flagged deviation from the spec".
         .target(name: "YahooFeed", dependencies: ["TickerCore"]),
         .executableTarget(name: "squigglectl", dependencies: ["TickerCore", "YahooFeed"]),
-        .executableTarget(name: "Squiggle", dependencies: ["TickerCore", "YahooFeed"]),
+        .executableTarget(
+            name: "Squiggle",
+            dependencies: [
+                "TickerCore", "YahooFeed",
+                .product(name: "Sparkle", package: "Sparkle"),
+            ]
+        ),
         .testTarget(
             name: "TickerCoreTests",
             dependencies: [

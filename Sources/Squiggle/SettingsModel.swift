@@ -32,14 +32,17 @@ final class SettingsModel {
     let version: String?
 
     @ObservationIgnored private let launchAtLogin: LaunchAtLogin
+    @ObservationIgnored private let updater: UpdateChecker
     @ObservationIgnored private let onChange: (TickerSettings) -> Void
 
     init(settings: TickerSettings,
          launchAtLogin: LaunchAtLogin,
+         updater: UpdateChecker = .unavailable,
          version: String?,
          onChange: @escaping (TickerSettings) -> Void) {
         self.settings = settings
         self.launchAtLogin = launchAtLogin
+        self.updater = updater
         self.version = version
         self.onChange = onChange
         refreshLoginItem()
@@ -88,6 +91,33 @@ final class SettingsModel {
         let action = LaunchAtLogin.action(desired: wanted, current: launchAtLogin.read())
         show(launchAtLogin.apply(action))
     }
+
+    // MARK: - Updates
+
+    /// Whether the window shows the update controls at all. False in an
+    /// unbundled build, where there is nothing Sparkle could replace.
+    var showsUpdates: Bool { updater.isAvailable }
+
+    /// Read through to Sparkle rather than mirrored here, for the same reason
+    /// `loginState` is read and never remembered: Sparkle owns this
+    /// preference, keeps it in its own defaults, and may change it itself
+    /// after a check. `access`/`withMutation` are what let a value that lives
+    /// outside this object still drive a SwiftUI toggle.
+    var checksForUpdatesAutomatically: Bool {
+        get {
+            access(keyPath: \.checksForUpdatesAutomatically)
+            return updater.automaticallyChecks()
+        }
+        set {
+            withMutation(keyPath: \.checksForUpdatesAutomatically) {
+                updater.setAutomaticallyChecks(newValue)
+            }
+        }
+    }
+
+    func checkForUpdates() { updater.checkNow() }
+
+    // MARK: - Launch at login, continued
 
     func openLoginItems() {
         show(launchAtLogin.apply(.openSystemSettings))

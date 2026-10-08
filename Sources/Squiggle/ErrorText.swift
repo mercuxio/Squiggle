@@ -242,6 +242,12 @@ enum ErrorText {
     static let launchAtLoginLabel = "Open at Login"
     static let openLoginItems = "Open Login Items…"
 
+    /// Sparkle's two controls, worded as Sniffcast words them so the two
+    /// menu bar apps' settings keep reading like siblings. The ellipsis on
+    /// the button is the Mac convention for "this opens something".
+    static let automaticUpdatesLabel = "Check for updates automatically"
+    static let checkForUpdates = "Check for Updates…"
+
     /// The note under the checkbox. A refusal outranks the state, because the
     /// state is the same before and after one — that sameness is what made the
     /// old silent failure unreadable.

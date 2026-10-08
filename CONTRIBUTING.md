@@ -14,12 +14,25 @@ where the default build system fails. SwiftPM prints a deprecation warning
 telling you to drop the flag. On a Command Line Tools-only machine that advice
 is wrong.
 
-The same limitation is why the project has its one dependency. `swift-testing`
-comes in as an SPM package rather than from the toolchain because, without
+The same limitation is why the project has `swift-testing` as a dependency.
+It comes in as an SPM package rather than from the toolchain because, without
 Xcode selected, SwiftPM can't find the bundled `Testing` module and
-`import Testing` just fails. The project should never add a second dependency.
-`squigglectl`'s argument parser stays hand-written rather than pulling in
-`swift-argument-parser`.
+`import Testing` just fails.
+
+There is one other dependency, and the bar for a third is the same bar Sparkle
+cleared: it has to do something that cannot reasonably be hand-written and that
+the app would otherwise do badly. Sparkle is the update checker — EdDSA-signed
+appcast, download, replace-and-relaunch — and a hand-rolled version of that is
+a security mechanism written by one person in an evening. `squigglectl`'s
+argument parser stays hand-written rather than pulling in
+`swift-argument-parser`, because that one is an afternoon of `switch`.
+
+Sparkle is also the only dependency that ships inside the bundle. SwiftPM will
+link a binary framework into an executable product but has no way to embed it,
+so `scripts/package-app.sh` copies `Sparkle.framework` into
+`Contents/Frameworks`, adds the `@executable_path/../Frameworks` rpath the
+loader needs, and signs the framework before the app. Running `swift build`
+alone produces a binary that works from `.build` and nowhere else.
 
 `@testable import` works on an `executableTarget`, which is how both
 `squigglectl` and the app target are tested.

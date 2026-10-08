@@ -64,6 +64,15 @@ struct SettingsView: View {
                 if model.loginState.showsSystemSettingsButton {
                     Button(ErrorText.openLoginItems) { model.openLoginItems() }
                 }
+                // Hidden rather than disabled, unlike the Motion picker
+                // above: a greyed-out Motion still tells the user Squiggle
+                // can scroll, whereas a greyed-out update check in a build
+                // that has no bundle tells them nothing they can act on.
+                if model.showsUpdates {
+                    Toggle(ErrorText.automaticUpdatesLabel,
+                           isOn: $model.checksForUpdatesAutomatically)
+                    Button(ErrorText.checkForUpdates) { model.checkForUpdates() }
+                }
             }
 
             Section {
