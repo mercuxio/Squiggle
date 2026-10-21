@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import TickerCore
 import Testing
@@ -170,4 +171,24 @@ private func result(_ symbol: String, _ name: String = "Some Company",
     #expect(model.rows.isEmpty)
     #expect(model.isFull)
     #expect(model.message == ErrorText.watchlistFull)
+}
+
+
+// MARK: - The window
+
+@MainActor
+@Test func theResizablePickerCanAlsoBeMinimised() throws {
+    // A `.titled` window always draws all three buttons; the mask only decides
+    // which are live. The picker keeps `.resizable`, so hiding the minimise
+    // button would leave a gap between close and zoom — AppKit does not reflow
+    // the row. Making it live is the smaller change, and nothing about a
+    // resizable search window argues against the Dock.
+    let controller = SymbolPickerWindowController(
+        search: { _ in [] }, watchlist: [], onAdd: { _ in })
+    let panel = try #require(controller.window)
+
+    #expect(panel.styleMask.contains(.miniaturizable))
+    #expect(panel.styleMask.contains(.resizable))
+    let minimise = try #require(panel.standardWindowButton(.miniaturizeButton))
+    #expect(!minimise.isHidden)
 }

@@ -59,6 +59,29 @@ private func window(settings: TickerSettings = Settings(),
     #expect(!panel.styleMask.contains(.resizable))
 }
 
+@MainActor
+@Test func theFixedSizeFormOffersOnlyAClose() throws {
+    // The style mask alone leaves both buttons drawn and merely disabled: the
+    // mask says what the window can do, not which buttons exist. Only hiding
+    // the views removes them — see `SettingsWindowController.init`.
+    //
+    // Unwrapped rather than asked inline. `#expect(button?.isHidden ?? false)`
+    // passes whatever `isHidden` holds, because the macro mis-evaluates `??`:
+    // the first version of this test was green against the unfixed window.
+    let spy = LoginItemSpy(state: .off, result: .off)
+    let controller = window(launchAtLogin: spy.seam)
+    let panel = try #require(controller.window)
+    let minimise = try #require(panel.standardWindowButton(.miniaturizeButton))
+    let zoom = try #require(panel.standardWindowButton(.zoomButton))
+    let close = try #require(panel.standardWindowButton(.closeButton))
+
+    #expect(minimise.isHidden)
+    #expect(zoom.isHidden)
+    // The one button that stays, and the reason the other two can go without
+    // leaving a gap: close is leading, the hidden pair trailing.
+    #expect(!close.isHidden)
+}
+
 // MARK: - Editing
 
 @MainActor
@@ -294,5 +317,5 @@ private func window(settings: TickerSettings = Settings(),
             as? [String: Any])
 
     let version = try #require(parsed["CFBundleShortVersionString"] as? String)
-    #expect(version == "1.0.8")
+    #expect(version == "1.0.9")
 }

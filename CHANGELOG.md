@@ -6,6 +6,21 @@ All notable changes to Squiggle are recorded here. The format follows
 
 ## [Unreleased]
 
+## [1.0.9] — 2026-10-21
+
+### Fixed
+
+- The settings window no longer shows a dead minimise and zoom button. Leaving
+  `.miniaturizable` and `.resizable` out of the style mask does not remove them:
+  a titled window always builds all three traffic lights, and the mask only
+  decides which are live, so the form offered two buttons it could not honour.
+  Both are now hidden — both, because AppKit lays the row out at fixed
+  positions and hiding one would leave a hole.
+- The Add symbol window can now be minimised. It keeps `.resizable`, so hiding
+  its minimise button would have left that gap; making the button work is the
+  smaller change, and a resizable search window has no reason to refuse the
+  Dock.
+
 ## [1.0.8] — 2026-10-08
 
 ### Fixed

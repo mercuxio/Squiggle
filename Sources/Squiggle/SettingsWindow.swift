@@ -55,6 +55,17 @@ final class SettingsWindowController: NSWindowController {
         let window = EscapeClosingWindow(contentViewController: hosting)
         // No `.resizable`: the form has one correct size.
         window.styleMask = [.titled, .closable]
+        // The mask is not enough. A `.titled` window always builds all three
+        // traffic lights, and the mask only decides which of them are live, so
+        // dropping `.miniaturizable` and `.resizable` leaves both buttons drawn
+        // and dead — an offer the window cannot honour. Hiding the views is the
+        // only thing that removes them.
+        //
+        // Both, never one: AppKit does not reflow the row, so hiding the middle
+        // button alone would leave a hole. Close is leading and these two are
+        // trailing, which is why the remaining button needs no repositioning.
+        window.standardWindowButton(.miniaturizeButton)?.isHidden = true
+        window.standardWindowButton(.zoomButton)?.isHidden = true
         window.title = ErrorText.settingsTitle
         // The window is closed and reopened from the menu, not destroyed —
         // `NSWindowController` would otherwise release it out from under the

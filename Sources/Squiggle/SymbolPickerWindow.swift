@@ -31,7 +31,14 @@ final class SymbolPickerWindowController: NSWindowController,
         self.onAdd = onAdd
 
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 420, height: 320),
-                              styleMask: [.titled, .closable, .resizable],
+                              // `.miniaturizable` rather than a hidden button:
+                              // this window keeps `.resizable`, so a hidden
+                              // minimise button would leave a gap between close
+                              // and zoom — AppKit lays the row out at fixed
+                              // positions. Nothing about a resizable search
+                              // window argues against the Dock.
+                              styleMask: [.titled, .closable, .miniaturizable,
+                                          .resizable],
                               backing: .buffered, defer: false)
         window.title = ErrorText.addSymbol
         window.isReleasedWhenClosed = false
