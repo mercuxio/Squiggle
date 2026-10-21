@@ -177,18 +177,26 @@ private func result(_ symbol: String, _ name: String = "Some Company",
 // MARK: - The window
 
 @MainActor
-@Test func theResizablePickerCanAlsoBeMinimised() throws {
-    // A `.titled` window always draws all three buttons; the mask only decides
-    // which are live. The picker keeps `.resizable`, so hiding the minimise
-    // button would leave a gap between close and zoom — AppKit does not reflow
-    // the row. Making it live is the smaller change, and nothing about a
-    // resizable search window argues against the Dock.
+@Test func thePickerIsFixedSizeAndOffersOnlyAClose() throws {
+    // One correct size, like the settings form. The mask is not enough on its
+    // own: a `.titled` window always draws all three traffic lights and the
+    // mask only decides which are live, so both of the ones this window cannot
+    // honour have to be hidden — and both together, because AppKit never
+    // reflows the row.
+    //
+    // Unwrapped rather than asked inline: `#expect(button?.isHidden ?? false)`
+    // passes whatever `isHidden` holds, because the macro mis-evaluates `??`.
     let controller = SymbolPickerWindowController(
         search: { _ in [] }, watchlist: [], onAdd: { _ in })
     let panel = try #require(controller.window)
 
-    #expect(panel.styleMask.contains(.miniaturizable))
-    #expect(panel.styleMask.contains(.resizable))
+    #expect(!panel.styleMask.contains(.resizable))
+    #expect(!panel.styleMask.contains(.miniaturizable))
     let minimise = try #require(panel.standardWindowButton(.miniaturizeButton))
-    #expect(!minimise.isHidden)
+    let zoom = try #require(panel.standardWindowButton(.zoomButton))
+    let close = try #require(panel.standardWindowButton(.closeButton))
+
+    #expect(minimise.isHidden)
+    #expect(zoom.isHidden)
+    #expect(!close.isHidden)
 }

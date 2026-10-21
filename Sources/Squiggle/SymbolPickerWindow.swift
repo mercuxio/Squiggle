@@ -30,18 +30,20 @@ final class SymbolPickerWindowController: NSWindowController,
         self.watchlist = watchlist
         self.onAdd = onAdd
 
+        // No `.resizable`: a search field over a short result list has one
+        // correct size, the same as the settings form.
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 420, height: 320),
-                              // `.miniaturizable` rather than a hidden button:
-                              // this window keeps `.resizable`, so a hidden
-                              // minimise button would leave a gap between close
-                              // and zoom — AppKit lays the row out at fixed
-                              // positions. Nothing about a resizable search
-                              // window argues against the Dock.
-                              styleMask: [.titled, .closable, .miniaturizable,
-                                          .resizable],
+                              styleMask: [.titled, .closable],
                               backing: .buffered, defer: false)
         window.title = ErrorText.addSymbol
         window.isReleasedWhenClosed = false
+        // The mask only decides which traffic lights are *live*; a `.titled`
+        // window always builds all three, so dropping the bits would leave two
+        // drawn and dead. Hiding the views is the only thing that removes them,
+        // and both go together because AppKit never reflows the row — hiding
+        // minimise alone would leave a hole where it sat.
+        window.standardWindowButton(.miniaturizeButton)?.isHidden = true
+        window.standardWindowButton(.zoomButton)?.isHidden = true
         super.init(window: window)
         window.delegate = self
         window.contentView = makeContentView()

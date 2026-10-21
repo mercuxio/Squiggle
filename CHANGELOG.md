@@ -6,6 +6,16 @@ All notable changes to Squiggle are recorded here. The format follows
 
 ## [Unreleased]
 
+## [1.0.10] — 2026-10-21
+
+### Changed
+
+- The **Add symbol** window is now fixed size, like the settings form: a search
+  field over a short result list has one correct size. It loses `.resizable`
+  and `.miniaturizable`, and both of those traffic lights are hidden — the mask
+  alone would leave them drawn and dead, and they go together because AppKit
+  never reflows the button row.
+
 ## [1.0.9] — 2026-10-21
 
 ### Fixed
