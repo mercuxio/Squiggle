@@ -6,6 +6,18 @@ All notable changes to Squiggle are recorded here. The format follows
 
 ## [Unreleased]
 
+## [1.0.11] — 2026-10-23
+
+### Added
+
+- The menu bar shows "Add Symbol…" when the watchlist is empty. A watchlist
+  with no symbols in it laid out a strip with nothing in it, into a status
+  item that was still the configured width — on first run that was a fixed
+  stretch of clickable nothing, with no sign the app was running. The
+  placeholder shrinks the item to fit its own text and widens to the
+  configured width when the first symbol arrives. Clicking it opens the
+  dropdown as usual, where Add Symbol…, Settings and Quit already are.
+
 ## [1.0.10] — 2026-10-21
 
 ### Changed

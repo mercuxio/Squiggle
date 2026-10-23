@@ -346,6 +346,16 @@ final class StatusItemController: NSObject {
     }
 
     private func render() {
+        // An empty watchlist has no strip to lay out — and the strip is the
+        // only thing that says the app is running, so it gets the placeholder
+        // instead. Checked here rather than inside `StripLayout` because the
+        // branch also changes the item's width and the motion, neither of
+        // which a layout decides.
+        guard !runner.symbols.isEmpty else {
+            renderPlaceholder()
+            return
+        }
+
         let metrics = StripRenderer.metrics(rows: settings.rows,
                                             barHeight: Double(NSStatusBar.system.thickness))
         let measure = Self.measurer(metrics)
@@ -385,6 +395,47 @@ final class StatusItemController: NSObject {
                          // restarts the marquee behind a locked screen —
                          // `PauseMonitor` reports only *changes*, so no second
                          // notification would ever arrive to stop it again.
+                         paused: pauseConditions.isPaused,
+                         color: colorResolver())
+    }
+
+    /// Points of breathing room around the placeholder, half on each side.
+    /// Not `entryGap`: that is the space *between* two entries in a strip,
+    /// and borrowing it here would tie the one to the other for no reason
+    /// beyond the two numbers happening to look alike.
+    private static let placeholderPadding: Double = 12
+
+    /// The empty-watchlist strip: "Add Symbol…", on one line, in an item
+    /// shrunk to fit it.
+    ///
+    /// Three deliberate departures from `render`:
+    ///
+    /// - One row, whatever `settings.rows` says, and metrics asked for one
+    ///   row so the font is the single-row 12pt. The renderer indexes rows
+    ///   unconditionally, so a layout's row count and the metrics it is drawn
+    ///   with have to agree.
+    /// - `.scroll` motion, whatever the display mode is, which keeps the
+    ///   placeholder off the Flip path entirely — a one-card deck would still
+    ///   be a deck, turning a line of static text on a timer.
+    /// - The item's width comes from the layout rather than from
+    ///   `maxVisibleWidth`. The text fits by construction, so
+    ///   `StripRenderer.fits` is true, and a row that fits is drawn once with
+    ///   no animation attached. It widens to the configured width the moment
+    ///   the first symbol arrives — a jump the user reads as the app
+    ///   answering what they just did.
+    private func renderPlaceholder() {
+        let metrics = StripRenderer.metrics(rows: 1,
+                                            barHeight: Double(NSStatusBar.system.thickness))
+        let layout = StripLayout.placeholder(text: ErrorText.addSymbol,
+                                             padding: Self.placeholderPadding,
+                                             measure: Self.measurer(metrics))
+        let width = layout.widestRowWidth
+        statusItem.length = width
+        tickerView.apply(layout: layout,
+                         metrics: metrics,
+                         visibleWidth: width,
+                         motion: .scroll,
+                         pointsPerSecond: settings.scrollPointsPerSecond,
                          paused: pauseConditions.isPaused,
                          color: colorResolver())
     }

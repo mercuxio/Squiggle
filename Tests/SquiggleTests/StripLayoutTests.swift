@@ -403,3 +403,56 @@ private func quote(_ raw: String, price: Double, change: Double?) throws -> Quot
     #expect(half.segments.map(\.role) == row.segments.map(\.role))
     #expect(half.segments.map(\.emphasized) == [true, false])
 }
+
+// MARK: - The empty-watchlist placeholder
+
+// `build` over no symbols is correct and invisible: rows with no segments in
+// them, drawn into a status item that is still the configured width. The
+// placeholder is what the menu bar shows instead, and it is one row whatever
+// the settings say — the renderer indexes rows unconditionally, so a layout
+// of two rows drawn with one row's metrics would read past the end.
+@Test func thePlaceholderIsOneRowOfOneLabel() throws {
+    let layout = StripLayout.placeholder(text: "Add Symbol…", padding: 12,
+                                         measure: tenPerCharacter)
+
+    #expect(layout.rows.count == 1)
+    let row = try #require(layout.rows.first)
+    #expect(row.segments.count == 1)
+    let only = try #require(row.segments.first)
+    #expect(only.text == "Add Symbol…")
+    #expect(only.role == .label)
+    // Not emphasized: the symbols that will replace it are, and a placeholder
+    // drawn in the heavier weight would read as a watchlist of one.
+    #expect(!only.emphasized)
+}
+
+// The padding is half on each side, and `contentWidth` is the whole width the
+// status item should be — which is the point of carrying it in the layout:
+// the caller sets the item's width from `widestRowWidth`, so the text cannot
+// end up off-centre in an item sized from a different number.
+@Test func thePlaceholderIsCentredInItsOwnWidth() throws {
+    let layout = StripLayout.placeholder(text: "Add", padding: 12,
+                                         measure: tenPerCharacter)
+
+    let row = try #require(layout.rows.first)
+    let only = try #require(row.segments.first)
+    #expect(only.width == 30)
+    #expect(only.x == 6)
+    #expect(row.contentWidth == 42)
+    #expect(layout.widestRowWidth == 42)
+    // The text's right edge and the row's are the same distance apart as the
+    // left pair, which is what "centred" means here.
+    #expect(row.contentWidth - (only.x + only.width) == only.x)
+}
+
+// A row whose `contentWidth` equals the width it is drawn into fits, and
+// `TickerView` draws a fitting row once with no animation attached. That is
+// how the placeholder sits still: not a special case in the renderer, just
+// the stopping condition spec §5.2 already has.
+@Test func thePlaceholderFitsTheWidthItAsksFor() {
+    let layout = StripLayout.placeholder(text: "Add Symbol…", padding: 12,
+                                         measure: tenPerCharacter)
+
+    #expect(StripRenderer.fits(contentWidth: layout.widestRowWidth,
+                               visibleWidth: layout.widestRowWidth))
+}

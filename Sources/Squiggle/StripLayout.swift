@@ -194,6 +194,32 @@ struct StripLayout: Equatable {
         })
     }
 
+    /// A single line of text, centred in its own width, for a menu bar that
+    /// has nothing to show.
+    ///
+    /// An empty watchlist is not an empty strip but an invisible one: `build`
+    /// maps over no symbols and returns the rows the renderer indexes, with
+    /// no segments in them, into a status item that is still the configured
+    /// width. The user sees a fixed stretch of clickable nothing and has no
+    /// way to know the app is running (spec §7 has no state for this, because
+    /// it describes a watchlist that has symbols in it).
+    ///
+    /// `padding` is carried in the layout rather than added to the status
+    /// item's width by the caller, so that `contentWidth` is the full width
+    /// the item should be and the text sits in the middle of it. One source
+    /// of truth: the caller sets `statusItem.length` from `widestRowWidth`
+    /// and the two cannot drift.
+    static func placeholder(text: String,
+                            padding: Double,
+                            measure: (String, Bool) -> Double) -> StripLayout {
+        let width = measure(text, false)
+        return StripLayout(rows: [
+            Row(segments: [Segment(text: text, role: .label,
+                                   x: padding / 2, width: width)],
+                contentWidth: width + padding)
+        ])
+    }
+
     /// Which watchlist indices land in which row, and nothing else.
     ///
     /// Split out of `build` because two surfaces need this answer and only one
